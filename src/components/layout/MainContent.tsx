@@ -1,0 +1,616 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import type { DragEndEvent } from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  Check,
+  Film,
+  FolderPlus,
+  GripVertical,
+  Image,
+  ImagePlus,
+  Plus,
+  Settings2,
+  Star,
+  Trash2,
+  Unlink,
+} from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useWallpaperStore } from "@/stores/wallpaperStore";
+import type { Wallpaper } from "@/stores/wallpaperStore";
+import { useCollectionStore } from "@/stores/collectionStore";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import WallpaperPickerDrawer from "@/components/wallpaper/WallpaperPickerDrawer";
+import { addWallpapers, removeWallpapers, reorderWallpapers } from "@/api/collectionWallpaper";
+
+interface MainContentProps {
+  activeId: number;
+  wallpapers: Wallpaper[];
+  onPreview: (index: number) => void;
+  onCollectionChanged?: () => void;
+}
+
+const MainContent: React.FC<MainContentProps> = ({
+  activeId,
+  wallpapers,
+  onPreview,
+  onCollectionChanged,
+}) => {
+  const { t } = useTranslation();
+  const loading = useWallpaperStore((s) => s.loading);
+  const deleteWallpapers = useWallpaperStore((s) => s.deleteWallpapers);
+
+  // 管理模式 + 选中状态
+  const [manageMode, setManageMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([]);
+
+  // 拖拽排序：本地排序状态（仅收藏夹管理模式下使用）
+  const [localOrder, setLocalOrder] = useState<Wallpaper[] | null>(null);
+  const [orderDirty, setOrderDirty] = useState(false);
+
+  // 添加壁纸到收藏夹的 picker
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const isCollectionView = activeId > 0;
+  const collectionId = isCollectionView ? activeId : null;
+  const isEmpty = wallpapers.length === 0;
+
+  // 拖拽排序时使用本地排序列表，否则用 props 传入的列表
+  const displayWallpapers = (manageMode && isCollectionView && localOrder) ? localOrder : wallpapers;
+  const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
+
+  // dnd-kit sensor: 需要拖动 10px 才触发，避免和点击选择冲突
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 10 },
+    }),
+  );
+
+  const enterManageMode = useCallback(() => {
+    setManageMode(true);
+    setSelectedIds(new Set());
+    // 收藏夹模式进入管理时，初始化本地排序副本
+    if (activeId > 0) {
+      setLocalOrder([...wallpapers]);
+      setOrderDirty(false);
+    }
+  }, [activeId, wallpapers]);
+
+  const exitManageMode = useCallback(async () => {
+    // 退出管理模式时，如果排序有变更，持久化到后端
+    if (isCollectionView && collectionId !== null && orderDirty && localOrder) {
+      try {
+        await reorderWallpapers(collectionId, localOrder.map((w) => w.id));
+        onCollectionChanged?.();
+      } catch (e) {
+        console.error("[reorderWallpapers]", e);
+      }
+    }
+    setManageMode(false);
+    setSelectedIds(new Set());
+    setLocalOrder(null);
+    setOrderDirty(false);
+  }, [isCollectionView, collectionId, orderDirty, localOrder, onCollectionChanged]);
+
+  const cancelManageMode = useCallback(() => {
+    setManageMode(false);
+    setSelectedIds(new Set());
+    setLocalOrder(null);
+    setOrderDirty(false);
+  }, []);
+
+  const toggleSelect = useCallback((id: number, ctrlKey: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (ctrlKey) {
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+      } else {
+        if (next.size === 1 && next.has(id)) next.clear();
+        else {
+          next.clear();
+          next.add(id);
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(displayWallpapers.map((w) => w.id)));
+  }, [displayWallpapers]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleDeleteRequest = useCallback((ids: number[]) => {
+    setPendingDeleteIds(ids);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (isCollectionView && collectionId !== null) {
+      // 收藏夹视图：解除关联
+      await removeWallpapers(collectionId!, pendingDeleteIds);
+      // 同步更新本地排序列表
+      if (localOrder) {
+        setLocalOrder(localOrder.filter((w) => !pendingDeleteIds.includes(w.id)));
+      }
+      onCollectionChanged?.();
+    } else {
+      // 全部壁纸视图：彻底删除文件
+      await deleteWallpapers(pendingDeleteIds);
+    }
+    setPendingDeleteIds([]);
+    setDeleteDialogOpen(false);
+    setSelectedIds(new Set());
+  }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId, onCollectionChanged, localOrder]);
+
+  const handleCardClick = useCallback(
+    (wp: Wallpaper, index: number, e: React.MouseEvent) => {
+      if (manageMode) {
+        toggleSelect(wp.id, e.ctrlKey || e.metaKey);
+      } else {
+        onPreview(index);
+      }
+    },
+    [manageMode, toggleSelect, onPreview],
+  );
+
+  const handleAddToCollection = useCallback(async (wallpaperId: number, collectionId: number) => {
+    try {
+      await addWallpapers(collectionId, [wallpaperId]);
+    } catch (e) {
+      console.error("[addToCollection]", e);
+    }
+  }, []);
+
+  const handlePickerConfirm = useCallback(() => {
+    setPickerOpen(false);
+    onCollectionChanged?.();
+  }, [onCollectionChanged]);
+
+  // 拖拽结束：重排本地列表
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id || !localOrder) return;
+
+      const oldIndex = localOrder.findIndex((w) => w.id === active.id);
+      const newIndex = localOrder.findIndex((w) => w.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const updated = [...localOrder];
+      const [moved] = updated.splice(oldIndex, 1);
+      updated.splice(newIndex, 0, moved);
+      setLocalOrder(updated);
+      setOrderDirty(true);
+    },
+    [localOrder],
+  );
+
+  // 是否启用拖拽排序（收藏夹 + 管理模式）
+  const isDragEnabled = manageMode && isCollectionView;
+
+  const gridContent = (
+    <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">
+      {displayWallpapers.map((wp, index) =>
+        isDragEnabled ? (
+          <SortableWallpaperCard
+            key={wp.id}
+            wallpaper={wp}
+            index={index}
+            manageMode={manageMode}
+            selected={selectedIds.has(wp.id)}
+            isCollectionView={isCollectionView}
+            onClick={handleCardClick}
+            onDelete={(id) => handleDeleteRequest([id])}
+            onAddToCollection={handleAddToCollection}
+          />
+        ) : (
+          <WallpaperCard
+            key={wp.id}
+            wallpaper={wp}
+            index={index}
+            manageMode={manageMode}
+            selected={selectedIds.has(wp.id)}
+            isCollectionView={isCollectionView}
+            onClick={handleCardClick}
+            onDelete={(id) => handleDeleteRequest([id])}
+            onAddToCollection={handleAddToCollection}
+          />
+        ),
+      )}
+    </div>
+  );
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {/* 操作栏 */}
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-4">
+        {manageMode ? (
+          <>
+            <span className="text-sm text-muted-foreground">{t("main.selected", { count: selectedIds.size })}</span>
+            <button
+              type="button"
+              onClick={selectAll}
+              className="text-sm text-primary hover:underline"
+            >
+              {t("main.selectAll")}
+            </button>
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="text-sm text-primary hover:underline"
+            >
+              {t("main.clearSelection")}
+            </button>
+            <div className="flex-1" />
+            {selectedIds.size > 0 && (
+              <button
+                type="button"
+                onClick={() => handleDeleteRequest(Array.from(selectedIds))}
+                className={cn(
+                  "flex items-center gap-1 rounded-md px-2 py-1 text-sm transition-colors",
+                  isCollectionView
+                    ? "text-muted-foreground hover:bg-muted"
+                    : "text-destructive hover:bg-destructive/10",
+                )}
+              >
+                {isCollectionView ? (
+                  <>
+                    <Unlink className="size-3.5" />
+                    {t("main.remove")}
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="size-3.5" />
+                    {t("main.delete")}
+                  </>
+                )}
+              </button>
+            )}
+            <Button variant="ghost" size="sm" onClick={cancelManageMode}>
+              {t("main.cancel")}
+            </Button>
+            <Button variant="outline" size="sm" onClick={exitManageMode}>
+              {t("main.done")}
+            </Button>
+          </>
+        ) : (
+          <>
+            {/* 收藏夹视图：添加壁纸按钮 */}
+            {isCollectionView && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPickerOpen(true)}
+                className="gap-1.5 text-muted-foreground"
+              >
+                <Plus className="size-3.5" />
+                {t("main.addWallpaper")}
+              </Button>
+            )}
+            <div className="flex-1" />
+            {!isEmpty && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={enterManageMode}
+                className="gap-1.5 text-muted-foreground"
+              >
+                <Settings2 className="size-3.5" />
+                {t("main.manageWallpapers")}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* 内容区 */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {loading ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="text-sm text-muted-foreground">{t("main.importing")}</p>
+          </div>
+        ) : isEmpty ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex flex-col items-center gap-3 text-muted-foreground/60">
+              <ImagePlus className="size-12" strokeWidth={1} />
+              <p className="text-sm">
+                {isCollectionView ? t("main.emptyCollection") : t("main.emptyAll")}
+              </p>
+            </div>
+          </div>
+        ) : isDragEnabled ? (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={wallpaperIds} strategy={rectSortingStrategy}>
+              {gridContent}
+            </SortableContext>
+          </DndContext>
+        ) : (
+          gridContent
+        )}
+      </div>
+
+      {/* 底部状态栏 */}
+      <div className="flex h-8 shrink-0 items-center border-t border-border px-4">
+        <span className="text-xs text-muted-foreground">
+          {manageMode && selectedIds.size > 0
+            ? t("main.selectedTotal", { selected: selectedIds.size, total: displayWallpapers.length })
+            : t("main.total", { count: displayWallpapers.length })}
+        </span>
+        {isDragEnabled && orderDirty && (
+          <span className="ml-2 text-xs text-primary">{t("main.orderModified")}</span>
+        )}
+      </div>
+
+      {/* 删除确认 */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{isCollectionView ? t("main.removeConfirmTitle") : t("main.deleteConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {isCollectionView
+                ? t("main.removeConfirmDesc", { count: pendingDeleteIds.length })
+                : t("main.deleteConfirmDesc", { count: pendingDeleteIds.length })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("main.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              className={
+                isCollectionView
+                  ? ""
+                  : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              }
+            >
+              {isCollectionView ? t("main.remove") : t("main.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 壁纸选择器 Drawer */}
+      {isCollectionView && collectionId !== null && (
+        <WallpaperPickerDrawer
+          open={pickerOpen}
+          collectionId={collectionId}
+          existingWallpaperIds={new Set(wallpapers.map((w) => w.id))}
+          onClose={() => setPickerOpen(false)}
+          onConfirm={handlePickerConfirm}
+        />
+      )}
+    </div>
+  );
+};
+
+/** 壁纸卡片 Props */
+interface WallpaperCardProps {
+  wallpaper: Wallpaper;
+  index: number;
+  manageMode: boolean;
+  selected: boolean;
+  isCollectionView: boolean;
+  isDragging?: boolean;
+  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
+  onClick: (wp: Wallpaper, index: number, e: React.MouseEvent) => void;
+  onDelete: (id: number) => void;
+  onAddToCollection: (wallpaperId: number, collectionId: number) => void;
+}
+
+/** 单个壁纸卡片（内容渲染） */
+const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSProperties }> = ({
+  wallpaper,
+  index,
+  manageMode,
+  selected,
+  isCollectionView,
+  isDragging = false,
+  dragHandleProps,
+  onClick,
+  onDelete,
+  onAddToCollection,
+  style,
+}) => {
+  const collections = useCollectionStore((s) => s.collections);
+  const { t } = useTranslation();
+  const TypeIcon = wallpaper.type === "video" ? Film : Image;
+
+  const card = (
+    <div
+      className={cn(
+        "group relative cursor-pointer overflow-hidden rounded-lg border bg-muted/30 transition-all",
+        manageMode && selected
+          ? "border-primary ring-2 ring-primary"
+          : "border-border hover:ring-2 hover:ring-primary/50",
+        isDragging && "opacity-50 shadow-lg ring-2 ring-primary",
+      )}
+      style={style}
+      onClick={(e) => {
+        if (!isDragging) onClick(wallpaper, index, e);
+      }}
+    >
+      {/* 拖拽手柄（收藏夹管理模式） */}
+      {manageMode && isCollectionView && dragHandleProps && (
+        <div
+          {...dragHandleProps}
+          className="absolute right-1.5 bottom-8 z-20 flex size-6 cursor-grab items-center justify-center rounded bg-black/40 text-white opacity-0 transition-opacity active:cursor-grabbing group-hover:opacity-100"
+        >
+          <GripVertical className="size-3.5" />
+        </div>
+      )}
+
+      {manageMode && selected && (
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <Check className="size-3" />
+        </div>
+      )}
+
+      {manageMode && !selected && (
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
+      )}
+
+      <div className="aspect-video bg-muted">
+        {wallpaper.thumb_path ? (
+          <img
+            src={convertFileSrc(wallpaper.thumb_path)}
+            alt={wallpaper.name}
+            className="size-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="flex size-full items-center justify-center">
+            <TypeIcon className="size-8 text-muted-foreground/40" />
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1.5 px-2 py-1.5">
+        <TypeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="truncate text-xs text-foreground/80">{wallpaper.name}</span>
+      </div>
+
+      {wallpaper.type === "video" && (
+        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+          视频
+        </div>
+      )}
+      {wallpaper.type === "gif" && (
+        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+          GIF
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger>{card}</ContextMenuTrigger>
+      <ContextMenuContent>
+        {/* 全部壁纸视图：添加到收藏夹 */}
+        {!isCollectionView && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger
+              disabled={collections.length === 0}
+              className={collections.length === 0 ? "opacity-50" : ""}
+            >
+              <FolderPlus className="mr-2 size-4" />
+              {t("main.addTo")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {collections.map((col) => (
+                <Tooltip key={col.id}>
+                  <TooltipTrigger asChild>
+                    <ContextMenuItem onClick={() => onAddToCollection(wallpaper.id, col.id)}>
+                      <Star className="mr-2 size-4 shrink-0" />
+                      <span className="max-w-32 truncate">{col.name}</span>
+                    </ContextMenuItem>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {col.name}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
+
+        {/* 删除/移除 */}
+        <ContextMenuItem
+          onClick={() => onDelete(wallpaper.id)}
+          className={isCollectionView ? "" : "text-destructive focus:text-destructive"}
+        >
+          {isCollectionView ? (
+            <>
+              <Unlink className="mr-2 size-4" />
+              {t("main.removeFromCollection")}
+            </>
+          ) : (
+            <>
+              <Trash2 className="mr-2 size-4" />
+              {t("main.delete")}
+            </>
+          )}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+};
+
+/** 普通壁纸卡片（无拖拽） */
+const WallpaperCard: React.FC<WallpaperCardProps> = (props) => {
+  return <WallpaperCardContent {...props} />;
+};
+
+/** 可排序壁纸卡片（dnd-kit sortable） */
+const SortableWallpaperCard: React.FC<WallpaperCardProps> = (props) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: props.wallpaper.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    position: "relative" as const,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes}>
+      <WallpaperCardContent
+        {...props}
+        isDragging={isDragging}
+        dragHandleProps={listeners}
+      />
+    </div>
+  );
+};
+
+export default MainContent;

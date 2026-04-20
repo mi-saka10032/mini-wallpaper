@@ -1,0 +1,159 @@
+export default {
+  // Toolbar
+  toolbar: {
+    import: "Import",
+    monitor: "Monitor",
+  },
+
+  // ThemeToggle
+  theme: {
+    light: "Light",
+    dark: "Dark",
+    system: "System",
+  },
+
+  // Language
+  language: {
+    zh: "中文",
+    en: "English",
+  },
+
+  // Sidebar
+  sidebar: {
+    allWallpapers: "All Wallpapers",
+    collections: "Collections",
+    noCollections: "No collections",
+    monitorSettings: "Monitor Settings",
+    globalSettings: "Global Settings",
+    newCollection: "New Collection",
+    renameCollection: "Rename Collection",
+    deleteCollection: "Delete Collection",
+    rename: "Rename",
+    delete: "Delete",
+    enterName: "Enter collection name",
+    nameEmpty: "Name cannot be empty",
+    confirm: "Confirm",
+    cancel: "Cancel",
+    deleteConfirmTitle: "Delete Collection",
+    deleteConfirmDesc: 'Are you sure you want to delete collection "{{name}}"? Wallpapers inside will not be removed.',
+  },
+
+  // MainContent
+  main: {
+    selected: "{{count}} selected",
+    selectAll: "Select All",
+    clearSelection: "Deselect",
+    remove: "Remove",
+    delete: "Delete",
+    cancel: "Cancel",
+    done: "Done",
+    addWallpaper: "Add Wallpaper",
+    manageWallpapers: "Manage",
+    importing: "Importing...",
+    emptyCollection: 'Click "Add Wallpaper" to pick from your library',
+    emptyAll: 'Click "Import" to add wallpapers',
+    total: "{{count}} items",
+    selectedTotal: "{{selected}} / {{total}} selected",
+    orderModified: "· Order changed, click Done to save",
+    removeFromCollection: "Remove from Collection",
+    addTo: "Add to",
+    deleteConfirmTitle: "Confirm Delete",
+    removeConfirmTitle: "Remove from Collection",
+    deleteConfirmDesc: "Delete {{count}} selected wallpaper(s)? This will remove files and thumbnails permanently.",
+    removeConfirmDesc: "Remove {{count}} selected wallpaper(s) from this collection? Files will not be deleted.",
+    releaseToImport: "Drop to import wallpapers",
+    supportedFormats: "Supports images, videos, and GIF files",
+  },
+
+  // MonitorSettingsPanel
+  monitor: {
+    title: "Monitor Settings",
+    refresh: "Refresh",
+    detecting: "Detecting monitors...",
+    noMonitor: "No monitors detected",
+    rotating: "Rotating",
+    wallpaperSource: "Wallpaper Source",
+    singleWallpaper: "Single Wallpaper",
+    collectionRotation: "Collection Rotation",
+    selectWallpaper: "Select wallpaper...",
+    selectCollection: "Select collection...",
+    noCollectionHint: "No collections yet. Create one first to set up rotation.",
+    collectionEmptyWarn: "This collection has no wallpapers. Please add some first.",
+    collectionQueryFail: "Failed to query collection wallpapers",
+    fitMode: "Fit Mode",
+    fitCover: "Cover (crop)",
+    fitContain: "Contain (letterbox)",
+    fitFill: "Stretch",
+    fitCenter: "Center",
+    rotationSettings: "Rotation Settings",
+    enabled: "Enabled",
+    paused: "Paused",
+    playMode: "Play Mode",
+    sequential: "Sequential",
+    random: "Random",
+    interval: "Interval",
+  },
+
+  // PreviewDialog
+  preview: {
+    video: "Video",
+    gif: "GIF",
+    image: "Image",
+  },
+
+  // WallpaperPickerDrawer
+  picker: {
+    title: "Add Wallpapers",
+    selectAll: "All",
+    clear: "Clear",
+    allAdded: "All wallpapers have been added to this collection",
+    adding: "Adding...",
+    addCount: "Add {{count}}",
+    add: "Add",
+    cancel: "Cancel",
+  },
+
+  // Common time units
+  time: {
+    seconds: "{{count}}s",
+    minutes: "{{count}}min",
+    hours: "{{count}}h",
+  },
+
+  // GlobalSettingsPanel
+  settings: {
+    title: "Global Settings",
+    navGeneral: "General",
+    navStartup: "Startup",
+    navTray: "System Tray",
+    navShortcuts: "Shortcuts",
+    navAudio: "Audio",
+    theme: "Theme",
+    themeLight: "Light",
+    themeDark: "Dark",
+    themeSystem: "System",
+    language: "Language",
+    closeToTray: "Minimize to tray on close",
+    closeToTrayDesc: "Hide the window instead of quitting when the close button is clicked. Reopen from the tray icon.",
+    pauseOnFullscreen: "Pause on fullscreen apps",
+    pauseOnFullscreenDesc: "Automatically pause wallpaper playback when a fullscreen app (game, video, etc.) is detected to save resources",
+    autoStart: "Launch at startup",
+    autoStartDesc: "Automatically run Mini Wallpaper when the system starts",
+    shortcutsDesc: "Click the shortcut area and press a new key combination to change. Works even when the window is hidden.",
+    shortcutNext: "Next wallpaper",
+    shortcutPrev: "Previous wallpaper",
+    shortcutRecording: "Press shortcut...",
+    shortcutReset: "Reset",
+    volume: "Wallpaper Volume",
+    volumeMuted: "Muted",
+    navBackup: "Backup",
+    dataSize: "App data size",
+    backupDesc: "Export all wallpapers, thumbnails, and settings as a ZIP file for migration to another device",
+    export: "Export Backup",
+    import: "Import Backup",
+    exportSuccess: "Backup exported successfully",
+    exportFailed: "Export failed",
+    importSuccess: "Import complete. {{count}} files restored. Restart the app to apply.",
+    importFailed: "Import failed",
+  },
+} as const;

@@ -1,0 +1,159 @@
+export default {
+  // Toolbar
+  toolbar: {
+    import: "导入",
+    monitor: "显示器",
+  },
+
+  // ThemeToggle
+  theme: {
+    light: "浅色",
+    dark: "深色",
+    system: "跟随系统",
+  },
+
+  // Language
+  language: {
+    zh: "中文",
+    en: "English",
+  },
+
+  // Sidebar
+  sidebar: {
+    allWallpapers: "全部壁纸",
+    collections: "收藏夹",
+    noCollections: "暂无收藏夹",
+    monitorSettings: "显示器设置",
+    globalSettings: "全局设置",
+    newCollection: "新建收藏夹",
+    renameCollection: "重命名收藏夹",
+    deleteCollection: "删除收藏夹",
+    rename: "重命名",
+    delete: "删除",
+    enterName: "请输入收藏夹名称",
+    nameEmpty: "名称不能为空",
+    confirm: "确认",
+    cancel: "取消",
+    deleteConfirmTitle: "删除收藏夹",
+    deleteConfirmDesc: "确定要删除收藏夹「{{name}}」吗？收藏夹内的壁纸不会被删除。",
+  },
+
+  // MainContent
+  main: {
+    selected: "已选 {{count}} 项",
+    selectAll: "全选",
+    clearSelection: "取消选择",
+    remove: "移除",
+    delete: "删除",
+    cancel: "取消",
+    done: "完成",
+    addWallpaper: "添加壁纸",
+    manageWallpapers: "管理壁纸",
+    importing: "导入中...",
+    emptyCollection: "点击「添加壁纸」从壁纸库中选择",
+    emptyAll: "点击「导入」添加壁纸",
+    total: "共 {{count}} 项",
+    selectedTotal: "已选 {{selected}} / 共 {{total}} 项",
+    orderModified: "· 排序已修改，点击「完成」保存",
+    removeFromCollection: "从收藏夹移除",
+    addTo: "添加到",
+    deleteConfirmTitle: "确认删除",
+    removeConfirmTitle: "从收藏夹移除",
+    deleteConfirmDesc: "确定要删除选中的 {{count}} 项壁纸吗？此操作将同时删除文件和缩略图，无法撤销。",
+    removeConfirmDesc: "确定要从收藏夹中移除选中的 {{count}} 项壁纸吗？壁纸文件不会被删除。",
+    releaseToImport: "释放以导入壁纸",
+    supportedFormats: "支持图片、视频、GIF 文件",
+  },
+
+  // MonitorSettingsPanel
+  monitor: {
+    title: "显示器设置",
+    refresh: "刷新",
+    detecting: "正在检测显示器...",
+    noMonitor: "未检测到可用显示器",
+    rotating: "轮播中",
+    wallpaperSource: "壁纸来源",
+    singleWallpaper: "单张壁纸",
+    collectionRotation: "收藏夹轮播",
+    selectWallpaper: "选择壁纸...",
+    selectCollection: "选择收藏夹...",
+    noCollectionHint: "暂无收藏夹，请先创建收藏夹再设置轮播",
+    collectionEmptyWarn: "该收藏夹暂无壁纸，请先添加壁纸后再选择",
+    collectionQueryFail: "查询收藏夹壁纸失败",
+    fitMode: "适配模式",
+    fitCover: "填充（裁切）",
+    fitContain: "适应（留黑边）",
+    fitFill: "拉伸",
+    fitCenter: "居中",
+    rotationSettings: "轮播设置",
+    enabled: "已启用",
+    paused: "已暂停",
+    playMode: "播放模式",
+    sequential: "顺序播放",
+    random: "随机播放",
+    interval: "切换间隔",
+  },
+
+  // PreviewDialog
+  preview: {
+    video: "视频",
+    gif: "GIF",
+    image: "图片",
+  },
+
+  // WallpaperPickerDrawer
+  picker: {
+    title: "添加壁纸",
+    selectAll: "全选",
+    clear: "取消",
+    allAdded: "所有壁纸都已添加到此收藏夹",
+    adding: "添加中...",
+    addCount: "添加 {{count}} 项",
+    add: "添加",
+    cancel: "取消",
+  },
+
+  // Common time units
+  time: {
+    seconds: "{{count}} 秒",
+    minutes: "{{count}} 分钟",
+    hours: "{{count}} 小时",
+  },
+
+  // GlobalSettingsPanel
+  settings: {
+    title: "全局设置",
+    navGeneral: "通用",
+    navStartup: "启动",
+    navTray: "系统托盘",
+    navShortcuts: "快捷键",
+    navAudio: "音频",
+    theme: "主题",
+    themeLight: "浅色",
+    themeDark: "深色",
+    themeSystem: "跟随系统",
+    language: "语言",
+    closeToTray: "关闭时最小化到托盘",
+    closeToTrayDesc: "点击关闭按钮时隐藏窗口而非退出应用，可通过托盘图标重新打开",
+    pauseOnFullscreen: "全屏应用时自动暂停",
+    pauseOnFullscreenDesc: "检测到全屏应用（游戏、视频等）时自动暂停壁纸播放，节省资源",
+    autoStart: "开机自启",
+    autoStartDesc: "系统启动时自动运行 Mini Wallpaper",
+    shortcutsDesc: "点击快捷键区域后按下新的组合键即可修改，支持窗口隐藏时使用",
+    shortcutNext: "下一张壁纸",
+    shortcutPrev: "上一张壁纸",
+    shortcutRecording: "请按下快捷键...",
+    shortcutReset: "恢复默认",
+    volume: "壁纸音量",
+    volumeMuted: "静音",
+    navBackup: "备份",
+    dataSize: "应用数据大小",
+    backupDesc: "导出所有壁纸、缩略图和配置数据为 ZIP 文件，可用于迁移到其他设备",
+    export: "导出备份",
+    import: "导入备份",
+    exportSuccess: "备份导出成功",
+    exportFailed: "导出失败",
+    importSuccess: "导入成功，已恢复 {{count}} 个文件，重启应用后生效",
+    importFailed: "导入失败",
+  },
+} as const;

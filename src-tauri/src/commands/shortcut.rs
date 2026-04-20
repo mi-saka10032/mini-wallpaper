@@ -1,0 +1,80 @@
+use tauri::{Emitter, State};
+
+use crate::services::{collection_service, monitor_config_service};
+use crate::services::timer_manager::{TimerManagerState, WallpaperChangedPayload};
+use crate::AppState;
+
+/// 切换壁纸方向
+#[derive(serde::Deserialize)]
+pub enum Direction {
+    #[serde(rename = "next")]
+    Next,
+    #[serde(rename = "prev")]
+    Prev,
+}
+
+/// 切换所有活跃显示器的壁纸（上一张/下一张）
+#[tauri::command]
+pub async fn switch_wallpaper(
+    direction: Direction,
+    app_state: State<'_, AppState>,
+    _timer_state: State<'_, TimerManagerState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let db = &app_state.db;
+
+    // 获取所有 active 的 monitor_config
+    let configs = monitor_config_service::get_all(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for config in configs {
+        if !config.active {
+            continue;
+        }
+
+        // 需要有 collection_id 才能切换
+        let collection_id = match config.collection_id {
+            Some(cid) => cid,
+            None => continue,
+        };
+
+        let new_wid = match direction {
+            Direction::Next => {
+                collection_service::next_wallpaper_id(
+                    db,
+                    collection_id,
+                    config.wallpaper_id,
+                    &config.play_mode,
+                )
+                .await
+            }
+            Direction::Prev => {
+                collection_service::prev_wallpaper_id(
+                    db,
+                    collection_id,
+                    config.wallpaper_id,
+                    &config.play_mode,
+                )
+                .await
+            }
+        }
+        .map_err(|e| e.to_string())?;
+
+        if let Some(wid) = new_wid {
+            monitor_config_service::update_wallpaper_id(db, &config.monitor_id, wid)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let _ = app_handle.emit(
+                "wallpaper-changed",
+                &WallpaperChangedPayload {
+                    monitor_id: config.monitor_id.clone(),
+                    wallpaper_id: wid,
+                },
+            );
+        }
+    }
+
+    Ok(())
+}

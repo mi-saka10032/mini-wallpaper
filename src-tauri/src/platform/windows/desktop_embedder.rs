@@ -10,23 +10,32 @@
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, FindWindowW, SendMessageTimeoutW, SetParent,
-    SMTO_NORMAL,
+    EnumWindows, FindWindowExW, FindWindowW, SendMessageTimeoutW, SetParent, SMTO_NORMAL,
 };
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicIsize, Ordering};
 
+use std::mem::size_of;
+
 /// 在 Windows 上查找 WorkerW 窗口并将指定 HWND 嵌入桌面层级
 #[cfg(target_os = "windows")]
 pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
+    use std::mem::zeroed;
+
+    use windows_sys::Win32::{
+        Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+        },
+        UI::WindowsAndMessaging::{
+            GetClientRect, GetWindowLongPtrW, GetWindowRect, MoveWindow, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_BOTTOM, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_LAYERED, WS_EX_TRANSPARENT
+        },
+    };
+
     unsafe {
         // 1. 找到 Progman 窗口
-        let progman = FindWindowW(
-            encode_wide("Progman\0").as_ptr(),
-            std::ptr::null(),
-        );
-        if progman == 0 {
+        let progman = FindWindowW(encode_wide("Progman\0").as_ptr(), std::ptr::null());
+        if progman == std::ptr::null_mut() {
             return Err("Failed to find Progman window".into());
         }
 
@@ -42,12 +51,20 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
             &mut _result as *mut usize,
         );
 
+        // 找到 Progman 的第一个子窗口（就是壁纸层 WorkerW）
+        let workerw = FindWindowExW(
+            progman,
+            std::ptr::null_mut(),
+            encode_wide("WorkerW\0").as_ptr(),
+            std::ptr::null(),
+        );
+
         // 3. 枚举所有顶层窗口，找到目标 WorkerW
-        let workerw = find_workerw()?;
+        // let workerw = find_workerw()?;1
 
         // 4. SetParent 嵌入
         let prev_parent = SetParent(hwnd as HWND, workerw);
-        if prev_parent == 0 {
+        if prev_parent == std::ptr::null_mut() {
             return Err("SetParent failed".into());
         }
 
@@ -71,22 +88,36 @@ unsafe fn find_workerw() -> Result<HWND, String> {
     unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
         let shell_view = FindWindowExW(
             hwnd,
-            0,
+            std::ptr::null_mut(),
             encode_wide("SHELLDLL_DefView\0").as_ptr(),
             std::ptr::null(),
         );
 
-        if shell_view != 0 {
-            // 找到包含 SHELLDLL_DefView 的窗口后，
-            // 取 Z-order 上的下一个 WorkerW 窗口
-            let workerw = FindWindowExW(
-                0,
-                hwnd,
-                encode_wide("WorkerW\0").as_ptr(),
-                std::ptr::null(),
-            );
-            if workerw != 0 {
-                FOUND_WORKERW.store(workerw as isize, Ordering::SeqCst);
+        // 找到包含 SHELLDLL_DefView 的 WorkerW 后
+        if shell_view != std::ptr::null_mut() {
+            // 需要找它的上一个 WorkerW
+            // 由于 FindWindowExW 只能往后找，重新枚举所有 WorkerW 找到 hwnd 的前一个
+            let mut prev_workerw = std::ptr::null_mut();
+            let mut current = std::ptr::null_mut();
+            
+            loop {
+                current = FindWindowExW(
+                    std::ptr::null_mut(),
+                    current,
+                    encode_wide("WorkerW\0").as_ptr(),
+                    std::ptr::null(),
+                );
+                if current == std::ptr::null_mut() {
+                    break;
+                }
+                if current == hwnd {
+                    // 找到了目标，prev_workerw 就是它的上一个
+                    if prev_workerw != std::ptr::null_mut() {
+                        FOUND_WORKERW.store(prev_workerw as isize, Ordering::SeqCst);
+                    }
+                    break;
+                }
+                prev_workerw = current;
             }
         }
         1 // TRUE = 继续枚举
@@ -107,7 +138,7 @@ unsafe fn find_workerw() -> Result<HWND, String> {
 pub fn unembed_from_desktop(hwnd: isize) {
     unsafe {
         // SetParent(hwnd, NULL) 将窗口还原为顶层窗口
-        SetParent(hwnd as HWND, 0);
+        SetParent(hwnd as HWND, std::ptr::null_mut());
         println!("[DesktopEmbedder] Unembedded HWND {:?}", hwnd);
     }
 }

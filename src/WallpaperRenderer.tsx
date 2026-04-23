@@ -18,6 +18,10 @@ import { COMMANDS, type Wallpaper, type MonitorConfig } from "@/api/config";
  * 视频同步（extend + video）：
  * - 第一个窗口（offsetX=0）作为 master，每 5s emit VIDEO_SYNC 事件广播 currentTime
  * - 其他窗口作为 slave，监听事件并对齐 currentTime（漂移 > 0.1s 时校准）
+ *
+ * 输入事件处理：
+ * - 壁纸窗口是纯展示层，不需要任何用户交互
+ * - 前端禁用所有鼠标/键盘事件 + 后端 WS_EX_TRANSPARENT 穿透，双层保障
  */
 const WallpaperRenderer: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -33,6 +37,40 @@ const WallpaperRenderer: React.FC = () => {
   } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // ===== 禁用所有用户输入事件 =====
+  // 壁纸窗口是纯展示层，不需要任何交互，直接一刀切禁用全部鼠标和键盘事件
+  useEffect(() => {
+    const blockAll = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    // 鼠标类事件
+    const mouseEvents = [
+      "contextmenu", "click", "dblclick", "mousedown", "mouseup",
+      "mousemove", "mouseover", "mouseout", "mouseenter", "mouseleave",
+      "wheel", "auxclick",
+    ];
+    // 键盘类事件
+    const keyEvents = ["keydown", "keyup", "keypress"];
+    // 拖拽类事件
+    const dragEvents = ["dragover", "dragenter", "dragleave", "drop", "drag", "dragstart", "dragend"];
+    // 其他交互事件
+    const otherEvents = ["selectstart", "copy", "cut", "paste", "focus", "blur"];
+
+    const allEvents = [...mouseEvents, ...keyEvents, ...dragEvents, ...otherEvents];
+
+    for (const evt of allEvents) {
+      document.addEventListener(evt, blockAll, true);
+    }
+
+    return () => {
+      for (const evt of allEvents) {
+        document.removeEventListener(evt, blockAll, true);
+      }
+    };
+  }, []);
 
   // 根据 config 获取壁纸并更新状态
   const loadFromConfig = useCallback(async (config: MonitorConfig) => {
@@ -125,7 +163,12 @@ const WallpaperRenderer: React.FC = () => {
 
   // 无数据时黑屏
   if (!wallpaper) {
-    return <div className="h-screen w-screen bg-black" />;
+    return (
+      <div
+        className="h-screen w-screen bg-black"
+        style={{ pointerEvents: "none", userSelect: "none" }}
+      />
+    );
   }
 
   const src = convertFileSrc(wallpaper.file_path);
@@ -144,7 +187,10 @@ const WallpaperRenderer: React.FC = () => {
     };
 
     return (
-      <div className="h-screen w-screen overflow-hidden bg-black">
+      <div
+        className="h-screen w-screen overflow-hidden bg-black"
+        style={{ pointerEvents: "none", userSelect: "none" }}
+      >
         {wallpaper.type === "video" ? (
           <video
             ref={videoRef}
@@ -169,7 +215,10 @@ const WallpaperRenderer: React.FC = () => {
 
   // independent / mirror 模式
   return (
-    <div className="h-screen w-screen overflow-hidden bg-black">
+    <div
+      className="h-screen w-screen overflow-hidden bg-black"
+      style={{ pointerEvents: "none", userSelect: "none" }}
+    >
       {wallpaper.type === "video" ? (
         <video
           ref={videoRef}

@@ -7,6 +7,8 @@ import {
   upsertMonitorConfig,
   deleteMonitorConfig,
 } from "@/api/monitorConfig";
+import { invoke } from "@/api/invoke";
+import { COMMANDS } from "@/api/config";
 import {
   createWallpaperWindow,
   destroyWallpaperWindow,
@@ -190,6 +192,13 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       set({ loading: true });
 
       await doSyncMonitors(set);
+
+      // 壁纸窗口创建完成后，启动所有满足条件的轮播定时器
+      try {
+        await invoke(COMMANDS.START_TIMERS);
+      } catch (e) {
+        console.error("[monitorConfigStore.init] start_timers failed:", e);
+      }
 
       // 监听 thumbnail-changed 事件（主窗口缩略图更新）
       if (!_eventUnlisten) {

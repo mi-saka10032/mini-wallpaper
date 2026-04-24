@@ -46,7 +46,7 @@ const MonitorSettingsPanel: React.FC = () => {
 
   // Store
   const configs = useMonitorConfigStore((s) => s.configs);
-  const init = useMonitorConfigStore((s) => s.init);
+  const syncMonitors = useMonitorConfigStore((s) => s.syncMonitors);
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const loading = useMonitorConfigStore((s) => s.loading);
   const collections = useCollectionStore((s) => s.collections);
@@ -63,9 +63,8 @@ const MonitorSettingsPanel: React.FC = () => {
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
 
   useEffect(() => {
-    init();
     fetchCollections();
-  }, [init, fetchCollections]);
+  }, [fetchCollections]);
 
   // 选中范围保护
   useEffect(() => {
@@ -216,8 +215,8 @@ const MonitorSettingsPanel: React.FC = () => {
   }, [selectedConfig]);
 
   const handleRefresh = useCallback(() => {
-    init();
-  }, [init]);
+    syncMonitors();
+  }, [syncMonitors]);
 
   return (
     <div className="flex h-full flex-col">

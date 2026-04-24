@@ -19,6 +19,7 @@ export const COMMANDS = {
   GET_MONITOR_CONFIG: "get_monitor_config",
   UPSERT_MONITOR_CONFIG: "upsert_monitor_config",
   DELETE_MONITOR_CONFIG: "delete_monitor_config",
+  START_TIMERS: "start_timers",
   // app_setting
   GET_SETTINGS: "get_settings",
   GET_SETTING: "get_setting",
@@ -152,6 +153,10 @@ export interface CommandMap {
   };
   [COMMANDS.DELETE_MONITOR_CONFIG]: {
     params: { id: number };
+    result: void;
+  };
+  [COMMANDS.START_TIMERS]: {
+    params: Record<string, never>;
     result: void;
   };
   [COMMANDS.GET_SETTINGS]: {

@@ -214,3 +214,5 @@ fn sanitize_label(monitor_id: &str) -> String {
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect()
 }
+
+```

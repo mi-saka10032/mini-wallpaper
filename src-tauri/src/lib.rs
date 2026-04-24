@@ -139,6 +139,7 @@ pub fn run() {
             commands::monitor_config::get_monitor_config,
             commands::monitor_config::upsert_monitor_config,
             commands::monitor_config::delete_monitor_config,
+            commands::monitor_config::start_timers,
             commands::app_setting::get_settings,
             commands::app_setting::get_setting,
             commands::app_setting::set_setting,

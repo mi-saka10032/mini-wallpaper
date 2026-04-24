@@ -12,6 +12,7 @@ import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
+import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { changeLanguage } from "@/i18n";
 import type { Wallpaper } from "@/api/config";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   const { t } = useTranslation();
   useShortcuts();
   useMonitorHotPlug();
+  const initMonitors = useMonitorConfigStore((s) => s.init);
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);
   const importByPaths = useWallpaperStore((s) => s.importByPaths);
@@ -40,7 +42,8 @@ const App: React.FC = () => {
   useEffect(() => {
     fetchSettings();
     fetchWallpapers();
-  }, [fetchSettings, fetchWallpapers]);
+    initMonitors();
+  }, [fetchSettings, fetchWallpapers, initMonitors]);
 
   // DB 中 language 变化时同步 i18n
   useEffect(() => {

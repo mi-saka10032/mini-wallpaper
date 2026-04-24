@@ -1,7 +1,9 @@
-use tauri::{Emitter, State};
+use log::warn;
+use tauri::{Emitter, Manager, State};
 
 use crate::services::{collection_service, monitor_config_service};
-use crate::services::timer_manager::{TimerManagerState, WallpaperChangedPayload};
+use crate::services::timer_manager::{TimerManagerState, ThumbnailChangedPayload};
+use crate::services::wallpaper_window_service::WallpaperWindowManagerState;
 use crate::AppState;
 
 /// 切换壁纸方向
@@ -18,7 +20,7 @@ pub enum Direction {
 pub async fn switch_wallpaper(
     direction: Direction,
     app_state: State<'_, AppState>,
-    _timer_state: State<'_, TimerManagerState>,
+    timer_state: State<'_, TimerManagerState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let db = &app_state.db;
@@ -66,13 +68,32 @@ pub async fn switch_wallpaper(
                 .await
                 .map_err(|e| e.to_string())?;
 
+            // 1. 通知指定壁纸窗口更新壁纸
+            let wm = app_handle.state::<WallpaperWindowManagerState>();
+            let wm_guard = wm.lock().await;
+            if let Err(e) = wm_guard.update_window(&app_handle, &config.monitor_id, wid) {
+                warn!("[switch_wallpaper] 壁纸窗口更新失败: {}", e);
+            }
+            drop(wm_guard);
+
+            // 2. 通知主窗口更新缩略图
             let _ = app_handle.emit(
-                "wallpaper-changed",
-                &WallpaperChangedPayload {
+                "thumbnail-changed",
+                &ThumbnailChangedPayload {
                     monitor_id: config.monitor_id.clone(),
                     wallpaper_id: wid,
                 },
             );
+
+            // 3. 如果有运行中的定时器，重置计时
+            let mut manager = timer_state.lock().await;
+            if manager.is_running(&config.monitor_id) {
+                manager.restart(
+                    config.monitor_id.clone(),
+                    db.clone(),
+                    app_handle.clone(),
+                );
+            }
         }
     }
 

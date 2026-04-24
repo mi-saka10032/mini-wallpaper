@@ -7,6 +7,8 @@ use crate::services::timer_manager::{
 };
 use crate::AppState;
 
+use log::info;
+
 /// 获取所有显示器配置
 #[tauri::command]
 pub async fn get_monitor_configs(
@@ -125,4 +127,39 @@ pub async fn delete_monitor_config(
     monitor_config_service::delete(&state.db, id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 启动所有满足轮播条件的定时器（应用启动时由前端调用）
+#[tauri::command]
+pub async fn start_timers(
+    state: State<'_, AppState>,
+    timer_state: State<'_, TimerManagerState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let configs = monitor_config_service::get_all(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for config in &configs {
+        if should_start_timer(config) {
+            let cid = config.collection_id.unwrap();
+            match collection_has_enough_wallpapers(&state.db, cid).await {
+                Ok(true) => {
+                    let mut manager = timer_state.lock().await;
+                    manager.start(
+                        config.monitor_id.clone(),
+                        state.db.clone(),
+                        app_handle.clone(),
+                    );
+                    info!("[start_timers] 启动定时器: {}", config.monitor_id);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    log::warn!("[start_timers] 检查收藏夹失败 {}: {}", config.monitor_id, e);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

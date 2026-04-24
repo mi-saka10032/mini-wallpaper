@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
 use crate::platform::windows::desktop_embedder;
@@ -91,18 +91,11 @@ impl WallpaperWindowManager {
                     width as i32,
                     height as i32,
                 ) {
-                    Ok(nc_offset) => {
-                        // 方案B：将 NC offset 通过事件发送给壁纸窗口前端，
-                        // 由前端通过 CSS 补偿覆盖 NC 区域
-                        if nc_offset.left != 0 || nc_offset.top != 0
-                            || nc_offset.right != 0 || nc_offset.bottom != 0
-                        {
-                            println!(
-                                "[WallpaperWindowManager] Sending NC offset to window '{}': L={} T={} R={} B={}",
-                                label, nc_offset.left, nc_offset.top, nc_offset.right, nc_offset.bottom
-                            );
-                            let _ = window.emit("nc-offset-detected", &nc_offset);
-                        }
+                    Ok(()) => {
+                        println!(
+                            "[WallpaperWindowManager] Embedded window '{}' successfully",
+                            label
+                        );
                     }
                     Err(e) => {
                         eprintln!("[WallpaperWindowManager] embed failed: {}", e);

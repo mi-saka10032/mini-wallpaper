@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { listen as tauriListen } from "@tauri-apps/api/event";
 import { invoke } from "@/api/invoke";
 import { listen, EVENTS } from "@/api/event";
 import { COMMANDS, type Wallpaper, type MonitorConfig } from "@/api/config";
@@ -37,48 +36,7 @@ const WallpaperRenderer: React.FC = () => {
     myWidth: number;
   } | null>(null);
 
-  // ===== NC offset 补偿状态（方案B） =====
-  // 后端检测到 Windows NC 非客户区偏移后，通过事件传递给前端
-  // 前端通过 CSS 负 margin + 放大尺寸来补偿，使内容完全覆盖显示器
-  const [ncOffset, setNcOffset] = useState<{
-    left: number;
-    top: number;
-    right: number;
-    bottom: number;
-  } | null>(null);
-
   const videoRef = useRef<HTMLVideoElement>(null);
-
-  // ===== 监听 NC offset 事件（方案B核心） =====
-  useEffect(() => {
-    const unlisten = tauriListen<{
-      left: number;
-      top: number;
-      right: number;
-      bottom: number;
-    }>("nc-offset-detected", (event) => {
-      const offset = event.payload;
-      console.log("[WallpaperRenderer] NC offset received:", offset);
-      if (offset.left !== 0 || offset.top !== 0 || offset.right !== 0 || offset.bottom !== 0) {
-        setNcOffset(offset);
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, []);
-
-  // ===== 计算 NC offset 补偿样式 =====
-  // 原理：窗口有 NC 边框导致客户区比窗口小，
-  // 我们让内容容器用负 margin 向外扩展，填满整个窗口区域（包括 NC 区域）
-  // 同时放大宽高以覆盖 NC 边框占用的空间
-  const ncCompensationStyle: React.CSSProperties = ncOffset
-    ? {
-        marginLeft: `-${ncOffset.left}px`,
-        marginTop: `-${ncOffset.top}px`,
-        width: `calc(100vw + ${ncOffset.left + ncOffset.right}px)`,
-        height: `calc(100vh + ${ncOffset.top + ncOffset.bottom}px)`,
-        overflow: "hidden",
-      }
-    : {};
 
   // ===== 禁用所有用户输入事件 =====
   // 壁纸窗口是纯展示层，不需要任何交互，直接一刀切禁用全部鼠标和键盘事件
@@ -208,7 +166,7 @@ const WallpaperRenderer: React.FC = () => {
     return (
       <div
         className="h-screen w-screen bg-black"
-        style={{ pointerEvents: "none", userSelect: "none", ...ncCompensationStyle }}
+        style={{ pointerEvents: "none", userSelect: "none" }}
       />
     );
   }
@@ -231,7 +189,7 @@ const WallpaperRenderer: React.FC = () => {
     return (
       <div
         className="h-screen w-screen overflow-hidden bg-black"
-        style={{ pointerEvents: "none", userSelect: "none", ...ncCompensationStyle }}
+        style={{ pointerEvents: "none", userSelect: "none" }}
       >
         {wallpaper.type === "video" ? (
           <video
@@ -259,7 +217,7 @@ const WallpaperRenderer: React.FC = () => {
   return (
     <div
       className="h-screen w-screen overflow-hidden bg-black"
-      style={{ pointerEvents: "none", userSelect: "none", ...ncCompensationStyle }}
+      style={{ pointerEvents: "none", userSelect: "none" }}
     >
       {wallpaper.type === "video" ? (
         <video

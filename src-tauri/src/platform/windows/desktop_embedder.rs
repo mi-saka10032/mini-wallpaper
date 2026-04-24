@@ -80,15 +80,6 @@ static CACHED_WORKERW: AtomicIsize = AtomicIsize::new(0);
 #[cfg(target_os = "windows")]
 static IS_LEGACY_MODE: AtomicBool = AtomicBool::new(false);
 
-/// NC offset 检测结果，用于前端 CSS 补偿
-#[derive(Clone, Debug, Default, serde::Serialize)]
-pub struct NcOffset {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
 #[cfg(target_os = "windows")]
 #[derive(Clone, Debug)]
 struct EmbeddedWindow {
@@ -246,10 +237,15 @@ unsafe fn find_defview_globally(progman: HWND) -> (HWND, HWND) {
 /// 确保壁纸窗口在 DefView 正下方
 ///
 /// 返回 (是否正常, 冲突窗口句柄)
+///
+/// 频闪修复：
+/// - 只有在真正需要修正时才调用 SetWindowPos
+/// - prev 是 DefView / WorkerW / 其他嵌入窗口 都视为正常
+/// - 不使用 SWP_DRAWFRAME 避免触发重绘
 #[cfg(target_os = "windows")]
 unsafe fn ensure_embed_below_defview(defview: HWND, embed_wnd: HWND) -> (bool, HWND) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDPREV, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        GW_HWNDPREV, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOREDRAW,
     };
 
     let prev = GetWindow(embed_wnd, GW_HWNDPREV);
@@ -260,19 +256,30 @@ unsafe fn ensure_embed_below_defview(defview: HWND, embed_wnd: HWND) -> (bool, H
     }
 
     // 上一个兄弟是 WorkerW 也视为正常（多窗口嵌入时可能出现）
-    // 关键：不要调用 SetWindowPos，避免无谓的重绘导致闪烁
     if is_worker_class(prev) {
         return (true, std::ptr::null_mut());
     }
 
-    // 真正需要修正 Z-order 的情况：被非 WorkerW 的窗口插入
+    // 检查 prev 是否是我们自己嵌入的另一个壁纸窗口
+    {
+        let guard = EMBEDDED_WINDOWS.lock().unwrap();
+        if let Some(list) = guard.as_ref() {
+            if list.iter().any(|w| w.hwnd == prev as isize) {
+                // prev 是另一个嵌入的壁纸窗口，层级正常
+                return (true, std::ptr::null_mut());
+            }
+        }
+    }
+
+    // 真正需要修正 Z-order 的情况：被非 WorkerW、非嵌入窗口的窗口插入
     println!(
-        "[DesktopEmbedder] Z-order fix needed: prev=0x{:X}, moving embed 0x{:X} after DefView 0x{:X}",
-        prev as isize, embed_wnd as isize, defview as isize
+        "[DesktopEmbedder] Z-order fix needed: prev=0x{:X} class='{}', moving embed 0x{:X} after DefView 0x{:X}",
+        prev as isize, get_class_name(prev), embed_wnd as isize, defview as isize
     );
+    // 使用 SWP_NOREDRAW 避免触发重绘导致闪烁
     SetWindowPos(
         embed_wnd, defview, 0, 0, 0, 0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW,
     );
 
     (false, prev)
@@ -354,7 +361,7 @@ pub fn embed_in_desktop(
     monitor_y: i32,
     monitor_width: i32,
     monitor_height: i32,
-) -> Result<NcOffset, String> {
+) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetLayeredWindowAttributes, GWL_EXSTYLE, GWL_STYLE,
         HWND_BOTTOM, HWND_TOP, LWA_ALPHA,
@@ -542,7 +549,7 @@ pub fn embed_in_desktop(
         // 壁纸 → HWND_TOP
         SetWindowPos(
             hwnd as HWND, HWND_TOP, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
         // DefView → HWND_TOP（覆盖在壁纸之上，确保图标可见）
         SetWindowPos(
@@ -552,23 +559,24 @@ pub fn embed_in_desktop(
         // WorkerW → HWND_BOTTOM（系统壁纸沉底）
         SetWindowPos(
             effective_worker, HWND_BOTTOM, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
         println!("[DesktopEmbedder] Z-order set: DefView > EmbedWnd > WorkerW");
 
-        // ===== 10. 定位窗口到目标显示器 + 检测 NC offset =====
+        // ===== 10. 定位窗口到目标显示器 + 方案C: Win32 层面补偿 NC offset =====
         //
-        // 方案B：不在 Win32 层面补偿 NC offset，而是检测后传递给前端，
-        // 由前端通过 CSS 负 margin + 放大尺寸来补偿。
-        // 这样即使 Windows 25H2 改变了 DWM 行为，前端也能稳定覆盖。
-        let nc_offset;
+        // 方案C（参照博主 AdjustWindowRect 方案）：
+        // 1. 先按目标尺寸 MoveWindow
+        // 2. 检测 NC offset（窗口矩形 vs 客户区矩形）
+        // 3. 如果有 NC offset，扩大窗口尺寸并偏移位置，使客户区恰好 = 显示器区域
+        // 这样 WebView 渲染区域自然覆盖整个显示器，无需前端任何补偿
         {
             use windows_sys::Win32::Foundation::{POINT, RECT};
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 ClientToScreen, GetClientRect, GetWindowRect,
             };
 
-            // 按目标尺寸定位窗口
+            // 第一次：按目标尺寸定位窗口
             MoveWindow(
                 hwnd as HWND,
                 monitor_x, monitor_y,
@@ -596,19 +604,56 @@ pub fn embed_in_desktop(
                 let nc_right = window_w - client_w - nc_left;
                 let nc_bottom = window_h - client_h - nc_top;
 
-                nc_offset = NcOffset {
-                    left: nc_left,
-                    top: nc_top,
-                    right: nc_right,
-                    bottom: nc_bottom,
-                };
-
                 println!(
-                    "[DesktopEmbedder] NC offset detected (Plan B - frontend compensation): L={} T={} R={} B={}",
+                    "[DesktopEmbedder] NC offset detected: L={} T={} R={} B={}",
                     nc_left, nc_top, nc_right, nc_bottom
                 );
+
+                // 方案C核心：扩大窗口尺寸，使客户区恰好覆盖显示器
+                // 窗口位置向左上偏移 NC_left/NC_top
+                // 窗口尺寸扩大 (NC_left + NC_right) / (NC_top + NC_bottom)
+                let compensated_x = monitor_x - nc_left;
+                let compensated_y = monitor_y - nc_top;
+                let compensated_w = monitor_width + nc_left + nc_right;
+                let compensated_h = monitor_height + nc_top + nc_bottom;
+
+                MoveWindow(
+                    hwnd as HWND,
+                    compensated_x, compensated_y,
+                    compensated_w, compensated_h,
+                    1,
+                );
+
+                // 验证补偿结果
+                let mut verify_rect: RECT = std::mem::zeroed();
+                let mut verify_client: RECT = std::mem::zeroed();
+                GetWindowRect(hwnd as HWND, &mut verify_rect);
+                GetClientRect(hwnd as HWND, &mut verify_client);
+                let mut verify_origin = POINT { x: 0, y: 0 };
+                ClientToScreen(hwnd as HWND, &mut verify_origin);
+
+                let final_client_w = verify_client.right - verify_client.left;
+                let final_client_h = verify_client.bottom - verify_client.top;
+
+                println!(
+                    "[DesktopEmbedder] Plan C compensated: window=({},{}) {}x{}, client origin=({},{}), client size={}x{}",
+                    compensated_x, compensated_y, compensated_w, compensated_h,
+                    verify_origin.x, verify_origin.y,
+                    final_client_w, final_client_h
+                );
+
+                if final_client_w == monitor_width && final_client_h == monitor_height
+                    && verify_origin.x == monitor_x && verify_origin.y == monitor_y
+                {
+                    println!("[DesktopEmbedder] Plan C SUCCESS: client area matches monitor exactly!");
+                } else {
+                    println!(
+                        "[DesktopEmbedder] Plan C WARNING: client area mismatch! expected ({},{}) {}x{}, got ({},{}) {}x{}",
+                        monitor_x, monitor_y, monitor_width, monitor_height,
+                        verify_origin.x, verify_origin.y, final_client_w, final_client_h
+                    );
+                }
             } else {
-                nc_offset = NcOffset::default();
                 println!(
                     "[DesktopEmbedder] No NC offset detected, pos=({},{}), size={}x{}",
                     monitor_x, monitor_y, monitor_width, monitor_height
@@ -647,7 +692,7 @@ pub fn embed_in_desktop(
             hwnd, embed_target as isize, monitor_x, monitor_y, monitor_width, monitor_height
         );
 
-        Ok(nc_offset)
+        Ok(())
     }
 }
 
@@ -774,9 +819,9 @@ pub fn embed_in_desktop(
     _monitor_y: i32,
     _monitor_width: i32,
     _monitor_height: i32,
-) -> Result<NcOffset, String> {
+) -> Result<(), String> {
     println!("[DesktopEmbedder] embed_in_desktop is a no-op on this platform");
-    Ok(NcOffset::default())
+    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]

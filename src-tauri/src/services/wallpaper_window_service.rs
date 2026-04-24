@@ -10,6 +10,7 @@ use log::{error, info, warn};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
+#[cfg(target_os = "windows")]
 use crate::platform::windows::desktop_embedder;
 
 /// 壁纸窗口管理器 managed state

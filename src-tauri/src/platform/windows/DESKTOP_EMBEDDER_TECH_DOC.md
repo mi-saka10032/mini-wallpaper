@@ -1,6 +1,6 @@
 # Desktop Embedder 技术文档
 
-> **模块路径**: `src-tauri/src/platform/windows/desktop_embedder.rs`
+> **模块路径**: `src-tauri/src/platform/windows/desktop_embedder/`
 > **最后更新**: 2026-04-25
 > **适用系统**: Windows 7 / 8 / 10 / 11（含 24H2 / 25H2）
 
@@ -349,38 +349,45 @@ MoveWindow(hwnd, comp_x, comp_y, comp_w, comp_h, 1);
 - `info!` — 版本检测结果、嵌入完成、策略选择等关键流程
 - `debug!` — WndProc 替换地址、子类化槽位分配等调试信息
 
-### 6.3 模块结构
+### 6.3 文件结构
 
 ```
-desktop_embedder.rs
+desktop_embedder/
 │
-├── EmbedStrategy trait          — 嵌入策略接口
-│   ├── ModernStrategy           — 24H2+ 实现（WndProc 子类化 + 样式清理 + NC 补偿）
-│   └── LegacyStrategy           — 旧版本实现（经典 SetParent + MoveWindow）
-│
-├── WndProc 子类化基础设施（仅 ModernStrategy 使用）
-│   ├── ORIGINAL_WNDPROCS[8]     — 原始 WndProc 全局槽位
-│   ├── SUBCLASSED_HWNDS[8]      — 对应 HWND 全局槽位
-│   ├── find_original_wndproc()  — 根据 HWND 查找原始 WndProc
-│   ├── register_subclass()      — 注册子类化信息
-│   └── subclass_wndproc()       — 替换的窗口过程（拦截 WM_NCCALCSIZE）
-│
-├── 辅助模块
+├── mod.rs       — 公共 API + EmbedStrategy trait + 共享类型 + 策略选择
+│   ├── EmbedStrategy trait      — 嵌入策略接口（name / find_workerw / embed）
 │   ├── MonitorRect              — 显示器矩形区域值对象
 │   ├── NcOffset                 — NC 偏移测量结果
 │   ├── measure_nc_offset()      — 测量窗口 NC 偏移
-│   ├── is_win11_24h2_or_later() — 版本检测（RtlGetVersion）
+│   ├── encode_wide()            — UTF-8 → UTF-16 编码
 │   ├── select_strategy()        — 策略选择工厂函数
-│   ├── find_workerw_classic()   — EnumWindows 经典方案
-│   └── encode_wide()            — UTF-8 → UTF-16 编码
+│   ├── embed_in_desktop()       — 嵌入桌面（公共 API）
+│   └── unembed_from_desktop()   — 解除嵌入（公共 API）
 │
-├── 公共 API
-│   ├── embed_in_desktop()       — 嵌入桌面（自动选择策略）
-│   └── unembed_from_desktop()   — 解除嵌入
+├── modern.rs    — ModernStrategy（24H2+ 嵌入策略）
+│   └── ModernStrategy           — WndProc 子类化 + 样式清理 + NC 补偿
 │
-└── 跨平台空实现
-    └── #[cfg(not(target_os = "windows"))] 版本
+├── legacy.rs    — LegacyStrategy（旧版本嵌入策略）
+│   └── LegacyStrategy           — 经典 SetParent + WS_EX_TRANSPARENT + MoveWindow
+│
+├── wndproc.rs   — WndProc 子类化基础设施（仅 ModernStrategy 使用）
+│   ├── ORIGINAL_WNDPROCS[8]     — 原始 WndProc 全局槽位（支持最多 8 显示器）
+│   ├── SUBCLASSED_HWNDS[8]      — 对应 HWND 全局槽位
+│   ├── register_subclass()      — 注册子类化信息到空闲槽位
+│   └── subclass_wndproc()       — 替换的窗口过程（拦截 WM_NCCALCSIZE 返回 0）
+│
+├── version.rs   — Windows 版本检测
+│   └── is_win11_24h2_or_later() — RtlGetVersion 检测 Build >= 26100
+│
+└── workerw.rs   — 经典 WorkerW 查找
+    └── find_workerw_classic()   — EnumWindows + SHELLDLL_DefView 方案
 ```
+
+**设计原则**：
+- 每个文件只包含一个职责，代码量控制在 50~130 行
+- `mod.rs` 作为对外门面，仅暴露 `embed_in_desktop()` 和 `unembed_from_desktop()`
+- 内部模块间通过 `pub(super)` 可见性控制，外部无法直接访问策略实现
+- 非 Windows 平台的空实现已移除（整个模块位于 `platform/windows/` 下，由调用方 `#[cfg]` 控制）
 
 ---
 
@@ -418,7 +425,8 @@ ec9c6eb  fix: 精细化 overscan（仅顶部+左右）
 7beb4a7  Revert 精细化 overscan
 9f21eb6  feat: DWM_CORNER_RADIUS: 1（Overscan 1px 版本）
          ↓ 回退 Overscan + 增加版本兼容
-         ↓ refactor: 策略模式 + log 日志 + anyhow 错误处理（当前版本 ⭐）
+         ↓ refactor: 策略模式 + log 日志 + anyhow 错误处理
+         ↓ refactor: 模块拆分为 desktop_embedder/ 目录（当前版本 ⭐）
 ```
 
 ---
@@ -454,6 +462,16 @@ ec9c6eb  fix: 精细化 overscan（仅顶部+左右）
 - 使用 `bail!` 替代 `Err("...".into())`
 - 使用 `.context()` 为错误附加上下文链
 - 调用方通过 `{:#}` 格式化输出完整错误链
+
+### 8.4 模块拆分（2026-04-25）
+
+**动机**：单文件 588 行，混合了策略 trait、两种策略实现、WndProc 子类化、版本检测、WorkerW 查找等不同职责，阅读和维护困难。
+
+**改进**：
+- 拆分为 `desktop_embedder/` 目录模块，6 个文件各司其职
+- 每个文件 50~130 行，职责单一、易于阅读
+- `mod.rs` 作为对外门面，内部模块通过 `pub(super)` 可见性控制
+- 删除非 Windows 平台的冗余空实现（整个模块已在 `platform/windows/` 下）
 
 ---
 

@@ -1,2 +1,4 @@
-pub mod fullscreen_detector;
+#[cfg(target_os = "windows")]
 pub mod windows;
+
+pub mod fullscreen_detector;

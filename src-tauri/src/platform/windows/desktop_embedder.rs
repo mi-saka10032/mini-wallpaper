@@ -268,34 +268,12 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
 
         println!("[DesktopEmbedder] Pre-SetParent: WndProc subclassed, styles cleaned, SWP_FRAMECHANGED sent");
 
-        // ===== 4. SetParent 嵌入 =====
-        //     SetParent 内部会触发 WM_NCCALCSIZE，但我们的 subclass_wndproc
-        //     会拦截它并返回 0，阻止 NC 边框注入
-        let prev_parent = SetParent(hwnd as HWND, workerw);
-        if prev_parent == std::ptr::null_mut() {
-            return Err("SetParent failed".into());
-        }
-
-        // 4a. 禁用 DWM 圆角和 NC 渲染
-        //     24H2 的 DWM 可能在合成层面绘制窗口圆角装饰（1px 边框线），
-        //     即使 WM_NCCALCSIZE 返回 0 也无法阻止。
-        //     通过 DwmSetWindowAttribute 从 DWM 层面彻底禁用这些装饰。
+        // ===== 3f. 在 SetParent 之前禁用 DWM 圆角 =====
+        //     DWMWA_WINDOW_CORNER_PREFERENCE 只对顶层窗口生效，
+        //     SetParent 后窗口变为子窗口就无法设置了。
+        //     所以必须在 SetParent 之前调用。
         {
             use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-
-            // DWMWA_NCRENDERING_POLICY = 2
-            // DWMNCRP_DISABLED = 1
-            // 告诉 DWM 不要渲染任何非客户区装饰
-            const DWMWA_NCRENDERING_POLICY: u32 = 2;
-            const DWMNCRP_DISABLED: u32 = 1;
-            let ncrp: u32 = DWMNCRP_DISABLED;
-            DwmSetWindowAttribute(
-                hwnd as HWND,
-                DWMWA_NCRENDERING_POLICY,
-                &ncrp as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            );
-            println!("[DesktopEmbedder] DWM: NC rendering policy set to DISABLED");
 
             // DWMWA_WINDOW_CORNER_PREFERENCE = 33 (Win11 22H2+)
             // DWMWCP_DONOTROUND = 1
@@ -310,11 +288,47 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
                 std::mem::size_of::<u32>() as u32,
             );
             if hr == 0 {
-                println!("[DesktopEmbedder] DWM: Window corner preference set to DONOTROUND");
+                println!("[DesktopEmbedder] DWM: Window corner preference set to DONOTROUND (pre-SetParent)");
             } else {
-                // 在 Win10 或更早系统上此属性不支持，忽略错误
-                println!("[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE not supported (hr=0x{:X}), skipping", hr);
+                println!("[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE failed (hr=0x{:X}), will use overscan fallback", hr);
             }
+
+            // DWMWA_NCRENDERING_POLICY = 2, DWMNCRP_DISABLED = 1
+            // 也在 SetParent 前设置一次
+            const DWMWA_NCRENDERING_POLICY: u32 = 2;
+            const DWMNCRP_DISABLED: u32 = 1;
+            let ncrp: u32 = DWMNCRP_DISABLED;
+            DwmSetWindowAttribute(
+                hwnd as HWND,
+                DWMWA_NCRENDERING_POLICY,
+                &ncrp as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+            println!("[DesktopEmbedder] DWM: NC rendering policy set to DISABLED (pre-SetParent)");
+        }
+
+        // ===== 4. SetParent 嵌入 =====
+        //     SetParent 内部会触发 WM_NCCALCSIZE，但我们的 subclass_wndproc
+        //     会拦截它并返回 0，阻止 NC 边框注入
+        let prev_parent = SetParent(hwnd as HWND, workerw);
+        if prev_parent == std::ptr::null_mut() {
+            return Err("SetParent failed".into());
+        }
+
+        // 4a. SetParent 后再次设置 DWM 属性（NC 渲染策略可能被 SetParent 重置）
+        {
+            use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+
+            const DWMWA_NCRENDERING_POLICY: u32 = 2;
+            const DWMNCRP_DISABLED: u32 = 1;
+            let ncrp: u32 = DWMNCRP_DISABLED;
+            DwmSetWindowAttribute(
+                hwnd as HWND,
+                DWMWA_NCRENDERING_POLICY,
+                &ncrp as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+            println!("[DesktopEmbedder] DWM: NC rendering policy re-applied (post-SetParent)");
         }
 
         // 4b. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也被正确清零
@@ -371,6 +385,29 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             );
         } else {
             println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
+
+            // ===== 6a. DWM 圆角过扫描补偿 =====
+            //
+            // 问题：24H2 的 DWM 会在合成层面对子窗口应用圆角渲染，
+            // 而 DWMWA_WINDOW_CORNER_PREFERENCE 对子窗口无效（返回 ERROR_INVALID_HANDLE）。
+            // 这导致窗口四角（尤其是右上角）出现 1-2px 的圆角缺口。
+            //
+            // 解决方案：微量过扫描（overscan）
+            // 在四边各多扩展 2px，让 DWM 的圆角区域溢出到显示器可视区域之外，
+            // 被 WorkerW 的裁剪区域（clip region）自然裁掉，视觉上圆角消失。
+            //
+            // 这不会影响 WebView 内容渲染——多出的 2px 在显示器边缘之外，
+            // 用户看不到，但足以覆盖 DWM 的圆角半径。
+            const OVERSCAN: i32 = 2;
+            let os_x = target_x - OVERSCAN;
+            let os_y = target_y - OVERSCAN;
+            let os_w = target_w + OVERSCAN * 2;
+            let os_h = target_h + OVERSCAN * 2;
+            MoveWindow(hwnd as HWND, os_x, os_y, os_w, os_h, 1);
+            println!(
+                "[DesktopEmbedder] DWM corner overscan: pos=({}, {}), size={}x{} (overscan={}px per edge)",
+                os_x, os_y, os_w, os_h, OVERSCAN
+            );
         }
 
         println!(

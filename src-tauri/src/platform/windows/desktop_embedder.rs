@@ -255,6 +255,32 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
 
         println!("[DesktopEmbedder] Pre-SetParent: WndProc subclassed, styles cleaned, SWP_FRAMECHANGED sent");
 
+        // ===== 3f. 在 SetParent 之前禁用 DWM 圆角 =====
+        //     DWMWA_WINDOW_CORNER_PREFERENCE 只对顶层窗口生效，
+        //     SetParent 后窗口变为子窗口就无法再设置了。
+        //     所以必须在 SetParent 之前调用，让 DWM 记住该属性。
+        {
+            use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+
+            // DWMWA_WINDOW_CORNER_PREFERENCE = 33 (Win11 22H2+)
+            // DWMWCP_DONOTROUND = 1
+            // 强制窗口使用直角，不绘制圆角
+            const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+            const DWMWCP_DONOTROUND: u32 = 1;
+            let corner_pref: u32 = DWMWCP_DONOTROUND;
+            let hr = DwmSetWindowAttribute(
+                hwnd as HWND,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner_pref as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+            if hr == 0 {
+                println!("[DesktopEmbedder] DWM: Window corner preference set to DONOTROUND (pre-SetParent)");
+            } else {
+                println!("[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE failed (hr=0x{:X}), corners may remain rounded", hr);
+            }
+        }
+
         // ===== 4. SetParent 嵌入 =====
         //     SetParent 内部会触发 WM_NCCALCSIZE，但我们的 subclass_wndproc
         //     会拦截它并返回 0，阻止 NC 边框注入

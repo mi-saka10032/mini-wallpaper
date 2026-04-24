@@ -133,6 +133,9 @@ impl WallpaperWindowManager {
         for monitor_id in monitor_ids {
             self.destroy_window(app, &monitor_id);
         }
+        // 清理 Z-order 监控定时器
+        #[cfg(target_os = "windows")]
+        desktop_embedder::cleanup_all();
     }
 
     /// 隐藏所有壁纸窗口（全屏暂停时使用）

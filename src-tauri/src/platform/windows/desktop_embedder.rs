@@ -319,38 +319,39 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
         }
 
-        // ===== 7. 强制矩形窗口区域，消除 DWM 圆角裁剪 =====
-        //     Windows 11 DWM 会对窗口施加圆角裁剪（即使是子窗口），
-        //     SetWindowRgn 在 GDI 层面强制定义窗口的可见区域为精确矩形，
-        //     优先级高于 DWM 的圆角渲染，从而消除左上角/右上角的 radius 缺口。
+        // ===== 7. Overscan 消除 DWM 圆角 =====
+        //
+        // Windows 11 DWM 在合成层面强制对窗口施加 8px 圆角裁剪，
+        // 没有任何单窗口级别的 API 可以禁用它：
+        //   - DWMWA_WINDOW_CORNER_PREFERENCE 对子窗口无效
+        //   - SetWindowRgn 被 DWM 合成管线忽略
+        //
+        // 解决方案：将窗口四边各扩展 DWM_CORNER_RADIUS 像素（overscan），
+        // 让 DWM 的圆角裁剪区域溢出到屏幕/父窗口的不可见区域，
+        // 从而在可见区域内呈现完美的直角。
         {
-            use windows_sys::Win32::Graphics::Gdi::CreateRectRgn;
-            use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowRgn;
+            const DWM_CORNER_RADIUS: i32 = 8;
 
-            // 获取当前窗口的实际尺寸（可能经过 NC 补偿调整）
-            let mut final_rect: RECT = zeroed();
-            GetWindowRect(hwnd as HWND, &mut final_rect);
-            let rgn_w = final_rect.right - final_rect.left;
-            let rgn_h = final_rect.bottom - final_rect.top;
+            // 获取当前窗口位置（可能已经过 NC 补偿调整）
+            let mut current_rect: RECT = zeroed();
+            GetWindowRect(hwnd as HWND, &mut current_rect);
+            let cur_x = current_rect.left;
+            let cur_y = current_rect.top;
+            let cur_w = current_rect.right - current_rect.left;
+            let cur_h = current_rect.bottom - current_rect.top;
 
-            // 创建精确覆盖整个窗口的矩形区域（坐标相对于窗口自身，从 0,0 开始）
-            let hrgn = CreateRectRgn(0, 0, rgn_w, rgn_h);
-            if hrgn != std::ptr::null_mut() {
-                let result = SetWindowRgn(hwnd as HWND, hrgn, 1); // bRedraw = TRUE
-                if result != 0 {
-                    println!(
-                        "[DesktopEmbedder] SetWindowRgn: forced rectangular region {}x{} (DWM corner override)",
-                        rgn_w, rgn_h
-                    );
-                } else {
-                    println!("[DesktopEmbedder] WARNING: SetWindowRgn failed");
-                    // 如果 SetWindowRgn 失败，需要手动删除区域
-                    windows_sys::Win32::Graphics::Gdi::DeleteObject(hrgn as _);
-                }
-                // 注意：SetWindowRgn 成功后，系统接管 hrgn 的生命周期，不需要手动 DeleteObject
-            } else {
-                println!("[DesktopEmbedder] WARNING: CreateRectRgn failed");
-            }
+            // 四边各扩展 DWM_CORNER_RADIUS
+            let overscan_x = cur_x - DWM_CORNER_RADIUS;
+            let overscan_y = cur_y - DWM_CORNER_RADIUS;
+            let overscan_w = cur_w + DWM_CORNER_RADIUS * 2;
+            let overscan_h = cur_h + DWM_CORNER_RADIUS * 2;
+
+            MoveWindow(hwnd as HWND, overscan_x, overscan_y, overscan_w, overscan_h, 1);
+            println!(
+                "[DesktopEmbedder] Overscan: expanded by {}px each side → pos=({}, {}), size={}x{} (was ({}, {}) {}x{})",
+                DWM_CORNER_RADIUS, overscan_x, overscan_y, overscan_w, overscan_h,
+                cur_x, cur_y, cur_w, cur_h
+            );
         }
 
         println!(

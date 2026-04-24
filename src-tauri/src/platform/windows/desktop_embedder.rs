@@ -57,6 +57,7 @@ struct DWM_BLURBEHIND {
 extern "system" {
     fn DwmExtendFrameIntoClientArea(hwnd: HWND, pMarInset: *const MARGINS) -> i32;
     fn DwmEnableBlurBehindWindow(hwnd: HWND, pBlurBehind: *const DWM_BLURBEHIND) -> i32;
+    fn DwmSetWindowAttribute(hwnd: HWND, dwAttribute: u32, pvAttribute: *const u32, cbAttribute: u32) -> i32;
 }
 
 // ===== 全局状态 =====
@@ -243,19 +244,27 @@ unsafe fn ensure_embed_below_defview(defview: HWND, embed_wnd: HWND) -> (bool, H
     };
 
     let prev = GetWindow(embed_wnd, GW_HWNDPREV);
+
+    // 层级已正确：壁纸窗口的上一个兄弟就是 DefView
     if prev == defview {
         return (true, std::ptr::null_mut());
     }
 
-    // 修正 Z-order
+    // 上一个兄弟是 WorkerW 也视为正常（多窗口嵌入时可能出现）
+    // 关键：不要调用 SetWindowPos，避免无谓的重绘导致闪烁
+    if is_worker_class(prev) {
+        return (true, std::ptr::null_mut());
+    }
+
+    // 真正需要修正 Z-order 的情况：被非 WorkerW 的窗口插入
+    println!(
+        "[DesktopEmbedder] Z-order fix needed: prev=0x{:X}, moving embed 0x{:X} after DefView 0x{:X}",
+        prev as isize, embed_wnd as isize, defview as isize
+    );
     SetWindowPos(
         embed_wnd, defview, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
     );
-
-    if is_worker_class(prev) {
-        return (true, std::ptr::null_mut());
-    }
 
     (false, prev)
 }
@@ -459,6 +468,27 @@ pub fn embed_in_desktop(
         SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, ex_style);
         println!("[DesktopEmbedder] Styles set: style=0x{:X}, ex_style=0x{:X}", style, ex_style);
 
+        // ===== 6.5 禁用 DWM 非客户区渲染，消除 NC offset =====
+        {
+            // DWMWA_NCRENDERING_POLICY = 2, DWMNCRP_DISABLED = 1
+            let policy: u32 = 1; // DWMNCRP_DISABLED
+            let hr = DwmSetWindowAttribute(
+                hwnd as HWND,
+                2, // DWMWA_NCRENDERING_POLICY
+                &policy as *const u32,
+                std::mem::size_of::<u32>() as u32,
+            );
+            println!("[DesktopEmbedder] DWM NCRENDERING_POLICY set to DISABLED (hr=0x{:X})", hr);
+        }
+
+        // 通知系统重新计算非客户区（使样式变更和 DWM 策略生效）
+        SetWindowPos(
+            hwnd as HWND,
+            std::ptr::null_mut(),
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME | 0x0020, // SWP_FRAMECHANGED = SWP_DRAWFRAME, SWP_NOZORDER = 0x0004 不需要
+        );
+
         // ===== 7. DWM 透明 hack（参照博主代码） =====
         // 关键：先 SetParent(NULL) 确保是顶级窗口，DWM 才允许透明
         SetParent(hwnd as HWND, std::ptr::null_mut());
@@ -517,17 +547,73 @@ pub fn embed_in_desktop(
         );
         println!("[DesktopEmbedder] Z-order set: DefView > EmbedWnd > WorkerW");
 
-        // ===== 10. 定位窗口到目标显示器 =====
-        MoveWindow(
-            hwnd as HWND,
-            monitor_x, monitor_y,
-            monitor_width, monitor_height,
-            1, // bRepaint = TRUE
-        );
-        println!(
-            "[DesktopEmbedder] MoveWindow: pos=({},{}), size={}x{}",
-            monitor_x, monitor_y, monitor_width, monitor_height
-        );
+        // ===== 10. 定位窗口到目标显示器（含 NC offset 补偿） =====
+        //
+        // 即使移除了 WS_CAPTION/WS_THICKFRAME 并禁用了 DWM NC 渲染，
+        // Windows 仍可能保留残余的非客户区边框。
+        // 策略：先 MoveWindow 到目标尺寸，然后用 GetWindowRect + ClientToScreen
+        // 检测实际 NC 边距，如果存在偏移则扩大窗口并用负偏移补偿。
+        {
+            use windows_sys::Win32::Foundation::{POINT, RECT};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                ClientToScreen, GetClientRect, GetWindowRect,
+            };
+
+            // 先按目标尺寸定位
+            MoveWindow(
+                hwnd as HWND,
+                monitor_x, monitor_y,
+                monitor_width, monitor_height,
+                1,
+            );
+
+            // 检测 NC 偏移：比较窗口矩形和客户区矩形
+            let mut window_rect: RECT = std::mem::zeroed();
+            let mut client_rect: RECT = std::mem::zeroed();
+            GetWindowRect(hwnd as HWND, &mut window_rect);
+            GetClientRect(hwnd as HWND, &mut client_rect);
+
+            let window_w = window_rect.right - window_rect.left;
+            let window_h = window_rect.bottom - window_rect.top;
+            let client_w = client_rect.right - client_rect.left;
+            let client_h = client_rect.bottom - client_rect.top;
+
+            if client_w != monitor_width || client_h != monitor_height {
+                // 存在 NC 偏移，需要补偿
+                // 用 ClientToScreen 将客户区原点 (0,0) 转换为屏幕坐标，
+                // 与窗口矩形对比即可得到各边的 NC 边距
+                let mut client_origin = POINT { x: 0, y: 0 };
+                ClientToScreen(hwnd as HWND, &mut client_origin);
+
+                let nc_left = client_origin.x - window_rect.left;
+                let nc_top = client_origin.y - window_rect.top;
+                let nc_right = window_w - client_w - nc_left;
+                let nc_bottom = window_h - client_h - nc_top;
+
+                println!(
+                    "[DesktopEmbedder] NC offset detected: L={} T={} R={} B={}, compensating...",
+                    nc_left, nc_top, nc_right, nc_bottom
+                );
+
+                // 扩大窗口以补偿 NC 边距，使客户区精确覆盖显示器
+                let comp_x = monitor_x - nc_left;
+                let comp_y = monitor_y - nc_top;
+                let comp_w = monitor_width + nc_left + nc_right;
+                let comp_h = monitor_height + nc_top + nc_bottom;
+
+                MoveWindow(hwnd as HWND, comp_x, comp_y, comp_w, comp_h, 1);
+
+                println!(
+                    "[DesktopEmbedder] Compensated → pos=({}, {}), size={}x{}",
+                    comp_x, comp_y, comp_w, comp_h
+                );
+            } else {
+                println!(
+                    "[DesktopEmbedder] No NC offset, MoveWindow: pos=({},{}), size={}x{}",
+                    monitor_x, monitor_y, monitor_width, monitor_height
+                );
+            }
+        }
 
         // ===== 11. 显示窗口 =====
         ShowWindow(progman, SW_SHOW);

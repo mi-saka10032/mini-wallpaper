@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
 use crate::platform::windows::desktop_embedder;
@@ -84,15 +84,30 @@ impl WallpaperWindowManager {
                 let hwnd_isize = hwnd.0 as isize;
                 // 等待 WebView 初始化完成（Tauri WebviewWindow 需要一些时间渲染）
                 std::thread::sleep(std::time::Duration::from_millis(500));
-                if let Err(e) = desktop_embedder::embed_in_desktop(
+                match desktop_embedder::embed_in_desktop(
                     hwnd_isize,
                     x,
                     y,
                     width as i32,
                     height as i32,
                 ) {
-                    eprintln!("[WallpaperWindowManager] embed failed: {}", e);
-                    // 嵌入失败不阻止窗口创建，壁纸仍然可以显示为普通窗口
+                    Ok(nc_offset) => {
+                        // 方案B：将 NC offset 通过事件发送给壁纸窗口前端，
+                        // 由前端通过 CSS 补偿覆盖 NC 区域
+                        if nc_offset.left != 0 || nc_offset.top != 0
+                            || nc_offset.right != 0 || nc_offset.bottom != 0
+                        {
+                            println!(
+                                "[WallpaperWindowManager] Sending NC offset to window '{}': L={} T={} R={} B={}",
+                                label, nc_offset.left, nc_offset.top, nc_offset.right, nc_offset.bottom
+                            );
+                            let _ = window.emit("nc-offset-detected", &nc_offset);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[WallpaperWindowManager] embed failed: {}", e);
+                        // 嵌入失败不阻止窗口创建，壁纸仍然可以显示为普通窗口
+                    }
                 }
             }
         }

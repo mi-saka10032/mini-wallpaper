@@ -80,6 +80,15 @@ static CACHED_WORKERW: AtomicIsize = AtomicIsize::new(0);
 #[cfg(target_os = "windows")]
 static IS_LEGACY_MODE: AtomicBool = AtomicBool::new(false);
 
+/// NC offset 检测结果，用于前端 CSS 补偿
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct NcOffset {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
 #[cfg(target_os = "windows")]
 #[derive(Clone, Debug)]
 struct EmbeddedWindow {
@@ -345,7 +354,7 @@ pub fn embed_in_desktop(
     monitor_y: i32,
     monitor_width: i32,
     monitor_height: i32,
-) -> Result<(), String> {
+) -> Result<NcOffset, String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetLayeredWindowAttributes, GWL_EXSTYLE, GWL_STYLE,
         HWND_BOTTOM, HWND_TOP, LWA_ALPHA,
@@ -547,19 +556,19 @@ pub fn embed_in_desktop(
         );
         println!("[DesktopEmbedder] Z-order set: DefView > EmbedWnd > WorkerW");
 
-        // ===== 10. 定位窗口到目标显示器（含 NC offset 补偿） =====
+        // ===== 10. 定位窗口到目标显示器 + 检测 NC offset =====
         //
-        // 即使移除了 WS_CAPTION/WS_THICKFRAME 并禁用了 DWM NC 渲染，
-        // Windows 仍可能保留残余的非客户区边框。
-        // 策略：先 MoveWindow 到目标尺寸，然后用 GetWindowRect + ClientToScreen
-        // 检测实际 NC 边距，如果存在偏移则扩大窗口并用负偏移补偿。
+        // 方案B：不在 Win32 层面补偿 NC offset，而是检测后传递给前端，
+        // 由前端通过 CSS 负 margin + 放大尺寸来补偿。
+        // 这样即使 Windows 25H2 改变了 DWM 行为，前端也能稳定覆盖。
+        let nc_offset;
         {
             use windows_sys::Win32::Foundation::{POINT, RECT};
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 ClientToScreen, GetClientRect, GetWindowRect,
             };
 
-            // 先按目标尺寸定位
+            // 按目标尺寸定位窗口
             MoveWindow(
                 hwnd as HWND,
                 monitor_x, monitor_y,
@@ -579,9 +588,6 @@ pub fn embed_in_desktop(
             let client_h = client_rect.bottom - client_rect.top;
 
             if client_w != monitor_width || client_h != monitor_height {
-                // 存在 NC 偏移，需要补偿
-                // 用 ClientToScreen 将客户区原点 (0,0) 转换为屏幕坐标，
-                // 与窗口矩形对比即可得到各边的 NC 边距
                 let mut client_origin = POINT { x: 0, y: 0 };
                 ClientToScreen(hwnd as HWND, &mut client_origin);
 
@@ -590,26 +596,21 @@ pub fn embed_in_desktop(
                 let nc_right = window_w - client_w - nc_left;
                 let nc_bottom = window_h - client_h - nc_top;
 
+                nc_offset = NcOffset {
+                    left: nc_left,
+                    top: nc_top,
+                    right: nc_right,
+                    bottom: nc_bottom,
+                };
+
                 println!(
-                    "[DesktopEmbedder] NC offset detected: L={} T={} R={} B={}, compensating...",
+                    "[DesktopEmbedder] NC offset detected (Plan B - frontend compensation): L={} T={} R={} B={}",
                     nc_left, nc_top, nc_right, nc_bottom
                 );
-
-                // 扩大窗口以补偿 NC 边距，使客户区精确覆盖显示器
-                let comp_x = monitor_x - nc_left;
-                let comp_y = monitor_y - nc_top;
-                let comp_w = monitor_width + nc_left + nc_right;
-                let comp_h = monitor_height + nc_top + nc_bottom;
-
-                MoveWindow(hwnd as HWND, comp_x, comp_y, comp_w, comp_h, 1);
-
-                println!(
-                    "[DesktopEmbedder] Compensated → pos=({}, {}), size={}x{}",
-                    comp_x, comp_y, comp_w, comp_h
-                );
             } else {
+                nc_offset = NcOffset::default();
                 println!(
-                    "[DesktopEmbedder] No NC offset, MoveWindow: pos=({},{}), size={}x{}",
+                    "[DesktopEmbedder] No NC offset detected, pos=({},{}), size={}x{}",
                     monitor_x, monitor_y, monitor_width, monitor_height
                 );
             }
@@ -646,7 +647,7 @@ pub fn embed_in_desktop(
             hwnd, embed_target as isize, monitor_x, monitor_y, monitor_width, monitor_height
         );
 
-        Ok(())
+        Ok(nc_offset)
     }
 }
 
@@ -773,9 +774,9 @@ pub fn embed_in_desktop(
     _monitor_y: i32,
     _monitor_width: i32,
     _monitor_height: i32,
-) -> Result<(), String> {
+) -> Result<NcOffset, String> {
     println!("[DesktopEmbedder] embed_in_desktop is a no-op on this platform");
-    Ok(())
+    Ok(NcOffset::default())
 }
 
 #[cfg(not(target_os = "windows"))]

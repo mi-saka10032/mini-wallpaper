@@ -5,9 +5,14 @@
 //! 2. SendMessageTimeout(Progman, 0x052C) 触发 explorer 创建 WorkerW
 //! 3. EnumWindows 找到正确的 WorkerW（包含 SHELLDLL_DefView 子窗口的那个的下一个兄弟）
 //! 4. SetParent(tauri_hwnd, workerw) 将壁纸窗口嵌入桌面层级
+//!
+//! 24H2 修复（方案 A）：
+//! Windows 11 24H2 在 SetParent 后会通过 WM_NCCALCSIZE 注入隐藏的 NC 边框（~8px），
+//! 导致壁纸窗口出现偏移和黏着。方案 A 通过子类化窗口过程（WndProc Subclass），
+//! 拦截 WM_NCCALCSIZE 消息并强制返回 0 NC 区域，从根源消除偏移。
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowExW, FindWindowW, SendMessageTimeoutW, SetParent, SMTO_NORMAL,
@@ -15,6 +20,110 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicIsize, Ordering};
+
+// ===== 方案 A：WndProc 子类化 =====
+//
+// 通过 SetWindowLongPtrW(GWL_WNDPROC) 替换窗口过程，
+// 拦截 WM_NCCALCSIZE 消息，强制将 NC 区域设为 0。
+// 这样无论 24H2 的 DWM 如何尝试注入边框，都会被我们的 WndProc 拦截。
+//
+// 原始 WndProc 保存在全局变量中，其他消息正常转发。
+
+/// 保存原始 WndProc 的全局变量（每个嵌入窗口一个）
+/// 使用简单的静态数组支持最多 8 个显示器
+#[cfg(target_os = "windows")]
+static ORIGINAL_WNDPROCS: [AtomicIsize; 8] = [
+    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0), AtomicIsize::new(0),
+];
+
+/// 保存对应的 HWND，用于在 WndProc 中查找正确的原始 WndProc
+#[cfg(target_os = "windows")]
+static SUBCLASSED_HWNDS: [AtomicIsize; 8] = [
+    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0), AtomicIsize::new(0),
+];
+
+/// 查找 HWND 对应的原始 WndProc
+#[cfg(target_os = "windows")]
+fn find_original_wndproc(hwnd: HWND) -> Option<isize> {
+    let hwnd_val = hwnd as isize;
+    for i in 0..8 {
+        if SUBCLASSED_HWNDS[i].load(Ordering::SeqCst) == hwnd_val {
+            let proc = ORIGINAL_WNDPROCS[i].load(Ordering::SeqCst);
+            if proc != 0 {
+                return Some(proc);
+            }
+        }
+    }
+    None
+}
+
+/// 注册子类化信息
+#[cfg(target_os = "windows")]
+fn register_subclass(hwnd: HWND, original_proc: isize) {
+    let hwnd_val = hwnd as isize;
+    for i in 0..8 {
+        // 找到空槽位或已存在的同一 HWND
+        let existing = SUBCLASSED_HWNDS[i].load(Ordering::SeqCst);
+        if existing == 0 || existing == hwnd_val {
+            SUBCLASSED_HWNDS[i].store(hwnd_val, Ordering::SeqCst);
+            ORIGINAL_WNDPROCS[i].store(original_proc, Ordering::SeqCst);
+            println!("[DesktopEmbedder] Subclass registered: slot={}, hwnd=0x{:X}, orig_proc=0x{:X}",
+                i, hwnd_val, original_proc);
+            return;
+        }
+    }
+    println!("[DesktopEmbedder] WARNING: No free subclass slot for hwnd=0x{:X}", hwnd_val);
+}
+
+/// 子类化的窗口过程
+///
+/// 核心：拦截 WM_NCCALCSIZE，强制返回 0（即 NC 区域为空），
+/// 其他消息转发给原始 WndProc
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn subclass_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, WM_NCCALCSIZE,
+    };
+
+    if msg == WM_NCCALCSIZE {
+        // 当 wParam == TRUE (1) 时，lparam 指向 NCCALCSIZE_PARAMS 结构体
+        // 我们不修改它，直接返回 0，告诉系统"不需要任何非客户区"
+        //
+        // 当 wParam == FALSE (0) 时，lparam 指向 RECT
+        // 同样返回 0，表示整个窗口矩形都是客户区
+        //
+        // 这是阻止 24H2 DWM 注入隐藏边框的关键
+        return 0;
+    }
+
+    // 其他消息转发给原始 WndProc
+    if let Some(original_proc) = find_original_wndproc(hwnd) {
+        // 将保存的 isize 还原为函数指针，再包装为 WNDPROC (= Option<fn(...)>)
+        type WndProcFn = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+        let fn_ptr: WndProcFn = std::mem::transmute(original_proc as usize);
+        CallWindowProcW(
+            Some(fn_ptr),
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+        )
+    } else {
+        // 找不到原始 WndProc，使用 DefWindowProcW 兜底
+        windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
 
 /// 在 Windows 上查找 WorkerW 窗口并将指定 HWND 嵌入桌面层级
 ///
@@ -31,8 +140,9 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             ClientToScreen,
         },
         UI::WindowsAndMessaging::{
-            GetClientRect, GetWindowLongPtrW, GetWindowRect, MoveWindow, SetWindowLongPtrW,
-            SetWindowPos, SetLayeredWindowAttributes, GWL_EXSTYLE, GWL_STYLE, LWA_ALPHA,
+            CallWindowProcW, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+            MoveWindow, SetWindowLongPtrW, SetWindowPos, SetLayeredWindowAttributes,
+            GWL_EXSTYLE, GWL_STYLE, GWL_WNDPROC, LWA_ALPHA,
             SWP_FRAMECHANGED, SWP_NOACTIVATE,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_CHILD,
             WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
@@ -78,20 +188,34 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             target_x, target_y, target_w, target_h
         );
 
-        // ===== 3. 方案 B：在 SetParent 之前设置 WS_EX_LAYERED =====
+        // ===== 3. 方案 A：子类化 WndProc 拦截 WM_NCCALCSIZE =====
         //
-        // Windows 11 24H2 改变了 DWM 桌面合成机制，要求嵌入桌面的窗口
-        // 必须是 Layered 窗口才能正确参与合成。如果在 SetParent 之后才设置
-        // WS_EX_LAYERED，DWM 已经按非 Layered 窗口的方式处理了 NC 区域，
-        // 会注入隐藏边框（~8px 偏移）。
+        // Windows 11 24H2 在 SetParent 后会通过 WM_NCCALCSIZE 注入隐藏的 NC 边框。
+        // 方案 B（Layered 前置）已验证无效——DWM 的 NC 注入发生在 SetParent 内部，
+        // 与窗口是否预先标记为 Layered 无关。
         //
-        // 方案 B 的核心思路：
-        // 1. 在 SetParent 之前就将窗口标记为 Layered 并清除所有边框样式
-        // 2. 调用 SetLayeredWindowAttributes 设置完全不透明（bAlpha=0xFF）
-        // 3. 这样 DWM 在 SetParent 触发的 WM_NCCALCSIZE 中就不会注入 NC 边框
-        // 4. 从根源消除偏移问题，无需事后补偿
+        // 方案 A 的核心思路：
+        // 1. 在 SetParent 之前子类化窗口过程（替换 WndProc）
+        // 2. 新的 WndProc 拦截所有 WM_NCCALCSIZE 消息，强制返回 0
+        // 3. 这样当 SetParent 内部触发 WM_NCCALCSIZE 时，我们的 WndProc 会
+        //    告诉系统"不需要任何非客户区"，从根源阻止 NC 边框注入
+        // 4. 其他消息正常转发给原始 WndProc，不影响 Tauri/WebView 的正常功能
 
-        // 3a. 清除窗口样式中的所有边框位
+        // 3a. 子类化窗口过程：保存原始 WndProc，替换为我们的 subclass_wndproc
+        let original_proc = GetWindowLongPtrW(hwnd as HWND, GWL_WNDPROC);
+        if original_proc != 0 {
+            register_subclass(hwnd as HWND, original_proc);
+            let new_proc = subclass_wndproc as isize;
+            SetWindowLongPtrW(hwnd as HWND, GWL_WNDPROC, new_proc);
+            println!(
+                "[DesktopEmbedder] WndProc subclassed: orig=0x{:X}, new=0x{:X}",
+                original_proc, new_proc
+            );
+        } else {
+            println!("[DesktopEmbedder] WARNING: GetWindowLongPtrW(GWL_WNDPROC) returned 0, skipping subclass");
+        }
+
+        // 3b. 清除窗口样式中的所有边框位
         let style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
         let clean_style = (style
             & !(WS_CAPTION as isize)
@@ -102,13 +226,8 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             | WS_VISIBLE as isize;
         SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, clean_style);
 
-        // 3b. 设置扩展样式：WS_EX_LAYERED + WS_EX_TRANSPARENT（鼠标穿透）
+        // 3c. 设置扩展样式：WS_EX_LAYERED + WS_EX_TRANSPARENT（鼠标穿透）
         //     清除所有可能的边框扩展样式
-        //
-        // WS_EX_LAYERED：将窗口标记为分层窗口，启用 alpha 混合能力
-        //   - 24H2 要求壁纸窗口必须是 Layered 才能正确参与 DWM 合成
-        // WS_EX_TRANSPARENT：让窗口在命中测试（hit-test）中被跳过，
-        //   鼠标点击会穿透到 Z-order 下方的窗口（即桌面图标层 SHELLDLL_DefView）
         let ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
         let clean_ex = (ex_style
             & !(WS_EX_CLIENTEDGE as isize)
@@ -119,13 +238,11 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             | WS_EX_TRANSPARENT as isize;
         SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, clean_ex);
 
-        // 3c. 设置 Layered 窗口属性：完全不透明（bAlpha=0xFF）
-        //     这是 24H2 下 Layered 窗口正确显示的关键调用
-        //     如果不调用此函数，Layered 窗口默认是完全透明（不可见）的
+        // 3d. 设置 Layered 窗口属性：完全不透明
         SetLayeredWindowAttributes(hwnd as HWND, 0, 0xFF, LWA_ALPHA);
 
-        // 3d. SWP_FRAMECHANGED 强制系统重新发送 WM_NCCALCSIZE，
-        //     在边框样式已清除 + Layered 已设置的情况下，NC 区域应被重算为 0
+        // 3e. SWP_FRAMECHANGED 强制系统重新发送 WM_NCCALCSIZE
+        //     此时我们的 subclass_wndproc 已经就位，会拦截并返回 0
         SetWindowPos(
             hwnd as HWND,
             std::ptr::null_mut(),
@@ -136,15 +253,17 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
         );
 
-        println!("[DesktopEmbedder] Pre-SetParent: WS_EX_LAYERED set, SetLayeredWindowAttributes(0xFF) called");
+        println!("[DesktopEmbedder] Pre-SetParent: WndProc subclassed, styles cleaned, SWP_FRAMECHANGED sent");
 
         // ===== 4. SetParent 嵌入 =====
+        //     SetParent 内部会触发 WM_NCCALCSIZE，但我们的 subclass_wndproc
+        //     会拦截它并返回 0，阻止 NC 边框注入
         let prev_parent = SetParent(hwnd as HWND, workerw);
         if prev_parent == std::ptr::null_mut() {
             return Err("SetParent failed".into());
         }
 
-        // 4a. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也正确
+        // 4a. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也被正确清零
         SetWindowPos(
             hwnd as HWND,
             std::ptr::null_mut(),
@@ -159,7 +278,6 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
         MoveWindow(hwnd as HWND, target_x, target_y, target_w, target_h, 1);
 
         // ===== 6. 验证：测量实际 NC 偏移，输出日志 =====
-        //     如果方案 B 生效，NC 偏移应该全部为 0
         let mut win_rect: RECT = zeroed();
         GetWindowRect(hwnd as HWND, &mut win_rect);
 
@@ -184,24 +302,21 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
 
         if nc_left != 0 || nc_top != 0 || nc_right != 0 || nc_bottom != 0 {
             println!(
-                "[DesktopEmbedder] WARNING: NC offset still present after Plan B! L={} T={} R={} B={}",
+                "[DesktopEmbedder] WARNING: NC offset still present! L={} T={} R={} B={}",
                 nc_left, nc_top, nc_right, nc_bottom
             );
-            println!(
-                "[DesktopEmbedder] Falling back to NC compensation...",
-            );
-            // 回退：如果 Layered 前置仍未消除 NC，则进行一次补偿
+            // 回退到 NC 补偿
             let comp_x = target_x - nc_left;
             let comp_y = target_y - nc_top;
             let comp_w = target_w + nc_left + nc_right;
             let comp_h = target_h + nc_top + nc_bottom;
             MoveWindow(hwnd as HWND, comp_x, comp_y, comp_w, comp_h, 1);
             println!(
-                "[DesktopEmbedder] Compensated → pos=({}, {}), size={}x{}",
+                "[DesktopEmbedder] Fallback: NC compensation → pos=({}, {}), size={}x{}",
                 comp_x, comp_y, comp_w, comp_h
             );
         } else {
-            println!("[DesktopEmbedder] Plan B success: No NC offset detected!");
+            println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
         }
 
         println!(

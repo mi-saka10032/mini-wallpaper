@@ -319,18 +319,19 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
         }
 
-        // ===== 7. Overscan 消除 DWM 圆角 =====
+        // ===== 7. 精细化 Overscan 消除 DWM 圆角 =====
         //
-        // Windows 11 DWM 在合成层面强制对窗口施加 8px 圆角裁剪，
-        // 没有任何单窗口级别的 API 可以禁用它：
-        //   - DWMWA_WINDOW_CORNER_PREFERENCE 对子窗口无效
-        //   - SetWindowRgn 被 DWM 合成管线忽略
+        // Windows 11 DWM 在合成层面对窗口施加 ~1px 圆角裁剪，
+        // 仅影响窗口的左上角和右上角。
         //
-        // 解决方案：将窗口四边各扩展 DWM_CORNER_RADIUS 像素（overscan），
-        // 让 DWM 的圆角裁剪区域溢出到屏幕/父窗口的不可见区域，
-        // 从而在可见区域内呈现完美的直角。
+        // 四边全扩展会导致相邻显示器连接边出现挤压，因此采用精细化策略：
+        //   - 仅向上扩展 1px（顶部 overscan），让上方两个圆角溢出到不可见区域
+        //   - 左右各扩展 1px，让左上角/右上角的水平方向圆角也溢出
+        //   - 底部不扩展，避免影响下方内容
+        //
+        // 对于多显示器场景，左右各 1px 的扩展不会造成明显的视觉挤压。
         {
-            const DWM_CORNER_RADIUS: i32 = 8;
+            const DWM_CORNER_RADIUS: i32 = 1;
 
             // 获取当前窗口位置（可能已经过 NC 补偿调整）
             let mut current_rect: RECT = zeroed();
@@ -340,16 +341,16 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             let cur_w = current_rect.right - current_rect.left;
             let cur_h = current_rect.bottom - current_rect.top;
 
-            // 四边各扩展 DWM_CORNER_RADIUS
-            let overscan_x = cur_x - DWM_CORNER_RADIUS;
-            let overscan_y = cur_y - DWM_CORNER_RADIUS;
-            let overscan_w = cur_w + DWM_CORNER_RADIUS * 2;
-            let overscan_h = cur_h + DWM_CORNER_RADIUS * 2;
+            // 顶部 + 左右扩展，底部不动
+            let overscan_x = cur_x - DWM_CORNER_RADIUS;       // 左移 1px
+            let overscan_y = cur_y - DWM_CORNER_RADIUS;       // 上移 1px
+            let overscan_w = cur_w + DWM_CORNER_RADIUS * 2;   // 宽度 +2px（左右各1px）
+            let overscan_h = cur_h + DWM_CORNER_RADIUS;       // 高度 +1px（仅顶部）
 
             MoveWindow(hwnd as HWND, overscan_x, overscan_y, overscan_w, overscan_h, 1);
             println!(
-                "[DesktopEmbedder] Overscan: expanded by {}px each side → pos=({}, {}), size={}x{} (was ({}, {}) {}x{})",
-                DWM_CORNER_RADIUS, overscan_x, overscan_y, overscan_w, overscan_h,
+                "[DesktopEmbedder] Overscan (top+sides only): T={}px L/R={}px → pos=({}, {}), size={}x{} (was ({}, {}) {}x{})",
+                DWM_CORNER_RADIUS, DWM_CORNER_RADIUS, overscan_x, overscan_y, overscan_w, overscan_h,
                 cur_x, cur_y, cur_w, cur_h
             );
         }

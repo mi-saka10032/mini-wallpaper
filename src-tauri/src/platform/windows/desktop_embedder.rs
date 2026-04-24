@@ -17,8 +17,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 /// 在 Windows 上查找 WorkerW 窗口并将指定 HWND 嵌入桌面层级
+///
+/// 参数：
+/// - `hwnd`: 要嵌入的窗口句柄
+/// - `monitor_x`, `monitor_y`: 该显示器在虚拟桌面中的左上角坐标
+/// - `monitor_width`, `monitor_height`: 该显示器的物理分辨率
 #[cfg(target_os = "windows")]
-pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
+pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_width: i32, monitor_height: i32) -> Result<(), String> {
     use std::mem::zeroed;
 
     use windows_sys::Win32::{
@@ -64,19 +69,16 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
         // 3. 枚举所有顶层窗口，找到目标 WorkerW
         // let workerw = find_workerw()?;
 
-        // 获取 WorkerW 的客户区矩形 —— 这就是显示器的实际可用区域
-        let mut workerw_client: RECT = zeroed();
-        GetClientRect(workerw, &mut workerw_client);
-        // 获取 WorkerW 客户区原点在屏幕上的坐标
-        let mut workerw_origin = POINT { x: 0, y: 0 };
-        ClientToScreen(workerw, &mut workerw_origin);
-
-        let target_w = workerw_client.right - workerw_client.left;
-        let target_h = workerw_client.bottom - workerw_client.top;
+        // 使用前端传入的显示器坐标和尺寸（单个显示器的物理分辨率）
+        // 而非 WorkerW 客户区（覆盖整个虚拟桌面，多显示器下会合并）
+        let target_x = monitor_x;
+        let target_y = monitor_y;
+        let target_w = monitor_width;
+        let target_h = monitor_height;
 
         println!(
-            "[DesktopEmbedder] WorkerW client: {}x{}, origin on screen: ({}, {})",
-            target_w, target_h, workerw_origin.x, workerw_origin.y
+            "[DesktopEmbedder] Monitor rect: ({}, {}) {}x{}",
+            target_x, target_y, target_w, target_h
         );
 
         // 4. SetParent 嵌入
@@ -94,7 +96,7 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
         //
         // 修复策略：
         // 1. 清除所有边框样式 → SWP_FRAMECHANGED 强制重算 NC 区域
-        // 2. 以 WorkerW 客户区尺寸（显示器实际尺寸）为目标
+        // 2. 以前端传入的显示器物理分辨率为目标尺寸（避免 WorkerW 客户区合并多显示器）
         // 3. 精确测量四边 NC 偏移（不假设对称），反向补偿
         // 4. 测量→补偿→验证 闭环
 
@@ -140,20 +142,21 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
         );
 
-        // 5d. 先将窗口移到 WorkerW 客户区 (0,0) 位置，尺寸设为目标尺寸
+        // 5d. 先将窗口移到 WorkerW 中该显示器对应的位置，尺寸设为目标尺寸
+        //     注意：WorkerW 覆盖整个虚拟桌面，所以需要用显示器在虚拟桌面中的坐标定位
         //     这是初始定位，后续会根据实际测量结果进行补偿
-        MoveWindow(hwnd as HWND, 0, 0, target_w, target_h, 1);
+        MoveWindow(hwnd as HWND, target_x, target_y, target_w, target_h, 1);
 
         // 5e. 测量→补偿→验证 闭环（最多 3 轮）
         //
         // 原理：MoveWindow 设置的是窗口矩形（包含 NC 区域），但我们需要的是
-        // 客户区完全覆盖 WorkerW 客户区。如果存在 NC 偏移，客户区会比窗口矩形小，
+        // 客户区完全覆盖该显示器区域。如果存在 NC 偏移，客户区会比窗口矩形小，
         // 导致右侧/底部出现缺口。
         //
         // 通过测量 "窗口矩形 vs 客户区矩形" 的差值，精确计算四边 NC 尺寸，
         // 然后扩大窗口矩形并偏移位置来补偿。
-        let mut final_x = 0i32;
-        let mut final_y = 0i32;
+        let mut final_x = target_x;
+        let mut final_y = target_y;
         let mut final_w = target_w;
         let mut final_h = target_h;
 
@@ -192,8 +195,8 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
             }
 
             // 计算补偿：窗口位置向左上偏移 NC 尺寸，窗口大小扩大 NC 总量
-            final_x = -nc_left;
-            final_y = -nc_top;
+            final_x = target_x - nc_left;
+            final_y = target_y - nc_top;
             final_w = target_w + nc_left + nc_right;
             final_h = target_h + nc_top + nc_bottom;
 
@@ -290,7 +293,7 @@ fn encode_wide(s: &str) -> Vec<u16> {
 // ===== 非 Windows 平台的空实现 =====
 
 #[cfg(not(target_os = "windows"))]
-pub fn embed_in_desktop(_hwnd: isize) -> Result<(), String> {
+pub fn embed_in_desktop(_hwnd: isize, _monitor_x: i32, _monitor_y: i32, _monitor_width: i32, _monitor_height: i32) -> Result<(), String> {
     println!("[DesktopEmbedder] embed_in_desktop is a no-op on this platform");
     Ok(())
 }

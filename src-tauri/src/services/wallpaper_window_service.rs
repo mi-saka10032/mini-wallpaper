@@ -79,10 +79,16 @@ impl WallpaperWindowManager {
         // Windows 平台：嵌入桌面
         #[cfg(target_os = "windows")]
         {
-            // 获取 HWND 并嵌入
+            // 获取 HWND 并嵌入，传入该显示器在虚拟桌面中的坐标和物理分辨率
             if let Ok(hwnd) = window.hwnd() {
                 let hwnd_isize = hwnd.0 as isize;
-                if let Err(e) = desktop_embedder::embed_in_desktop(hwnd_isize) {
+                if let Err(e) = desktop_embedder::embed_in_desktop(
+                    hwnd_isize,
+                    x,
+                    y,
+                    width as i32,
+                    height as i32,
+                ) {
                     eprintln!("[WallpaperWindowManager] embed failed: {}", e);
                     // 嵌入失败不阻止窗口创建，壁纸仍然可以显示为普通窗口
                 }

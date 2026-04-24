@@ -72,7 +72,7 @@ impl WallpaperWindowManager {
         .visible(false)
         .position(x as f64, y as f64)
         .inner_size(width as f64, height as f64)
-        // 注意：不使用 always_on_bottom，因为我们通过 desktop_embedder 手动管理 Z-order
+        .always_on_bottom(true)
         .build()
         .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
 
@@ -82,25 +82,15 @@ impl WallpaperWindowManager {
             // 获取 HWND 并嵌入，传入该显示器在虚拟桌面中的坐标和物理分辨率
             if let Ok(hwnd) = window.hwnd() {
                 let hwnd_isize = hwnd.0 as isize;
-                // 等待 WebView 初始化完成（Tauri WebviewWindow 需要一些时间渲染）
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                match desktop_embedder::embed_in_desktop(
+                if let Err(e) = desktop_embedder::embed_in_desktop(
                     hwnd_isize,
                     x,
                     y,
                     width as i32,
                     height as i32,
                 ) {
-                    Ok(()) => {
-                        println!(
-                            "[WallpaperWindowManager] Embedded window '{}' successfully",
-                            label
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("[WallpaperWindowManager] embed failed: {}", e);
-                        // 嵌入失败不阻止窗口创建，壁纸仍然可以显示为普通窗口
-                    }
+                    eprintln!("[WallpaperWindowManager] embed failed: {}", e);
+                    // 嵌入失败不阻止窗口创建，壁纸仍然可以显示为普通窗口
                 }
             }
         }
@@ -143,9 +133,6 @@ impl WallpaperWindowManager {
         for monitor_id in monitor_ids {
             self.destroy_window(app, &monitor_id);
         }
-        // 清理 Z-order 监控定时器
-        #[cfg(target_os = "windows")]
-        desktop_embedder::cleanup_all();
     }
 
     /// 隐藏所有壁纸窗口（全屏暂停时使用）

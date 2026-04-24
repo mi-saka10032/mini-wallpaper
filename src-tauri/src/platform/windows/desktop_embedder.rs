@@ -3,13 +3,16 @@
 //! 核心原理：
 //! 1. FindWindow("Progman") 找到桌面窗口
 //! 2. SendMessageTimeout(Progman, 0x052C) 触发 explorer 创建 WorkerW
-//! 3. EnumWindows 找到正确的 WorkerW（包含 SHELLDLL_DefView 子窗口的那个的下一个兄弟）
+//! 3. 根据 Windows 版本选择不同的 WorkerW 查找策略：
+//!    - 24H2+：WorkerW 是 Progman 的子窗口，直接 FindWindowExW(progman, "WorkerW")
+//!    - 旧版本：WorkerW 是顶层窗口，通过 EnumWindows 找到 SHELLDLL_DefView 所在
+//!      WorkerW 的前一个兄弟
 //! 4. SetParent(tauri_hwnd, workerw) 将壁纸窗口嵌入桌面层级
 //!
-//! 24H2 修复（方案 A）：
-//! Windows 11 24H2 在 SetParent 后会通过 WM_NCCALCSIZE 注入隐藏的 NC 边框（~8px），
-//! 导致壁纸窗口出现偏移和黏着。方案 A 通过子类化窗口过程（WndProc Subclass），
-//! 拦截 WM_NCCALCSIZE 消息并强制返回 0 NC 区域，从根源消除偏移。
+//! 版本兼容策略：
+//! - 24H2+（Build >= 26100）：SetParent 后 DWM 会通过 WM_NCCALCSIZE 注入隐藏 NC 边框，
+//!   需要 WndProc 子类化拦截 + 样式清理 + NC 补偿 fallback
+//! - 旧版本（< 24H2）：经典嵌入方案，无需额外修复
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -130,6 +133,62 @@ unsafe extern "system" fn subclass_wndproc(
     }
 }
 
+/// 检测当前 Windows 版本是否为 24H2 或更高版本
+///
+/// Windows 11 24H2 的 Build Number 为 26100。
+/// 24H2 改变了桌面窗口层级结构（WorkerW 变为 Progman 子窗口），
+/// 并且 SetParent 后会注入隐藏的 NC 边框，需要特殊处理。
+#[cfg(target_os = "windows")]
+fn is_win11_24h2_or_later() -> bool {
+    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+
+    unsafe {
+        let mut osvi: OSVERSIONINFOW = std::mem::zeroed();
+        osvi.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+
+        // GetVersionExW 在 Win8.1+ 会被 manifest 限制，但对于 Build Number 检测
+        // 我们使用 RtlGetVersion 作为更可靠的替代方案
+        type RtlGetVersionFn = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32;
+
+        let ntdll = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(
+            encode_wide("ntdll.dll\0").as_ptr(),
+        );
+        if ntdll == std::ptr::null_mut() {
+            println!("[DesktopEmbedder] WARNING: Failed to get ntdll.dll handle, assuming legacy path");
+            return false;
+        }
+
+        let proc = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+            ntdll,
+            b"RtlGetVersion\0".as_ptr(),
+        );
+        if proc.is_none() {
+            println!("[DesktopEmbedder] WARNING: Failed to get RtlGetVersion, assuming legacy path");
+            return false;
+        }
+
+        let rtl_get_version: RtlGetVersionFn = std::mem::transmute(proc);
+        let status = rtl_get_version(&mut osvi as *mut OSVERSIONINFOW);
+
+        if status == 0 {
+            // STATUS_SUCCESS
+            let build = osvi.dwBuildNumber;
+            let is_24h2 = build >= 26100;
+            println!(
+                "[DesktopEmbedder] Windows version: {}.{}.{} → {}",
+                osvi.dwMajorVersion,
+                osvi.dwMinorVersion,
+                build,
+                if is_24h2 { "24H2+ (new path)" } else { "Legacy (classic path)" }
+            );
+            is_24h2
+        } else {
+            println!("[DesktopEmbedder] WARNING: RtlGetVersion failed (status={}), assuming legacy path", status);
+            false
+        }
+    }
+}
+
 /// 在 Windows 上查找 WorkerW 窗口并将指定 HWND 嵌入桌面层级
 ///
 /// 参数：
@@ -177,13 +236,31 @@ pub fn embed_in_desktop(
             &mut _result as *mut usize,
         );
 
-        // 找到 Progman 的第一个子窗口（就是壁纸层 WorkerW）
-        let workerw = FindWindowExW(
-            progman,
-            std::ptr::null_mut(),
-            encode_wide("WorkerW\0").as_ptr(),
-            std::ptr::null(),
-        );
+        // 3. 检测 Windows 版本，决定嵌入策略
+        let is_24h2 = is_win11_24h2_or_later();
+
+        // 4. 根据版本选择 WorkerW 查找策略
+        //    - 24H2+：WorkerW 是 Progman 的子窗口，直接 FindWindowExW(progman, "WorkerW")
+        //    - 旧版本：WorkerW 是顶层窗口，通过 EnumWindows 经典方案查找
+        let workerw = if is_24h2 {
+            let w = FindWindowExW(
+                progman,
+                std::ptr::null_mut(),
+                encode_wide("WorkerW\0").as_ptr(),
+                std::ptr::null(),
+            );
+            println!("[DesktopEmbedder] 24H2+ path: FindWindowExW(Progman, WorkerW) → {:?}", w);
+            if w == std::ptr::null_mut() {
+                // 24H2 路径失败，fallback 到经典方案
+                println!("[DesktopEmbedder] 24H2+ path failed, falling back to classic EnumWindows");
+                find_workerw().map_err(|e| format!("Both 24H2+ and classic WorkerW search failed: {}", e))?
+            } else {
+                w
+            }
+        } else {
+            println!("[DesktopEmbedder] Legacy path: using EnumWindows to find WorkerW");
+            find_workerw()?
+        };
 
         // 使用前端传入的显示器坐标和尺寸（单个显示器的物理分辨率）
         let target_x = monitor_x;
@@ -196,178 +273,161 @@ pub fn embed_in_desktop(
             target_x, target_y, target_w, target_h
         );
 
-        // ===== 3. 方案 A：子类化 WndProc 拦截 WM_NCCALCSIZE =====
-        //
-        // Windows 11 24H2 在 SetParent 后会通过 WM_NCCALCSIZE 注入隐藏的 NC 边框。
-        // 方案 B（Layered 前置）已验证无效——DWM 的 NC 注入发生在 SetParent 内部，
-        // 与窗口是否预先标记为 Layered 无关。
-        //
-        // 方案 A 的核心思路：
-        // 1. 在 SetParent 之前子类化窗口过程（替换 WndProc）
-        // 2. 新的 WndProc 拦截所有 WM_NCCALCSIZE 消息，强制返回 0
-        // 3. 这样当 SetParent 内部触发 WM_NCCALCSIZE 时，我们的 WndProc 会
-        //    告诉系统"不需要任何非客户区"，从根源阻止 NC 边框注入
-        // 4. 其他消息正常转发给原始 WndProc，不影响 Tauri/WebView 的正常功能
+        // ===== 5. 根据版本执行不同的嵌入策略 =====
+        if is_24h2 {
+            // ===== 24H2+ 路径：WndProc 子类化 + 样式清理 + NC 补偿 =====
+            //
+            // Windows 11 24H2 在 SetParent 后会通过 WM_NCCALCSIZE 注入隐藏的 NC 边框。
+            //
+            // 核心思路：
+            // 1. 在 SetParent 之前子类化窗口过程（替换 WndProc）
+            // 2. 新的 WndProc 拦截所有 WM_NCCALCSIZE 消息，强制返回 0
+            // 3. 这样当 SetParent 内部触发 WM_NCCALCSIZE 时，我们的 WndProc 会
+            //    告诉系统"不需要任何非客户区"，从根源阻止 NC 边框注入
+            // 4. 其他消息正常转发给原始 WndProc，不影响 Tauri/WebView 的正常功能
 
-        // 3a. 子类化窗口过程：保存原始 WndProc，替换为我们的 subclass_wndproc
-        let original_proc = GetWindowLongPtrW(hwnd as HWND, GWL_WNDPROC);
-        if original_proc != 0 {
-            register_subclass(hwnd as HWND, original_proc);
-            let new_proc = subclass_wndproc as isize;
-            SetWindowLongPtrW(hwnd as HWND, GWL_WNDPROC, new_proc);
-            println!(
-                "[DesktopEmbedder] WndProc subclassed: orig=0x{:X}, new=0x{:X}",
-                original_proc, new_proc
-            );
-        } else {
-            println!("[DesktopEmbedder] WARNING: GetWindowLongPtrW(GWL_WNDPROC) returned 0, skipping subclass");
-        }
+            // 5a. 子类化窗口过程：保存原始 WndProc，替换为我们的 subclass_wndproc
+            let original_proc = GetWindowLongPtrW(hwnd as HWND, GWL_WNDPROC);
+            if original_proc != 0 {
+                register_subclass(hwnd as HWND, original_proc);
+                let new_proc = subclass_wndproc as isize;
+                SetWindowLongPtrW(hwnd as HWND, GWL_WNDPROC, new_proc);
+                println!(
+                    "[DesktopEmbedder] WndProc subclassed: orig=0x{:X}, new=0x{:X}",
+                    original_proc, new_proc
+                );
+            } else {
+                println!("[DesktopEmbedder] WARNING: GetWindowLongPtrW(GWL_WNDPROC) returned 0, skipping subclass");
+            }
 
-        // 3b. 清除窗口样式中的所有边框位
-        let style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
-        let clean_style = (style
-            & !(WS_CAPTION as isize)
-            & !(WS_THICKFRAME as isize)
-            & !(WS_BORDER as isize)
-            & !(WS_DLGFRAME as isize))
-            | WS_CHILD as isize
-            | WS_VISIBLE as isize;
-        SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, clean_style);
+            // 5b. 清除窗口样式中的所有边框位
+            let style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
+            let clean_style = (style
+                & !(WS_CAPTION as isize)
+                & !(WS_THICKFRAME as isize)
+                & !(WS_BORDER as isize)
+                & !(WS_DLGFRAME as isize))
+                | WS_CHILD as isize
+                | WS_VISIBLE as isize;
+            SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, clean_style);
 
-        // 3c. 设置扩展样式：WS_EX_LAYERED + WS_EX_TRANSPARENT（鼠标穿透）
-        //     清除所有可能的边框扩展样式
-        let ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
-        let clean_ex = (ex_style
-            & !(WS_EX_CLIENTEDGE as isize)
-            & !(WS_EX_STATICEDGE as isize)
-            & !(WS_EX_WINDOWEDGE as isize)
-            & !(WS_EX_DLGMODALFRAME as isize))
-            | WS_EX_LAYERED as isize
-            | WS_EX_TRANSPARENT as isize;
-        SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, clean_ex);
+            // 5c. 设置扩展样式：WS_EX_LAYERED + WS_EX_TRANSPARENT（鼠标穿透）
+            //     清除所有可能的边框扩展样式
+            let ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
+            let clean_ex = (ex_style
+                & !(WS_EX_CLIENTEDGE as isize)
+                & !(WS_EX_STATICEDGE as isize)
+                & !(WS_EX_WINDOWEDGE as isize)
+                & !(WS_EX_DLGMODALFRAME as isize))
+                | WS_EX_LAYERED as isize
+                | WS_EX_TRANSPARENT as isize;
+            SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, clean_ex);
 
-        // 3d. 设置 Layered 窗口属性：完全不透明
-        SetLayeredWindowAttributes(hwnd as HWND, 0, 0xFF, LWA_ALPHA);
+            // 5d. 设置 Layered 窗口属性：完全不透明
+            SetLayeredWindowAttributes(hwnd as HWND, 0, 0xFF, LWA_ALPHA);
 
-        // 3e. SWP_FRAMECHANGED 强制系统重新发送 WM_NCCALCSIZE
-        //     此时我们的 subclass_wndproc 已经就位，会拦截并返回 0
-        SetWindowPos(
-            hwnd as HWND,
-            std::ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
-        );
-
-        println!("[DesktopEmbedder] Pre-SetParent: WndProc subclassed, styles cleaned, SWP_FRAMECHANGED sent");
-
-        // ===== 4. SetParent 嵌入 =====
-        //     SetParent 内部会触发 WM_NCCALCSIZE，但我们的 subclass_wndproc
-        //     会拦截它并返回 0，阻止 NC 边框注入
-        let prev_parent = SetParent(hwnd as HWND, workerw);
-        if prev_parent == std::ptr::null_mut() {
-            return Err("SetParent failed".into());
-        }
-
-        // 4a. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也被正确清零
-        SetWindowPos(
-            hwnd as HWND,
-            std::ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
-        );
-
-        // ===== 5. 定位窗口到目标显示器区域 =====
-        MoveWindow(hwnd as HWND, target_x, target_y, target_w, target_h, 1);
-
-        // ===== 6. 验证：测量实际 NC 偏移，输出日志 =====
-        let mut win_rect: RECT = zeroed();
-        GetWindowRect(hwnd as HWND, &mut win_rect);
-
-        let mut client_rect: RECT = zeroed();
-        GetClientRect(hwnd as HWND, &mut client_rect);
-
-        let mut client_origin = POINT { x: 0, y: 0 };
-        ClientToScreen(hwnd as HWND, &mut client_origin);
-
-        let nc_left = client_origin.x - win_rect.left;
-        let nc_top = client_origin.y - win_rect.top;
-        let nc_right = win_rect.right - (client_origin.x + client_rect.right);
-        let nc_bottom = win_rect.bottom - (client_origin.y + client_rect.bottom);
-
-        let client_w = client_rect.right - client_rect.left;
-        let client_h = client_rect.bottom - client_rect.top;
-
-        println!(
-            "[DesktopEmbedder] Verify: NC edges L={} T={} R={} B={}, client={}x{}, target={}x{}",
-            nc_left, nc_top, nc_right, nc_bottom, client_w, client_h, target_w, target_h
-        );
-
-        if nc_left != 0 || nc_top != 0 || nc_right != 0 || nc_bottom != 0 {
-            println!(
-                "[DesktopEmbedder] WARNING: NC offset still present! L={} T={} R={} B={}",
-                nc_left, nc_top, nc_right, nc_bottom
-            );
-            // 回退到 NC 补偿
-            let comp_x = target_x - nc_left;
-            let comp_y = target_y - nc_top;
-            let comp_w = target_w + nc_left + nc_right;
-            let comp_h = target_h + nc_top + nc_bottom;
-            MoveWindow(hwnd as HWND, comp_x, comp_y, comp_w, comp_h, 1);
-            println!(
-                "[DesktopEmbedder] Fallback: NC compensation → pos=({}, {}), size={}x{}",
-                comp_x, comp_y, comp_w, comp_h
-            );
-        } else {
-            println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
-        }
-
-        // ===== 7. Overscan 消除 DWM 圆角 =====
-        //
-        // Windows 11 DWM 在合成层面强制对窗口施加 1px 圆角裁剪，
-        // 没有任何单窗口级别的 API 可以禁用它：
-        //   - DWMWA_WINDOW_CORNER_PREFERENCE 对子窗口无效
-        //   - SetWindowRgn 被 DWM 合成管线忽略
-        //
-        // 解决方案：将窗口四边各扩展 DWM_CORNER_RADIUS 像素（overscan），
-        // 让 DWM 的圆角裁剪区域溢出到屏幕/父窗口的不可见区域，
-        // 从而在可见区域内呈现完美的直角。
-        {
-            const DWM_CORNER_RADIUS: i32 = 1;
-
-            // 获取当前窗口位置（可能已经过 NC 补偿调整）
-            let mut current_rect: RECT = zeroed();
-            GetWindowRect(hwnd as HWND, &mut current_rect);
-            let cur_x = current_rect.left;
-            let cur_y = current_rect.top;
-            let cur_w = current_rect.right - current_rect.left;
-            let cur_h = current_rect.bottom - current_rect.top;
-
-            // 四边各扩展 DWM_CORNER_RADIUS
-            let overscan_x = cur_x - DWM_CORNER_RADIUS;
-            let overscan_y = cur_y - DWM_CORNER_RADIUS;
-            let overscan_w = cur_w + DWM_CORNER_RADIUS * 2;
-            let overscan_h = cur_h + DWM_CORNER_RADIUS * 2;
-
-            MoveWindow(
+            // 5e. SWP_FRAMECHANGED 强制系统重新发送 WM_NCCALCSIZE
+            //     此时我们的 subclass_wndproc 已经就位，会拦截并返回 0
+            SetWindowPos(
                 hwnd as HWND,
-                overscan_x,
-                overscan_y,
-                overscan_w,
-                overscan_h,
-                1,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
             );
+
+            println!("[DesktopEmbedder] 24H2+: WndProc subclassed, styles cleaned, SWP_FRAMECHANGED sent");
+
+            // 5f. SetParent 嵌入
+            let prev_parent = SetParent(hwnd as HWND, workerw);
+            if prev_parent == std::ptr::null_mut() {
+                return Err("SetParent failed".into());
+            }
+
+            // 5g. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也被正确清零
+            SetWindowPos(
+                hwnd as HWND,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
+
+            // 5h. 定位窗口到目标显示器区域
+            MoveWindow(hwnd as HWND, target_x, target_y, target_w, target_h, 1);
+
+            // 5i. 验证：测量实际 NC 偏移，输出日志
+            let mut win_rect: RECT = zeroed();
+            GetWindowRect(hwnd as HWND, &mut win_rect);
+
+            let mut client_rect: RECT = zeroed();
+            GetClientRect(hwnd as HWND, &mut client_rect);
+
+            let mut client_origin = POINT { x: 0, y: 0 };
+            ClientToScreen(hwnd as HWND, &mut client_origin);
+
+            let nc_left = client_origin.x - win_rect.left;
+            let nc_top = client_origin.y - win_rect.top;
+            let nc_right = win_rect.right - (client_origin.x + client_rect.right);
+            let nc_bottom = win_rect.bottom - (client_origin.y + client_rect.bottom);
+
+            let client_w = client_rect.right - client_rect.left;
+            let client_h = client_rect.bottom - client_rect.top;
+
             println!(
-                "[DesktopEmbedder] Overscan: expanded by {}px each side → pos=({}, {}), size={}x{} (was ({}, {}) {}x{})",
-                DWM_CORNER_RADIUS, overscan_x, overscan_y, overscan_w, overscan_h,
-                cur_x, cur_y, cur_w, cur_h
+                "[DesktopEmbedder] 24H2+ Verify: NC edges L={} T={} R={} B={}, client={}x{}, target={}x{}",
+                nc_left, nc_top, nc_right, nc_bottom, client_w, client_h, target_w, target_h
             );
+
+            if nc_left != 0 || nc_top != 0 || nc_right != 0 || nc_bottom != 0 {
+                println!(
+                    "[DesktopEmbedder] WARNING: NC offset still present! L={} T={} R={} B={}",
+                    nc_left, nc_top, nc_right, nc_bottom
+                );
+                // 回退到 NC 补偿
+                let comp_x = target_x - nc_left;
+                let comp_y = target_y - nc_top;
+                let comp_w = target_w + nc_left + nc_right;
+                let comp_h = target_h + nc_top + nc_bottom;
+                MoveWindow(hwnd as HWND, comp_x, comp_y, comp_w, comp_h, 1);
+                println!(
+                    "[DesktopEmbedder] Fallback: NC compensation → pos=({}, {}), size={}x{}",
+                    comp_x, comp_y, comp_w, comp_h
+                );
+            } else {
+                println!("[DesktopEmbedder] 24H2+ Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
+            }
+        } else {
+            // ===== 旧版本路径：经典嵌入，无需 NC 修复 =====
+            //
+            // 24H2 之前的 Windows 版本不会在 SetParent 后注入 NC 边框，
+            // 也不存在 DWM 强制圆角裁剪问题（Win10）或圆角可正常禁用（Win11 早期）。
+            // 只需基础的 SetParent + MoveWindow 即可。
+
+            // 设置鼠标穿透（WS_EX_TRANSPARENT）
+            let ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
+            SetWindowLongPtrW(
+                hwnd as HWND,
+                GWL_EXSTYLE,
+                ex_style | WS_EX_TRANSPARENT as isize,
+            );
+
+            let prev_parent = SetParent(hwnd as HWND, workerw);
+            if prev_parent == std::ptr::null_mut() {
+                return Err("SetParent failed".into());
+            }
+
+            MoveWindow(hwnd as HWND, target_x, target_y, target_w, target_h, 1);
+            println!("[DesktopEmbedder] Legacy path: simple SetParent + MoveWindow completed");
         }
+
+        // 注意：DWM 圆角裁剪（~1px）已确认无法通过任何窗口级 API 消除，
+        // Overscan 方案虽能消除圆角但会导致多屏交接处溢出更明显（色差壁纸下尤为突出）。
+        // 权衡后选择接受 1px 圆角溢出——面积更小、更可控。
 
         println!(
             "[DesktopEmbedder] Embedded HWND {:?} into WorkerW {:?} (pos=({},{}), size={}x{})",

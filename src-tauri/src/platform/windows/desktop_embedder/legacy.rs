@@ -9,8 +9,8 @@ use log::info;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::SetParent;
 
+use super::strategy::{EmbedStrategy, MonitorRect};
 use super::workerw::find_workerw_classic;
-use super::{EmbedStrategy, MonitorRect};
 
 /// 旧版本嵌入策略
 pub(super) struct LegacyStrategy;

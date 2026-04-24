@@ -354,38 +354,42 @@ MoveWindow(hwnd, comp_x, comp_y, comp_w, comp_h, 1);
 ```
 desktop_embedder/
 │
-├── mod.rs       — 公共 API + EmbedStrategy trait + 共享类型 + 策略选择
-│   ├── EmbedStrategy trait      — 嵌入策略接口（name / find_workerw / embed）
-│   ├── MonitorRect              — 显示器矩形区域值对象
-│   ├── NcOffset                 — NC 偏移测量结果
-│   ├── measure_nc_offset()      — 测量窗口 NC 偏移
-│   ├── encode_wide()            — UTF-8 → UTF-16 编码
-│   ├── select_strategy()        — 策略选择工厂函数
+├── mod.rs        — 公共 API 入口
+│   ├── encode_wide()            — UTF-8 → UTF-16 编码辅助
 │   ├── embed_in_desktop()       — 嵌入桌面（公共 API）
 │   └── unembed_from_desktop()   — 解除嵌入（公共 API）
 │
-├── modern.rs    — ModernStrategy（24H2+ 嵌入策略）
-│   └── ModernStrategy           — WndProc 子类化 + 样式清理 + NC 补偿
+├── strategy.rs   — 策略接口 + 共享类型 + 策略选择工厂
+│   ├── EmbedStrategy trait      — 嵌入策略接口（name / find_workerw / embed）
+│   ├── MonitorRect              — 显示器矩形区域值对象
+│   └── select_strategy()        — 策略选择工厂函数
 │
-├── legacy.rs    — LegacyStrategy（旧版本嵌入策略）
+├── modern.rs     — ModernStrategy（24H2+ 嵌入策略）
+│   ├── ModernStrategy           — WndProc 子类化 + 样式清理 + NC 补偿
+│   ├── NcOffset                 — NC 偏移测量结果（仅 Modern 使用）
+│   └── measure_nc_offset()      — 测量窗口 NC 偏移（仅 Modern 使用）
+│
+├── legacy.rs     — LegacyStrategy（旧版本嵌入策略）
 │   └── LegacyStrategy           — 经典 SetParent + WS_EX_TRANSPARENT + MoveWindow
 │
-├── wndproc.rs   — WndProc 子类化基础设施（仅 ModernStrategy 使用）
+├── wndproc.rs    — WndProc 子类化基础设施（仅 ModernStrategy 使用）
 │   ├── ORIGINAL_WNDPROCS[8]     — 原始 WndProc 全局槽位（支持最多 8 显示器）
 │   ├── SUBCLASSED_HWNDS[8]      — 对应 HWND 全局槽位
 │   ├── register_subclass()      — 注册子类化信息到空闲槽位
 │   └── subclass_wndproc()       — 替换的窗口过程（拦截 WM_NCCALCSIZE 返回 0）
 │
-├── version.rs   — Windows 版本检测
+├── version.rs    — Windows 版本检测
 │   └── is_win11_24h2_or_later() — RtlGetVersion 检测 Build >= 26100
 │
-└── workerw.rs   — 经典 WorkerW 查找
+└── workerw.rs    — 经典 WorkerW 查找
     └── find_workerw_classic()   — EnumWindows + SHELLDLL_DefView 方案
 ```
 
 **设计原则**：
-- 每个文件只包含一个职责，代码量控制在 50~130 行
+- 每个文件只包含一个职责，代码量控制在 45~170 行
 - `mod.rs` 作为对外门面，仅暴露 `embed_in_desktop()` 和 `unembed_from_desktop()`
+- `strategy.rs` 定义策略接口和共享类型，与具体实现解耦
+- `NcOffset` / `measure_nc_offset` 仅 `modern.rs` 使用，作为文件私有类型不对外暴露
 - 内部模块间通过 `pub(super)` 可见性控制，外部无法直接访问策略实现
 - 非 Windows 平台的空实现已移除（整个模块位于 `platform/windows/` 下，由调用方 `#[cfg]` 控制）
 
@@ -468,9 +472,12 @@ ec9c6eb  fix: 精细化 overscan（仅顶部+左右）
 **动机**：单文件 588 行，混合了策略 trait、两种策略实现、WndProc 子类化、版本检测、WorkerW 查找等不同职责，阅读和维护困难。
 
 **改进**：
-- 拆分为 `desktop_embedder/` 目录模块，6 个文件各司其职
-- 每个文件 50~130 行，职责单一、易于阅读
-- `mod.rs` 作为对外门面，内部模块通过 `pub(super)` 可见性控制
+- 拆分为 `desktop_embedder/` 目录模块，7 个文件各司其职
+- 每个文件 45~170 行，职责单一、易于阅读
+- `mod.rs` 精简为纯粹的公共 API 入口，不包含任何策略/类型定义
+- 新增 `strategy.rs` 存放 `EmbedStrategy` trait、`MonitorRect`、`select_strategy()` 工厂函数
+- `NcOffset` / `measure_nc_offset()` 下沉到 `modern.rs` 作为文件私有类型（仅 ModernStrategy 使用）
+- 内部模块通过 `pub(super)` 可见性控制
 - 删除非 Windows 平台的冗余空实现（整个模块已在 `platform/windows/` 下）
 
 ---

@@ -9,15 +9,17 @@
 //! 4. SetParent(tauri_hwnd, workerw) 将壁纸窗口嵌入桌面层级
 //!
 //! 模块结构：
-//! - `mod.rs`     — 公共 API、策略 trait、共享类型、策略选择
-//! - `modern.rs`  — 24H2+ 嵌入策略实现
-//! - `legacy.rs`  — 旧版本嵌入策略实现
-//! - `wndproc.rs` — WndProc 子类化基础设施
-//! - `version.rs` — Windows 版本检测
-//! - `workerw.rs` — 经典 WorkerW 查找（EnumWindows 方案）
+//! - `mod.rs`      — 公共 API 入口（embed_in_desktop / unembed_from_desktop）
+//! - `strategy.rs` — EmbedStrategy trait + MonitorRect + 策略选择工厂
+//! - `modern.rs`   — 24H2+ 嵌入策略实现
+//! - `legacy.rs`   — 旧版本嵌入策略实现
+//! - `wndproc.rs`  — WndProc 子类化基础设施
+//! - `version.rs`  — Windows 版本检测
+//! - `workerw.rs`  — 经典 WorkerW 查找（EnumWindows 方案）
 
 mod legacy;
 mod modern;
+mod strategy;
 mod version;
 mod wndproc;
 mod workerw;
@@ -29,95 +31,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowW, SendMessageTimeoutW, SetParent, SMTO_NORMAL,
 };
 
-use self::legacy::LegacyStrategy;
-use self::modern::ModernStrategy;
-use self::version::is_win11_24h2_or_later;
-
-// ============================================================
-// 嵌入策略 trait + 共享类型
-// ============================================================
-
-/// 桌面嵌入策略接口
-///
-/// 不同 Windows 版本的嵌入行为差异通过策略模式封装，
-/// 调用方无需关心版本细节。
-pub(crate) trait EmbedStrategy {
-    /// 策略名称（用于日志）
-    fn name(&self) -> &'static str;
-
-    /// 查找目标 WorkerW 窗口
-    fn find_workerw(&self, progman: HWND) -> Result<HWND>;
-
-    /// 执行嵌入操作（SetParent + 平台特定的样式修复）
-    fn embed(&self, hwnd: HWND, workerw: HWND, rect: MonitorRect) -> Result<()>;
-}
-
-/// 显示器矩形区域（虚拟桌面坐标 + 物理分辨率）
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct MonitorRect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-}
-
-/// NC 偏移测量结果
-pub(crate) struct NcOffset {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-    pub client_w: i32,
-    pub client_h: i32,
-}
-
-impl NcOffset {
-    pub fn has_offset(&self) -> bool {
-        self.left != 0 || self.top != 0 || self.right != 0 || self.bottom != 0
-    }
-}
-
-/// 测量窗口的 NC（非客户区）偏移
-pub(crate) unsafe fn measure_nc_offset(hwnd: HWND) -> NcOffset {
-    use windows_sys::Win32::Foundation::{POINT, RECT};
-    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
-
-    let mut win_rect: RECT = std::mem::zeroed();
-    GetWindowRect(hwnd, &mut win_rect);
-
-    let mut client_rect: RECT = std::mem::zeroed();
-    GetClientRect(hwnd, &mut client_rect);
-
-    let mut client_origin = POINT { x: 0, y: 0 };
-    ClientToScreen(hwnd, &mut client_origin);
-
-    NcOffset {
-        left: client_origin.x - win_rect.left,
-        top: client_origin.y - win_rect.top,
-        right: win_rect.right - (client_origin.x + client_rect.right),
-        bottom: win_rect.bottom - (client_origin.y + client_rect.bottom),
-        client_w: client_rect.right - client_rect.left,
-        client_h: client_rect.bottom - client_rect.top,
-    }
-}
+use self::strategy::{select_strategy, MonitorRect};
 
 /// 辅助函数：将 &str 编码为以 null 结尾的 UTF-16 Vec
 pub(crate) fn encode_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
-}
-
-// ============================================================
-// 策略选择 + 公共 API
-// ============================================================
-
-/// 根据 Windows 版本选择嵌入策略
-fn select_strategy() -> Box<dyn EmbedStrategy> {
-    if is_win11_24h2_or_later() {
-        Box::new(ModernStrategy)
-    } else {
-        Box::new(LegacyStrategy)
-    }
 }
 
 /// 在 Windows 上查找 WorkerW 窗口并将指定 HWND 嵌入桌面层级

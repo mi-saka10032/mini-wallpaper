@@ -15,9 +15,59 @@ use log::{debug, info, warn};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, SetParent};
 
+use super::encode_wide;
+use super::strategy::{EmbedStrategy, MonitorRect};
 use super::workerw::find_workerw_classic;
 use super::wndproc::{register_subclass, subclass_wndproc};
-use super::{encode_wide, measure_nc_offset, EmbedStrategy, MonitorRect};
+
+// ============================================================
+// NC 偏移测量（仅 ModernStrategy 使用）
+// ============================================================
+
+/// NC 偏移测量结果
+struct NcOffset {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    client_w: i32,
+    client_h: i32,
+}
+
+impl NcOffset {
+    fn has_offset(&self) -> bool {
+        self.left != 0 || self.top != 0 || self.right != 0 || self.bottom != 0
+    }
+}
+
+/// 测量窗口的 NC（非客户区）偏移
+unsafe fn measure_nc_offset(hwnd: HWND) -> NcOffset {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
+
+    let mut win_rect: RECT = std::mem::zeroed();
+    GetWindowRect(hwnd, &mut win_rect);
+
+    let mut client_rect: RECT = std::mem::zeroed();
+    GetClientRect(hwnd, &mut client_rect);
+
+    let mut client_origin = POINT { x: 0, y: 0 };
+    ClientToScreen(hwnd, &mut client_origin);
+
+    NcOffset {
+        left: client_origin.x - win_rect.left,
+        top: client_origin.y - win_rect.top,
+        right: win_rect.right - (client_origin.x + client_rect.right),
+        bottom: win_rect.bottom - (client_origin.y + client_rect.bottom),
+        client_w: client_rect.right - client_rect.left,
+        client_h: client_rect.bottom - client_rect.top,
+    }
+}
+
+// ============================================================
+// ModernStrategy 实现
+// ============================================================
 
 /// 24H2+ 嵌入策略
 pub(super) struct ModernStrategy;

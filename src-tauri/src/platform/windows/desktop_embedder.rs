@@ -550,43 +550,11 @@ pub fn embed_in_desktop(
             hwnd, embed_target as isize, prev_parent as isize
         );
 
-        // ===== 8.5 SetParent 后重新设置 WS_CHILD 样式，彻底消除 NC 区域 =====
-        //
-        // 关键原理：
-        // - 步骤6中移除 WS_CHILD 是为了让 DWM 透明 hack 生效（DWM 要求顶级窗口）
-        // - SetParent 后窗口已经是子窗口，此时显式设置 WS_CHILD 样式
-        //   可以让 Windows 完全按子窗口处理，不再有任何 NC（非客户区）边框
-        // - 这彻底解决了多屏幕场景下 NC offset 导致的 8px 缝隙问题
-        {
-            let mut child_style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
-            child_style |= WS_CHILD as isize;
-            // 再次确保没有任何边框样式
-            child_style &= !(WS_CAPTION as isize);
-            child_style &= !(WS_BORDER as isize);
-            child_style &= !(WS_THICKFRAME as isize);
-            child_style &= !(WS_SYSMENU as isize);
-            child_style &= !(WS_POPUP as isize);
-            child_style &= !(WS_OVERLAPPED as isize);
-            SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, child_style);
-
-            // 通知系统重新计算帧（使 WS_CHILD 生效，消除 NC 区域）
-            SetWindowPos(
-                hwnd as HWND,
-                std::ptr::null_mut(),
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME | 0x0004, // SWP_FRAMECHANGED | SWP_NOZORDER
-            );
-            println!(
-                "[DesktopEmbedder] Post-SetParent: WS_CHILD applied, style=0x{:X}",
-                child_style
-            );
-        }
-
         // ===== 9. Z-order 管理（参照博主代码） =====
         // 壁纸 → HWND_TOP
         SetWindowPos(
             hwnd as HWND, HWND_TOP, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME,
         );
         // DefView → HWND_TOP（覆盖在壁纸之上，确保图标可见）
         SetWindowPos(
@@ -596,32 +564,31 @@ pub fn embed_in_desktop(
         // WorkerW → HWND_BOTTOM（系统壁纸沉底）
         SetWindowPos(
             effective_worker, HWND_BOTTOM, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME,
         );
         println!("[DesktopEmbedder] Z-order set: DefView > EmbedWnd > WorkerW");
 
-        // ===== 10. 定位窗口到目标显示器 =====
+        // ===== 10. 定位窗口到目标显示器（含 NC offset 补偿） =====
         //
-        // WS_CHILD 子窗口没有 NC 区域，窗口矩形 = 客户区矩形
-        // 因此直接 MoveWindow 到显示器坐标即可，无需任何 NC offset 补偿
+        // 即使移除了 WS_CAPTION/WS_THICKFRAME 并禁用了 DWM NC 渲染，
+        // Windows 仍可能保留残余的非客户区边框。
+        // 策略：先 MoveWindow 到目标尺寸，然后用 GetWindowRect + ClientToScreen
+        // 检测实际 NC 边距，如果存在偏移则扩大窗口并用负偏移补偿。
         {
+            use windows_sys::Win32::Foundation::{POINT, RECT};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                ClientToScreen, GetClientRect, GetWindowRect,
+            };
+
+            // 先按目标尺寸定位
             MoveWindow(
                 hwnd as HWND,
                 monitor_x, monitor_y,
                 monitor_width, monitor_height,
                 1,
             );
-            println!(
-                "[DesktopEmbedder] MoveWindow: pos=({},{}), size={}x{} (WS_CHILD, no NC compensation needed)",
-                monitor_x, monitor_y, monitor_width, monitor_height
-            );
 
-            // 验证：确认客户区与显示器完全匹配
-            use windows_sys::Win32::Foundation::{POINT, RECT};
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                ClientToScreen, GetClientRect, GetWindowRect,
-            };
-
+            // 检测 NC 偏移：比较窗口矩形和客户区矩形
             let mut window_rect: RECT = std::mem::zeroed();
             let mut client_rect: RECT = std::mem::zeroed();
             GetWindowRect(hwnd as HWND, &mut window_rect);
@@ -632,16 +599,10 @@ pub fn embed_in_desktop(
             let client_w = client_rect.right - client_rect.left;
             let client_h = client_rect.bottom - client_rect.top;
 
-            let nc_w_diff = window_w - client_w;
-            let nc_h_diff = window_h - client_h;
-
-            if nc_w_diff == 0 && nc_h_diff == 0 {
-                println!(
-                    "[DesktopEmbedder] Verified: window=client={}x{}, NC offset eliminated!",
-                    client_w, client_h
-                );
-            } else {
-                // WS_CHILD 后仍有 NC offset（不应该发生），打印警告并做兜底补偿
+            if client_w != monitor_width || client_h != monitor_height {
+                // 存在 NC 偏移，需要补偿
+                // 用 ClientToScreen 将客户区原点 (0,0) 转换为屏幕坐标，
+                // 与窗口矩形对比即可得到各边的 NC 边距
                 let mut client_origin = POINT { x: 0, y: 0 };
                 ClientToScreen(hwnd as HWND, &mut client_origin);
 
@@ -651,24 +612,26 @@ pub fn embed_in_desktop(
                 let nc_bottom = window_h - client_h - nc_top;
 
                 println!(
-                    "[DesktopEmbedder] WARNING: NC offset still present after WS_CHILD! L={} T={} R={} B={}, applying fallback compensation",
+                    "[DesktopEmbedder] NC offset detected: L={} T={} R={} B={}, compensating...",
                     nc_left, nc_top, nc_right, nc_bottom
                 );
 
-                let compensated_x = monitor_x - nc_left;
-                let compensated_y = monitor_y - nc_top;
-                let compensated_w = monitor_width + nc_left + nc_right;
-                let compensated_h = monitor_height + nc_top + nc_bottom;
+                // 扩大窗口以补偿 NC 边距，使客户区精确覆盖显示器
+                let comp_x = monitor_x - nc_left;
+                let comp_y = monitor_y - nc_top;
+                let comp_w = monitor_width + nc_left + nc_right;
+                let comp_h = monitor_height + nc_top + nc_bottom;
 
-                MoveWindow(
-                    hwnd as HWND,
-                    compensated_x, compensated_y,
-                    compensated_w, compensated_h,
-                    1,
-                );
+                MoveWindow(hwnd as HWND, comp_x, comp_y, comp_w, comp_h, 1);
+
                 println!(
-                    "[DesktopEmbedder] Fallback compensation applied: window=({},{}) {}x{}",
-                    compensated_x, compensated_y, compensated_w, compensated_h
+                    "[DesktopEmbedder] Compensated → pos=({}, {}), size={}x{}",
+                    comp_x, comp_y, comp_w, comp_h
+                );
+            } else {
+                println!(
+                    "[DesktopEmbedder] No NC offset, MoveWindow: pos=({},{}), size={}x{}",
+                    monitor_x, monitor_y, monitor_width, monitor_height
                 );
             }
         }

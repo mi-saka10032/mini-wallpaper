@@ -255,32 +255,6 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
 
         println!("[DesktopEmbedder] Pre-SetParent: WndProc subclassed, styles cleaned, SWP_FRAMECHANGED sent");
 
-        // ===== 3f. 在 SetParent 之前禁用 DWM 圆角 =====
-        //     DWMWA_WINDOW_CORNER_PREFERENCE 只对顶层窗口生效，
-        //     SetParent 后窗口变为子窗口就无法再设置了。
-        //     所以必须在 SetParent 之前调用，让 DWM 记住该属性。
-        {
-            use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-
-            // DWMWA_WINDOW_CORNER_PREFERENCE = 33 (Win11 22H2+)
-            // DWMWCP_DONOTROUND = 1
-            // 强制窗口使用直角，不绘制圆角
-            const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-            const DWMWCP_DONOTROUND: u32 = 1;
-            let corner_pref: u32 = DWMWCP_DONOTROUND;
-            let hr = DwmSetWindowAttribute(
-                hwnd as HWND,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                &corner_pref as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            );
-            if hr == 0 {
-                println!("[DesktopEmbedder] DWM: Window corner preference set to DONOTROUND (pre-SetParent)");
-            } else {
-                println!("[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE failed (hr=0x{:X}), corners may remain rounded", hr);
-            }
-        }
-
         // ===== 4. SetParent 嵌入 =====
         //     SetParent 内部会触发 WM_NCCALCSIZE，但我们的 subclass_wndproc
         //     会拦截它并返回 0，阻止 NC 边框注入
@@ -343,6 +317,40 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             );
         } else {
             println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
+        }
+
+        // ===== 7. 强制矩形窗口区域，消除 DWM 圆角裁剪 =====
+        //     Windows 11 DWM 会对窗口施加圆角裁剪（即使是子窗口），
+        //     SetWindowRgn 在 GDI 层面强制定义窗口的可见区域为精确矩形，
+        //     优先级高于 DWM 的圆角渲染，从而消除左上角/右上角的 radius 缺口。
+        {
+            use windows_sys::Win32::Graphics::Gdi::CreateRectRgn;
+            use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowRgn;
+
+            // 获取当前窗口的实际尺寸（可能经过 NC 补偿调整）
+            let mut final_rect: RECT = zeroed();
+            GetWindowRect(hwnd as HWND, &mut final_rect);
+            let rgn_w = final_rect.right - final_rect.left;
+            let rgn_h = final_rect.bottom - final_rect.top;
+
+            // 创建精确覆盖整个窗口的矩形区域（坐标相对于窗口自身，从 0,0 开始）
+            let hrgn = CreateRectRgn(0, 0, rgn_w, rgn_h);
+            if hrgn != std::ptr::null_mut() {
+                let result = SetWindowRgn(hwnd as HWND, hrgn, 1); // bRedraw = TRUE
+                if result != 0 {
+                    println!(
+                        "[DesktopEmbedder] SetWindowRgn: forced rectangular region {}x{} (DWM corner override)",
+                        rgn_w, rgn_h
+                    );
+                } else {
+                    println!("[DesktopEmbedder] WARNING: SetWindowRgn failed");
+                    // 如果 SetWindowRgn 失败，需要手动删除区域
+                    windows_sys::Win32::Graphics::Gdi::DeleteObject(hrgn as _);
+                }
+                // 注意：SetWindowRgn 成功后，系统接管 hrgn 的生命周期，不需要手动 DeleteObject
+            } else {
+                println!("[DesktopEmbedder] WARNING: CreateRectRgn failed");
+            }
         }
 
         println!(

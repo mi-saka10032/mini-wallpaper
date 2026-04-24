@@ -33,19 +33,27 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 /// 使用简单的静态数组支持最多 8 个显示器
 #[cfg(target_os = "windows")]
 static ORIGINAL_WNDPROCS: [AtomicIsize; 8] = [
-    AtomicIsize::new(0), AtomicIsize::new(0),
-    AtomicIsize::new(0), AtomicIsize::new(0),
-    AtomicIsize::new(0), AtomicIsize::new(0),
-    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
 ];
 
 /// 保存对应的 HWND，用于在 WndProc 中查找正确的原始 WndProc
 #[cfg(target_os = "windows")]
 static SUBCLASSED_HWNDS: [AtomicIsize; 8] = [
-    AtomicIsize::new(0), AtomicIsize::new(0),
-    AtomicIsize::new(0), AtomicIsize::new(0),
-    AtomicIsize::new(0), AtomicIsize::new(0),
-    AtomicIsize::new(0), AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
+    AtomicIsize::new(0),
 ];
 
 /// 查找 HWND 对应的原始 WndProc
@@ -73,12 +81,17 @@ fn register_subclass(hwnd: HWND, original_proc: isize) {
         if existing == 0 || existing == hwnd_val {
             SUBCLASSED_HWNDS[i].store(hwnd_val, Ordering::SeqCst);
             ORIGINAL_WNDPROCS[i].store(original_proc, Ordering::SeqCst);
-            println!("[DesktopEmbedder] Subclass registered: slot={}, hwnd=0x{:X}, orig_proc=0x{:X}",
-                i, hwnd_val, original_proc);
+            println!(
+                "[DesktopEmbedder] Subclass registered: slot={}, hwnd=0x{:X}, orig_proc=0x{:X}",
+                i, hwnd_val, original_proc
+            );
             return;
         }
     }
-    println!("[DesktopEmbedder] WARNING: No free subclass slot for hwnd=0x{:X}", hwnd_val);
+    println!(
+        "[DesktopEmbedder] WARNING: No free subclass slot for hwnd=0x{:X}",
+        hwnd_val
+    );
 }
 
 /// 子类化的窗口过程
@@ -92,9 +105,7 @@ unsafe extern "system" fn subclass_wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_NCCALCSIZE,
-    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CallWindowProcW, WM_NCCALCSIZE};
 
     if msg == WM_NCCALCSIZE {
         // 当 wParam == TRUE (1) 时，lparam 指向 NCCALCSIZE_PARAMS 结构体
@@ -112,13 +123,7 @@ unsafe extern "system" fn subclass_wndproc(
         // 将保存的 isize 还原为函数指针，再包装为 WNDPROC (= Option<fn(...)>)
         type WndProcFn = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
         let fn_ptr: WndProcFn = std::mem::transmute(original_proc as usize);
-        CallWindowProcW(
-            Some(fn_ptr),
-            hwnd,
-            msg,
-            wparam,
-            lparam,
-        )
+        CallWindowProcW(Some(fn_ptr), hwnd, msg, wparam, lparam)
     } else {
         // 找不到原始 WndProc，使用 DefWindowProcW 兜底
         windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -132,21 +137,24 @@ unsafe extern "system" fn subclass_wndproc(
 /// - `monitor_x`, `monitor_y`: 该显示器在虚拟桌面中的左上角坐标
 /// - `monitor_width`, `monitor_height`: 该显示器的物理分辨率
 #[cfg(target_os = "windows")]
-pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_width: i32, monitor_height: i32) -> Result<(), String> {
+pub fn embed_in_desktop(
+    hwnd: isize,
+    monitor_x: i32,
+    monitor_y: i32,
+    monitor_width: i32,
+    monitor_height: i32,
+) -> Result<(), String> {
     use std::mem::zeroed;
 
     use windows_sys::Win32::{
-        Graphics::Gdi::{
-            ClientToScreen,
-        },
+        Graphics::Gdi::ClientToScreen,
         UI::WindowsAndMessaging::{
-            CallWindowProcW, GetClientRect, GetWindowLongPtrW, GetWindowRect,
-            MoveWindow, SetWindowLongPtrW, SetWindowPos, SetLayeredWindowAttributes,
-            GWL_EXSTYLE, GWL_STYLE, GWL_WNDPROC, LWA_ALPHA,
-            SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_CHILD,
-            WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
-            WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_THICKFRAME, WS_VISIBLE,
+            CallWindowProcW, GetClientRect, GetWindowLongPtrW, GetWindowRect, MoveWindow,
+            SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
+            GWL_WNDPROC, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME, WS_EX_CLIENTEDGE,
+            WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_STATICEDGE, WS_EX_TRANSPARENT,
+            WS_EX_WINDOWEDGE, WS_THICKFRAME, WS_VISIBLE,
         },
     };
 
@@ -321,7 +329,7 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
 
         // ===== 7. Overscan 消除 DWM 圆角 =====
         //
-        // Windows 11 DWM 在合成层面强制对窗口施加 8px 圆角裁剪，
+        // Windows 11 DWM 在合成层面强制对窗口施加 1px 圆角裁剪，
         // 没有任何单窗口级别的 API 可以禁用它：
         //   - DWMWA_WINDOW_CORNER_PREFERENCE 对子窗口无效
         //   - SetWindowRgn 被 DWM 合成管线忽略
@@ -330,7 +338,7 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
         // 让 DWM 的圆角裁剪区域溢出到屏幕/父窗口的不可见区域，
         // 从而在可见区域内呈现完美的直角。
         {
-            const DWM_CORNER_RADIUS: i32 = 8;
+            const DWM_CORNER_RADIUS: i32 = 1;
 
             // 获取当前窗口位置（可能已经过 NC 补偿调整）
             let mut current_rect: RECT = zeroed();
@@ -346,7 +354,14 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             let overscan_w = cur_w + DWM_CORNER_RADIUS * 2;
             let overscan_h = cur_h + DWM_CORNER_RADIUS * 2;
 
-            MoveWindow(hwnd as HWND, overscan_x, overscan_y, overscan_w, overscan_h, 1);
+            MoveWindow(
+                hwnd as HWND,
+                overscan_x,
+                overscan_y,
+                overscan_w,
+                overscan_h,
+                1,
+            );
             println!(
                 "[DesktopEmbedder] Overscan: expanded by {}px each side → pos=({}, {}), size={}x{} (was ({}, {}) {}x{})",
                 DWM_CORNER_RADIUS, overscan_x, overscan_y, overscan_w, overscan_h,
@@ -386,7 +401,7 @@ unsafe fn find_workerw() -> Result<HWND, String> {
             // 由于 FindWindowExW 只能往后找，重新枚举所有 WorkerW 找到 hwnd 的前一个
             let mut prev_workerw = std::ptr::null_mut();
             let mut current = std::ptr::null_mut();
-            
+
             loop {
                 current = FindWindowExW(
                     std::ptr::null_mut(),
@@ -439,7 +454,13 @@ fn encode_wide(s: &str) -> Vec<u16> {
 // ===== 非 Windows 平台的空实现 =====
 
 #[cfg(not(target_os = "windows"))]
-pub fn embed_in_desktop(_hwnd: isize, _monitor_x: i32, _monitor_y: i32, _monitor_width: i32, _monitor_height: i32) -> Result<(), String> {
+pub fn embed_in_desktop(
+    _hwnd: isize,
+    _monitor_x: i32,
+    _monitor_y: i32,
+    _monitor_width: i32,
+    _monitor_height: i32,
+) -> Result<(), String> {
     println!("[DesktopEmbedder] embed_in_desktop is a no-op on this platform");
     Ok(())
 }

@@ -16,8 +16,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use std::mem::size_of;
-
 /// 在 Windows 上查找 WorkerW 窗口并将指定 HWND 嵌入桌面层级
 #[cfg(target_os = "windows")]
 pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
@@ -25,12 +23,11 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
 
     use windows_sys::Win32::{
         Graphics::Gdi::{
-            ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO,
-            MONITOR_DEFAULTTOPRIMARY, ScreenToClient,
+            ClientToScreen,
         },
         UI::WindowsAndMessaging::{
             GetClientRect, GetWindowLongPtrW, GetWindowRect, MoveWindow, SetWindowLongPtrW,
-            SetWindowPos, GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+            SetWindowPos, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_CHILD,
             WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
             WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_THICKFRAME, WS_VISIBLE,
@@ -67,17 +64,19 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
         // 3. 枚举所有顶层窗口，找到目标 WorkerW
         // let workerw = find_workerw()?;
 
-        // 记录 SetParent 之前的窗口位置和尺寸
-        let mut rect_before: RECT = zeroed();
-        GetWindowRect(hwnd as HWND, &mut rect_before);
-        let orig_x = rect_before.left;
-        let orig_y = rect_before.top;
-        let orig_w = rect_before.right - rect_before.left;
-        let orig_h = rect_before.bottom - rect_before.top;
+        // 获取 WorkerW 的客户区矩形 —— 这就是显示器的实际可用区域
+        let mut workerw_client: RECT = zeroed();
+        GetClientRect(workerw, &mut workerw_client);
+        // 获取 WorkerW 客户区原点在屏幕上的坐标
+        let mut workerw_origin = POINT { x: 0, y: 0 };
+        ClientToScreen(workerw, &mut workerw_origin);
+
+        let target_w = workerw_client.right - workerw_client.left;
+        let target_h = workerw_client.bottom - workerw_client.top;
 
         println!(
-            "[DesktopEmbedder] Before SetParent: pos=({}, {}), size={}x{}",
-            orig_x, orig_y, orig_w, orig_h
+            "[DesktopEmbedder] WorkerW client: {}x{}, origin on screen: ({}, {})",
+            target_w, target_h, workerw_origin.x, workerw_origin.y
         );
 
         // 4. SetParent 嵌入
@@ -93,7 +92,11 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
         // - X 轴：壁纸内容整体右移
         // - Y 轴：顶部出现白边间隙
         //
-        // 修复策略：清除所有边框样式 → SWP_FRAMECHANGED 强制重算 NC 区域 → 坐标补偿
+        // 修复策略：
+        // 1. 清除所有边框样式 → SWP_FRAMECHANGED 强制重算 NC 区域
+        // 2. 以 WorkerW 客户区尺寸（显示器实际尺寸）为目标
+        // 3. 精确测量四边 NC 偏移（不假设对称），反向补偿
+        // 4. 测量→补偿→验证 闭环
 
         // 5a. 清除窗口样式中可能被注入的边框位
         let style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
@@ -137,40 +140,76 @@ pub fn embed_in_desktop(hwnd: isize) -> Result<(), String> {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
         );
 
-        // 5d. 将原始屏幕坐标转换为父窗口（WorkerW）客户区坐标
-        //     这同时修复 24H2 WorkerW 坐标系原点可能不在 (0,0) 的问题
-        let mut target_pt = POINT {
-            x: orig_x,
-            y: orig_y,
-        };
-        ScreenToClient(workerw, &mut target_pt);
+        // 5d. 先将窗口移到 WorkerW 客户区 (0,0) 位置，尺寸设为目标尺寸
+        //     这是初始定位，后续会根据实际测量结果进行补偿
+        MoveWindow(hwnd as HWND, 0, 0, target_w, target_h, 1);
 
-        // 5e. 检查是否还有残余的非客户区偏移（双重保险）
-        let mut client_origin = POINT { x: 0, y: 0 };
-        ClientToScreen(hwnd as HWND, &mut client_origin);
-        let mut window_rect_after: RECT = zeroed();
-        GetWindowRect(hwnd as HWND, &mut window_rect_after);
-        let nc_offset_x = client_origin.x - window_rect_after.left;
-        let nc_offset_y = client_origin.y - window_rect_after.top;
+        // 5e. 测量→补偿→验证 闭环（最多 3 轮）
+        //
+        // 原理：MoveWindow 设置的是窗口矩形（包含 NC 区域），但我们需要的是
+        // 客户区完全覆盖 WorkerW 客户区。如果存在 NC 偏移，客户区会比窗口矩形小，
+        // 导致右侧/底部出现缺口。
+        //
+        // 通过测量 "窗口矩形 vs 客户区矩形" 的差值，精确计算四边 NC 尺寸，
+        // 然后扩大窗口矩形并偏移位置来补偿。
+        let mut final_x = 0i32;
+        let mut final_y = 0i32;
+        let mut final_w = target_w;
+        let mut final_h = target_h;
 
-        // 最终坐标 = 父窗口客户区坐标 - 残余 NC 偏移
-        let final_x = target_pt.x - nc_offset_x;
-        let final_y = target_pt.y - nc_offset_y;
-        // 尺寸需要补偿两侧的 NC 区域
-        let final_w = orig_w + nc_offset_x * 2;
-        let final_h = orig_h + nc_offset_y * 2;
+        for round in 0..3 {
+            // 测量当前窗口矩形和客户区矩形
+            let mut win_rect: RECT = zeroed();
+            GetWindowRect(hwnd as HWND, &mut win_rect);
+
+            let mut client_rect: RECT = zeroed();
+            GetClientRect(hwnd as HWND, &mut client_rect);
+
+            // 客户区左上角在屏幕上的坐标
+            let mut client_origin = POINT { x: 0, y: 0 };
+            ClientToScreen(hwnd as HWND, &mut client_origin);
+
+            // 四边 NC 尺寸（精确测量，不假设对称）
+            let nc_left = client_origin.x - win_rect.left;
+            let nc_top = client_origin.y - win_rect.top;
+            let nc_right = win_rect.right - (client_origin.x + client_rect.right);
+            let nc_bottom = win_rect.bottom - (client_origin.y + client_rect.bottom);
+
+            let client_w = client_rect.right - client_rect.left;
+            let client_h = client_rect.bottom - client_rect.top;
+
+            println!(
+                "[DesktopEmbedder] Round {}: NC edges L={} T={} R={} B={}, client={}x{}, target={}x{}",
+                round, nc_left, nc_top, nc_right, nc_bottom, client_w, client_h, target_w, target_h
+            );
+
+            // 如果客户区已经完全覆盖目标区域，补偿完成
+            if nc_left == 0 && nc_top == 0 && nc_right == 0 && nc_bottom == 0
+                && client_w == target_w && client_h == target_h
+            {
+                println!("[DesktopEmbedder] Round {}: No NC offset, perfect fit!", round);
+                break;
+            }
+
+            // 计算补偿：窗口位置向左上偏移 NC 尺寸，窗口大小扩大 NC 总量
+            final_x = -nc_left;
+            final_y = -nc_top;
+            final_w = target_w + nc_left + nc_right;
+            final_h = target_h + nc_top + nc_bottom;
+
+            println!(
+                "[DesktopEmbedder] Round {}: Compensating → pos=({}, {}), size={}x{}",
+                round, final_x, final_y, final_w, final_h
+            );
+
+            MoveWindow(hwnd as HWND, final_x, final_y, final_w, final_h, 1);
+        }
 
         println!(
-            "[DesktopEmbedder] NC offset: ({}, {}), final pos: ({}, {}), final size: {}x{}",
-            nc_offset_x, nc_offset_y, final_x, final_y, final_w, final_h
+            "[DesktopEmbedder] Embedded HWND {:?} into WorkerW {:?} (final: pos=({},{}), size={}x{})",
+            hwnd, workerw, final_x, final_y, final_w, final_h
         );
 
-        MoveWindow(hwnd as HWND, final_x, final_y, final_w, final_h, 1);
-
-        println!(
-            "[DesktopEmbedder] Embedded HWND {:?} into WorkerW {:?} (with NC fix)",
-            hwnd, workerw
-        );
         Ok(())
     }
 }

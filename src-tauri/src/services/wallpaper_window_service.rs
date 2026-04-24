@@ -72,7 +72,7 @@ impl WallpaperWindowManager {
         .visible(false)
         .position(x as f64, y as f64)
         .inner_size(width as f64, height as f64)
-        .always_on_bottom(true)
+        // 注意：不使用 always_on_bottom，因为我们通过 desktop_embedder 手动管理 Z-order
         .build()
         .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
 
@@ -82,6 +82,8 @@ impl WallpaperWindowManager {
             // 获取 HWND 并嵌入，传入该显示器在虚拟桌面中的坐标和物理分辨率
             if let Ok(hwnd) = window.hwnd() {
                 let hwnd_isize = hwnd.0 as isize;
+                // 等待 WebView 初始化完成（Tauri WebviewWindow 需要一些时间渲染）
+                std::thread::sleep(std::time::Duration::from_millis(500));
                 if let Err(e) = desktop_embedder::embed_in_desktop(
                     hwnd_isize,
                     x,

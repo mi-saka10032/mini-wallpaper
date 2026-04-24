@@ -5,8 +5,8 @@
 //! 1. FindWindow("Progman") 找到桌面窗口
 //! 2. RaiseDesktop: 发送多次 0x052C 消息确保壁纸层级就绪
 //! 3. 查找 SHELLDLL_DefView 的位置：
-//!    - 24H2：DefView 在 Progman 中 → 壁纸 SetParent 到 Progman
-//!    - 23H2 回退：DefView 在 WorkerW 中 → 壁纸 SetParent 到该 WorkerW 或 Progman
+//!    - 优先在 Progman 中查找（24H2/25H2 常见）
+//!    - 回退：遍历所有顶级 WorkerW 窗口查找（23H2 及其他情况）
 //! 4. Z-order 管理：壁纸 → HWND_TOP, DefView → HWND_TOP, WorkerW → HWND_BOTTOM
 //!    确保层级为：DefView(图标) > 壁纸窗口 > WorkerW(系统壁纸)
 //! 5. 定时器监控：确保壁纸始终紧跟在 DefView 正下方
@@ -20,8 +20,9 @@
 use windows_sys::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, FindWindowW, GetClassNameW, GetWindow, MoveWindow,
-    SendMessageTimeoutW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, SMTO_NORMAL,
+    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetWindow, IsWindowVisible,
+    MoveWindow, SendMessageTimeoutW, SetParent, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, SMTO_NORMAL,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Graphics::Gdi::CreateRectRgn;
@@ -32,25 +33,23 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
 // ===== DWM API 原始 FFI 声明 =====
-// windows-sys 中 DwmExtendFrameIntoClientArea / DwmEnableBlurBehindWindow 可能缺失，
-// 直接通过 extern 绑定 dwmapi.dll
 
 #[cfg(target_os = "windows")]
 #[repr(C)]
 struct MARGINS {
-    pub cxLeftWidth: i32,
-    pub cxRightWidth: i32,
-    pub cyTopHeight: i32,
-    pub cyBottomHeight: i32,
+    cxLeftWidth: i32,
+    cxRightWidth: i32,
+    cyTopHeight: i32,
+    cyBottomHeight: i32,
 }
 
 #[cfg(target_os = "windows")]
 #[repr(C)]
 struct DWM_BLURBEHIND {
-    pub dwFlags: u32,
-    pub fEnable: i32,
-    pub hRgnBlur: windows_sys::Win32::Graphics::Gdi::HRGN,
-    pub fTransitionOnMaximized: i32,
+    dwFlags: u32,
+    fEnable: i32,
+    hRgnBlur: windows_sys::Win32::Graphics::Gdi::HRGN,
+    fTransitionOnMaximized: i32,
 }
 
 #[cfg(target_os = "windows")]
@@ -62,23 +61,21 @@ extern "system" {
 
 // ===== 全局状态 =====
 
-/// 已嵌入的壁纸窗口列表
 #[cfg(target_os = "windows")]
 static EMBEDDED_WINDOWS: Mutex<Option<Vec<EmbeddedWindow>>> = Mutex::new(None);
 
-/// Z-order 监控定时器是否已启动
 #[cfg(target_os = "windows")]
 static ZORDER_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// 缓存的 SHELLDLL_DefView 句柄
 #[cfg(target_os = "windows")]
 static CACHED_DEFVIEW: AtomicIsize = AtomicIsize::new(0);
 
-/// 缓存的 WorkerW 句柄（系统壁纸窗口）
+#[cfg(target_os = "windows")]
+static CACHED_EMBED_TARGET: AtomicIsize = AtomicIsize::new(0);
+
 #[cfg(target_os = "windows")]
 static CACHED_WORKERW: AtomicIsize = AtomicIsize::new(0);
 
-/// 是否为 23H2 回退模式（DefView 不在 Progman 中）
 #[cfg(target_os = "windows")]
 static IS_LEGACY_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -92,6 +89,39 @@ struct EmbeddedWindow {
     monitor_h: i32,
 }
 
+// ===== 辅助函数 =====
+
+/// 将 &str 编码为以 null 结尾的 UTF-16 Vec
+#[cfg(target_os = "windows")]
+fn encode_wide(s: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// 获取窗口类名
+#[cfg(target_os = "windows")]
+unsafe fn get_class_name(hwnd: HWND) -> String {
+    let mut buf = [0u16; 256];
+    let len = GetClassNameW(hwnd, buf.as_mut_ptr(), 256);
+    if len <= 0 {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buf[..len as usize])
+}
+
+/// 检查窗口是否为 WorkerW 类
+#[cfg(target_os = "windows")]
+unsafe fn is_worker_class(hwnd: HWND) -> bool {
+    if hwnd == std::ptr::null_mut() {
+        return false;
+    }
+    let name = get_class_name(hwnd);
+    name == "WorkerW" || name == "WorkerA"
+}
+
 /// 发送 0x052C 系列消息，确保桌面壁纸层级就绪
 ///
 /// 参考 ExplorerPatcher: https://github.com/valinet/ExplorerPatcher/issues/525
@@ -102,17 +132,14 @@ unsafe fn raise_desktop(progman: HWND) -> bool {
     let mut res2: usize = usize::MAX;
     let mut res3: usize = usize::MAX;
 
-    // 检查壁纸是否已初始化
     SendMessageTimeoutW(
         progman, 0x052C, 0xA, 0, SMTO_NORMAL, 1000,
         &mut res0 as *mut usize,
     );
     if res0 != 0 {
         println!("[DesktopEmbedder] RaiseDesktop: wallpaper not initialized (res0={})", res0);
-        // 不直接返回失败，继续尝试
     }
 
-    // 准备生成壁纸窗口
     SendMessageTimeoutW(
         progman, 0x052C, 0xD, 0, SMTO_NORMAL, 1000,
         &mut res1 as *mut usize,
@@ -121,7 +148,6 @@ unsafe fn raise_desktop(progman: HWND) -> bool {
         progman, 0x052C, 0xD, 1, SMTO_NORMAL, 1000,
         &mut res2 as *mut usize,
     );
-    // "Animate desktop" - 确保壁纸窗口存在
     SendMessageTimeoutW(
         progman, 0x052C, 0, 0, SMTO_NORMAL, 1000,
         &mut res3 as *mut usize,
@@ -135,19 +161,76 @@ unsafe fn raise_desktop(progman: HWND) -> bool {
     success
 }
 
-/// 检查窗口是否为 WorkerW 类（桌面层级中的 WorkerW 几乎肯定属于 explorer）
+/// 在所有顶级窗口中查找 SHELLDLL_DefView
+///
+/// 25H2/24H2: DefView 可能在 Progman 中，也可能在某个 WorkerW 中
+/// 此函数先查 Progman，再遍历所有顶级 WorkerW 窗口
+///
+/// 返回 (defview_hwnd, defview_parent_hwnd)
 #[cfg(target_os = "windows")]
-unsafe fn is_explorer_worker(hwnd: HWND) -> bool {
-    if hwnd == std::ptr::null_mut() {
-        return false;
+unsafe fn find_defview_globally(progman: HWND) -> (HWND, HWND) {
+    let defview_class = encode_wide("SHELLDLL_DefView");
+
+    // 首先在 Progman 中查找
+    let defview = FindWindowExW(
+        progman,
+        std::ptr::null_mut(),
+        defview_class.as_ptr(),
+        std::ptr::null(),
+    );
+    if defview != std::ptr::null_mut() {
+        println!(
+            "[DesktopEmbedder] DefView 0x{:X} found in Progman 0x{:X}",
+            defview as isize, progman as isize
+        );
+        return (defview, progman);
     }
-    let mut class_name = [0u16; 256];
-    let len = GetClassNameW(hwnd, class_name.as_mut_ptr(), 256);
-    if len <= 0 {
-        return false;
+
+    // Progman 中没有，遍历所有顶级窗口查找
+    println!("[DesktopEmbedder] DefView not in Progman, enumerating top-level windows...");
+
+    #[repr(C)]
+    struct FindResult {
+        defview: HWND,
+        parent: HWND,
     }
-    let name = String::from_utf16_lossy(&class_name[..len as usize]);
-    name == "WorkerW" || name == "WorkerA"
+    let mut result = FindResult {
+        defview: std::ptr::null_mut(),
+        parent: std::ptr::null_mut(),
+    };
+
+    unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: isize) -> i32 {
+        let result = &mut *(lparam as *mut FindResult);
+        let class_name = get_class_name(hwnd);
+        if class_name != "WorkerW" && class_name != "WorkerA" {
+            return 1; // 继续枚举
+        }
+
+        let defview_class = encode_wide("SHELLDLL_DefView");
+        let defview = FindWindowExW(
+            hwnd,
+            std::ptr::null_mut(),
+            defview_class.as_ptr(),
+            std::ptr::null(),
+        );
+        if defview != std::ptr::null_mut() {
+            result.defview = defview;
+            result.parent = hwnd;
+            println!(
+                "[DesktopEmbedder] DefView 0x{:X} found in WorkerW 0x{:X}",
+                defview as isize, hwnd as isize
+            );
+            return 0; // 停止枚举
+        }
+        1 // 继续枚举
+    }
+
+    EnumWindows(
+        Some(enum_callback),
+        &mut result as *mut FindResult as isize,
+    );
+
+    (result.defview, result.parent)
 }
 
 /// 确保壁纸窗口在 DefView 正下方
@@ -161,22 +244,84 @@ unsafe fn ensure_embed_below_defview(defview: HWND, embed_wnd: HWND) -> (bool, H
 
     let prev = GetWindow(embed_wnd, GW_HWNDPREV);
     if prev == defview {
-        // 顺序已正确
         return (true, std::ptr::null_mut());
     }
 
-    // 修正 Z-order：将壁纸放到 DefView 之后
+    // 修正 Z-order
     SetWindowPos(
         embed_wnd, defview, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
     );
 
-    if is_explorer_worker(prev) {
+    if is_worker_class(prev) {
         return (true, std::ptr::null_mut());
     }
 
     (false, prev)
 }
+
+/// 打印桌面窗口层级结构（诊断用）
+#[cfg(target_os = "windows")]
+unsafe fn dump_desktop_hierarchy(progman: HWND) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GW_CHILD, GW_HWNDNEXT};
+
+    println!("[DesktopEmbedder] === Desktop Hierarchy Dump ===");
+    println!(
+        "[DesktopEmbedder] Progman: 0x{:X}, visible={}",
+        progman as isize,
+        IsWindowVisible(progman) != 0
+    );
+
+    // 枚举 Progman 的子窗口
+    let mut child = GetWindow(progman, GW_CHILD);
+    while child != std::ptr::null_mut() {
+        let class = get_class_name(child);
+        let visible = IsWindowVisible(child) != 0;
+        println!(
+            "[DesktopEmbedder]   Progman child: 0x{:X} class='{}' visible={}",
+            child as isize, class, visible
+        );
+        if class == "SHELLDLL_DefView" {
+            let mut sub = GetWindow(child, GW_CHILD);
+            while sub != std::ptr::null_mut() {
+                let sub_class = get_class_name(sub);
+                println!(
+                    "[DesktopEmbedder]     DefView child: 0x{:X} class='{}'",
+                    sub as isize, sub_class
+                );
+                sub = GetWindow(sub, GW_HWNDNEXT);
+            }
+        }
+        child = GetWindow(child, GW_HWNDNEXT);
+    }
+
+    // 枚举顶级 WorkerW 窗口
+    unsafe extern "system" fn enum_workers(hwnd: HWND, _: isize) -> i32 {
+        let class = get_class_name(hwnd);
+        if class == "WorkerW" || class == "WorkerA" {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{GW_CHILD, GW_HWNDNEXT};
+            let visible = IsWindowVisible(hwnd) != 0;
+            println!(
+                "[DesktopEmbedder]   Top-level {}: 0x{:X} visible={}",
+                class, hwnd as isize, visible
+            );
+            let mut child = GetWindow(hwnd, GW_CHILD);
+            while child != std::ptr::null_mut() {
+                let child_class = get_class_name(child);
+                println!(
+                    "[DesktopEmbedder]     {} child: 0x{:X} class='{}'",
+                    class, child as isize, child_class
+                );
+                child = GetWindow(child, GW_HWNDNEXT);
+            }
+        }
+        1
+    }
+    EnumWindows(Some(enum_workers), 0);
+    println!("[DesktopEmbedder] === End Hierarchy Dump ===");
+}
+
+// ===== 主要公共 API =====
 
 /// 在 Windows 上将壁纸窗口嵌入桌面层级
 ///
@@ -194,7 +339,7 @@ pub fn embed_in_desktop(
 ) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetLayeredWindowAttributes, GWL_EXSTYLE, GWL_STYLE,
-        GW_HWNDPREV, HWND_BOTTOM, HWND_TOP, LWA_ALPHA,
+        HWND_BOTTOM, HWND_TOP, LWA_ALPHA,
         SWP_DRAWFRAME, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         SW_SHOW,
         WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
@@ -209,8 +354,8 @@ pub fn embed_in_desktop(
 
         // ===== 1. 找到 Progman 窗口 =====
         let progman = FindWindowW(
-            encode_wide("Progman\0").as_ptr(),
-            encode_wide("Program Manager\0").as_ptr(),
+            encode_wide("Progman").as_ptr(),
+            encode_wide("Program Manager").as_ptr(),
         );
         if progman == std::ptr::null_mut() {
             return Err("Failed to find Progman window".into());
@@ -222,112 +367,78 @@ pub fn embed_in_desktop(
             println!("[DesktopEmbedder] WARNING: RaiseDesktop returned false, continuing anyway...");
         }
 
-        // 短暂等待 explorer 处理
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        // 等待 explorer 处理消息
+        std::thread::sleep(std::time::Duration::from_millis(200));
 
-        // ===== 3. 查找 SHELLDLL_DefView =====
-        //
-        // 24H2: DefView 在 Progman 中
-        // 23H2: DefView 可能在 Progman 的前序兄弟 WorkerW 中
-        let mut defview = FindWindowExW(
-            progman,
-            std::ptr::null_mut(),
-            encode_wide("SHELLDLL_DefView\0").as_ptr(),
-            encode_wide("\0").as_ptr(),
-        );
+        // ===== 3. 打印桌面层级结构（诊断） =====
+        dump_desktop_hierarchy(progman);
 
-        let mut worker1: HWND = std::ptr::null_mut(); // 包含 DefView 的 WorkerW
-        let mut worker2: HWND = std::ptr::null_mut(); // 额外的 WorkerW
-        let mut is_legacy = false;
-
+        // ===== 4. 查找 SHELLDLL_DefView =====
+        let (defview, defview_parent) = find_defview_globally(progman);
         if defview == std::ptr::null_mut() {
-            // 24H2 没找到，回退 23H2 搜索模式
-            println!("[DesktopEmbedder] DefView not in Progman, trying 23H2 fallback...");
-
-            let worker_p1 = GetWindow(progman, GW_HWNDPREV);
-            if worker_p1 != std::ptr::null_mut() {
-                defview = FindWindowExW(
-                    worker_p1,
-                    std::ptr::null_mut(),
-                    encode_wide("SHELLDLL_DefView\0").as_ptr(),
-                    encode_wide("\0").as_ptr(),
-                );
-
-                if defview != std::ptr::null_mut() {
-                    worker1 = worker_p1;
-                    println!(
-                        "[DesktopEmbedder] 23H2 mode: DefView in WorkerW 0x{:X}",
-                        worker1 as isize
-                    );
-                } else {
-                    worker2 = worker_p1;
-                    let worker_p2 = GetWindow(worker_p1, GW_HWNDPREV);
-                    if worker_p2 != std::ptr::null_mut() {
-                        defview = FindWindowExW(
-                            worker_p2,
-                            std::ptr::null_mut(),
-                            encode_wide("SHELLDLL_DefView\0").as_ptr(),
-                            encode_wide("\0").as_ptr(),
-                        );
-                        if defview != std::ptr::null_mut() {
-                            worker1 = worker_p2;
-                            println!(
-                                "[DesktopEmbedder] 23H2 mode (2nd prev): DefView in WorkerW 0x{:X}",
-                                worker1 as isize
-                            );
-                        }
-                    }
-                }
-            }
-
-            if defview == std::ptr::null_mut() {
-                return Err("Failed to find SHELLDLL_DefView".into());
-            }
-            is_legacy = true;
-        } else {
-            println!(
-                "[DesktopEmbedder] 24H2 mode: DefView 0x{:X} in Progman",
-                defview as isize
-            );
+            return Err("Failed to find SHELLDLL_DefView in any window".into());
         }
 
+        // 判断模式：DefView 在 Progman 中 = 24H2/25H2 模式，否则 = legacy 模式
+        let is_legacy = defview_parent != progman;
         IS_LEGACY_MODE.store(is_legacy, Ordering::SeqCst);
         CACHED_DEFVIEW.store(defview as isize, Ordering::SeqCst);
 
-        // ===== 4. 找到 Progman 内部的 WorkerW（系统壁纸窗口） =====
+        println!(
+            "[DesktopEmbedder] Mode: {}, DefView=0x{:X}, DefView parent=0x{:X}",
+            if is_legacy { "legacy (DefView in WorkerW)" } else { "modern (DefView in Progman)" },
+            defview as isize,
+            defview_parent as isize
+        );
+
+        // ===== 5. 确定嵌入目标和 WorkerW =====
+        //
+        // 博主方案核心逻辑：
+        // - 24H2/25H2 (DefView 在 Progman): SetParent 到 Progman
+        // - legacy (DefView 在 WorkerW): SetParent 到该 WorkerW 或 Progman
+        //
+        // WorkerW 查找：Progman 内部的 WorkerW 是系统壁纸窗口
+        let embed_target = if is_legacy {
+            // legacy 模式：嵌入到 DefView 所在的 WorkerW（或 Progman）
+            defview_parent
+        } else {
+            // modern 模式：嵌入到 Progman
+            progman
+        };
+
+        // 找到 Progman 内部的 WorkerW（系统壁纸窗口，需要沉底）
         let mut worker_in_progman = FindWindowExW(
             progman,
             std::ptr::null_mut(),
-            encode_wide("WorkerW\0").as_ptr(),
-            encode_wide("\0").as_ptr(),
+            encode_wide("WorkerW").as_ptr(),
+            encode_wide("").as_ptr(),
         );
         if worker_in_progman == std::ptr::null_mut() {
             worker_in_progman = FindWindowExW(
                 progman,
                 std::ptr::null_mut(),
-                encode_wide("WorkerA\0").as_ptr(),
-                encode_wide("\0").as_ptr(),
+                encode_wide("WorkerA").as_ptr(),
+                encode_wide("").as_ptr(),
             );
         }
 
-        // 23H2 回退
-        let effective_worker = if worker_in_progman == std::ptr::null_mut() {
-            if worker2 != std::ptr::null_mut() {
-                worker2
-            } else {
-                progman // 最终回退
-            }
-        } else {
+        // 如果 Progman 内没有 WorkerW，用 Progman 自身作为 fallback
+        let effective_worker = if worker_in_progman != std::ptr::null_mut() {
             worker_in_progman
+        } else {
+            println!("[DesktopEmbedder] WARNING: No WorkerW found inside Progman");
+            progman
         };
 
+        CACHED_EMBED_TARGET.store(embed_target as isize, Ordering::SeqCst);
         CACHED_WORKERW.store(effective_worker as isize, Ordering::SeqCst);
+
         println!(
-            "[DesktopEmbedder] WorkerW (wallpaper): 0x{:X}, is_legacy={}",
-            effective_worker as isize, is_legacy
+            "[DesktopEmbedder] Embed target: 0x{:X}, WorkerW: 0x{:X}",
+            embed_target as isize, effective_worker as isize
         );
 
-        // ===== 5. 准备窗口样式 =====
+        // ===== 6. 准备窗口样式（参照博主代码） =====
         let mut style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
         let mut ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
 
@@ -335,7 +446,7 @@ pub fn embed_in_desktop(
         ex_style |= WS_EX_LAYERED as isize;
         // 移除 WS_EX_TOOLWINDOW
         ex_style &= !(WS_EX_TOOLWINDOW as isize);
-        // 移除不需要的样式
+        // 移除不需要的样式（与博主代码一致）
         style &= !(WS_CHILD as isize);
         style &= !(WS_POPUP as isize);
         style &= !(WS_OVERLAPPED as isize);
@@ -346,14 +457,13 @@ pub fn embed_in_desktop(
 
         SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, style);
         SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, ex_style);
-
         println!("[DesktopEmbedder] Styles set: style=0x{:X}, ex_style=0x{:X}", style, ex_style);
 
-        // ===== 6. DWM 透明 hack =====
-        // 先 SetParent(NULL) 确保是顶级窗口（DWM 要求）
+        // ===== 7. DWM 透明 hack（参照博主代码） =====
+        // 关键：先 SetParent(NULL) 确保是顶级窗口，DWM 才允许透明
         SetParent(hwnd as HWND, std::ptr::null_mut());
 
-        // DwmExtendFrameIntoClientArea - 扩展框架到客户区
+        // DwmExtendFrameIntoClientArea
         {
             let margins = MARGINS {
                 cxLeftWidth: 0,
@@ -365,7 +475,7 @@ pub fn embed_in_desktop(
             println!("[DesktopEmbedder] DwmExtendFrameIntoClientArea: hr=0x{:X}", hr);
         }
 
-        // DwmEnableBlurBehindWindow - 启用模糊背景（实现透明）
+        // DwmEnableBlurBehindWindow
         {
             let h_rgn = CreateRectRgn(0, 0, -1, -1);
             let bb = DWM_BLURBEHIND {
@@ -378,34 +488,24 @@ pub fn embed_in_desktop(
             println!("[DesktopEmbedder] DwmEnableBlurBehindWindow: hr=0x{:X}", hr);
         }
 
-        // SetLayeredWindowAttributes - 设置完全不透明
+        // SetLayeredWindowAttributes - 完全不透明
         SetLayeredWindowAttributes(hwnd as HWND, 0, 0xFF, LWA_ALPHA);
         println!("[DesktopEmbedder] SetLayeredWindowAttributes: alpha=0xFF");
 
-        // ===== 7. SetParent 到目标窗口 =====
-        let embed_target = if is_legacy {
-            if effective_worker != progman { effective_worker } else { progman }
-        } else {
-            progman
-        };
-
+        // ===== 8. SetParent 到目标窗口 =====
         let prev_parent = SetParent(hwnd as HWND, embed_target);
-        if prev_parent == std::ptr::null_mut() {
-            // SetParent 返回 NULL 可能表示失败，但也可能是之前没有父窗口
-            println!("[DesktopEmbedder] WARNING: SetParent returned NULL");
-        }
         println!(
-            "[DesktopEmbedder] SetParent: HWND 0x{:X} -> 0x{:X}",
-            hwnd, embed_target as isize
+            "[DesktopEmbedder] SetParent: HWND 0x{:X} -> target 0x{:X} (prev_parent=0x{:X})",
+            hwnd, embed_target as isize, prev_parent as isize
         );
 
-        // ===== 8. Z-order 管理 =====
+        // ===== 9. Z-order 管理（参照博主代码） =====
         // 壁纸 → HWND_TOP
         SetWindowPos(
             hwnd as HWND, HWND_TOP, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME,
         );
-        // DefView → HWND_TOP（覆盖在壁纸之上）
+        // DefView → HWND_TOP（覆盖在壁纸之上，确保图标可见）
         SetWindowPos(
             defview, HWND_TOP, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
@@ -417,25 +517,24 @@ pub fn embed_in_desktop(
         );
         println!("[DesktopEmbedder] Z-order set: DefView > EmbedWnd > WorkerW");
 
-        // ===== 9. 定位窗口到目标显示器 =====
-        // 使用 AdjustWindowRect 的等效逻辑
+        // ===== 10. 定位窗口到目标显示器 =====
         MoveWindow(
             hwnd as HWND,
             monitor_x, monitor_y,
             monitor_width, monitor_height,
-            1,
+            1, // bRepaint = TRUE
         );
         println!(
             "[DesktopEmbedder] MoveWindow: pos=({},{}), size={}x{}",
             monitor_x, monitor_y, monitor_width, monitor_height
         );
 
-        // ===== 10. 显示窗口 =====
+        // ===== 11. 显示窗口 =====
         ShowWindow(progman, SW_SHOW);
         ShowWindow(hwnd as HWND, SW_SHOW);
         ShowWindow(effective_worker, SW_SHOW);
 
-        // ===== 11. 注册到全局列表并启动 Z-order 监控 =====
+        // ===== 12. 注册到全局列表并启动 Z-order 监控 =====
         {
             let mut guard = EMBEDDED_WINDOWS.lock().unwrap();
             let list = guard.get_or_insert_with(Vec::new);
@@ -449,15 +548,12 @@ pub fn embed_in_desktop(
             });
             println!(
                 "[DesktopEmbedder] Registered embedded window: HWND 0x{:X}, total={}",
-                hwnd,
-                list.len()
+                hwnd, list.len()
             );
         }
 
-        // 24H2 模式下启动 Z-order 监控定时器
-        if !is_legacy {
-            start_zorder_timer();
-        }
+        // 启动 Z-order 监控定时器（所有模式都需要）
+        start_zorder_timer();
 
         println!(
             "[DesktopEmbedder] Embedded HWND 0x{:X} into 0x{:X} (pos=({},{}), size={}x{})",
@@ -498,9 +594,7 @@ fn start_zorder_timer() {
                     Some(list) if !list.is_empty() => list.clone(),
                     _ => {
                         ZORDER_TIMER_RUNNING.store(false, Ordering::SeqCst);
-                        println!(
-                            "[DesktopEmbedder] Z-order timer stopped (no embedded windows)"
-                        );
+                        println!("[DesktopEmbedder] Z-order timer stopped (no embedded windows)");
                         return;
                     }
                 }
@@ -513,8 +607,7 @@ fn start_zorder_timer() {
 
             unsafe {
                 for ew in &windows {
-                    let (ok, conflict) =
-                        ensure_embed_below_defview(defview, ew.hwnd as HWND);
+                    let (ok, conflict) = ensure_embed_below_defview(defview, ew.hwnd as HWND);
 
                     if !ok {
                         if conflict == std::ptr::null_mut() {
@@ -535,7 +628,7 @@ fn start_zorder_timer() {
 
                         if consecutive_count >= MAX_CONSECUTIVE_FIXES {
                             println!(
-                                "[DesktopEmbedder] ERROR: Repeated Z-order conflict detected! Stopping monitor."
+                                "[DesktopEmbedder] ERROR: Repeated Z-order conflict! Stopping monitor."
                             );
                             ZORDER_TIMER_RUNNING.store(false, Ordering::SeqCst);
                             return;
@@ -559,12 +652,10 @@ pub fn unembed_from_desktop(hwnd: isize) {
             list.retain(|w| w.hwnd != hwnd);
             println!(
                 "[DesktopEmbedder] Unregistered HWND 0x{:X}, remaining={}",
-                hwnd,
-                list.len()
+                hwnd, list.len()
             );
         }
     }
-
     unsafe {
         SetParent(hwnd as HWND, std::ptr::null_mut());
         println!("[DesktopEmbedder] Unembedded HWND 0x{:X}", hwnd);
@@ -581,15 +672,10 @@ pub fn cleanup_all() {
         }
     }
     CACHED_DEFVIEW.store(0, Ordering::SeqCst);
+    CACHED_EMBED_TARGET.store(0, Ordering::SeqCst);
     CACHED_WORKERW.store(0, Ordering::SeqCst);
     IS_LEGACY_MODE.store(false, Ordering::SeqCst);
     println!("[DesktopEmbedder] Cleanup: all embedded windows cleared");
-}
-
-/// 辅助函数：将 &str 编码为以 null 结尾的 UTF-16 Vec
-#[cfg(target_os = "windows")]
-fn encode_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
 }
 
 // ===== 非 Windows 平台的空实现 =====

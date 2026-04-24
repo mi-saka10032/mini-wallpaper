@@ -83,7 +83,8 @@ fn register_subclass(hwnd: HWND, original_proc: isize) {
 
 /// 子类化的窗口过程
 ///
-/// 核心：拦截 WM_NCCALCSIZE，强制返回 0（即 NC 区域为空），
+/// 核心：拦截 WM_NCCALCSIZE / WM_NCPAINT / WM_NCHITTEST，
+/// 彻底阻止 24H2 DWM 注入任何 NC 区域装饰（边框、圆角等），
 /// 其他消息转发给原始 WndProc
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn subclass_wndproc(
@@ -93,18 +94,30 @@ unsafe extern "system" fn subclass_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_NCCALCSIZE,
+        CallWindowProcW, WM_NCCALCSIZE, WM_NCPAINT, WM_NCHITTEST, HTCLIENT,
     };
 
-    if msg == WM_NCCALCSIZE {
-        // 当 wParam == TRUE (1) 时，lparam 指向 NCCALCSIZE_PARAMS 结构体
-        // 我们不修改它，直接返回 0，告诉系统"不需要任何非客户区"
-        //
-        // 当 wParam == FALSE (0) 时，lparam 指向 RECT
-        // 同样返回 0，表示整个窗口矩形都是客户区
-        //
-        // 这是阻止 24H2 DWM 注入隐藏边框的关键
-        return 0;
+    match msg {
+        WM_NCCALCSIZE => {
+            // 当 wParam == TRUE (1) 时，lparam 指向 NCCALCSIZE_PARAMS 结构体
+            // 当 wParam == FALSE (0) 时，lparam 指向 RECT
+            // 直接返回 0，告诉系统"不需要任何非客户区"
+            // 这是阻止 24H2 DWM 注入隐藏边框的关键
+            return 0;
+        }
+        WM_NCPAINT => {
+            // 阻止系统绘制任何非客户区内容（边框、圆角装饰等）
+            // 24H2 的 DWM 可能通过 WM_NCPAINT 在窗口边缘绘制 1px 的圆角/边框线
+            // 直接返回 0，跳过所有 NC 绘制
+            return 0;
+        }
+        WM_NCHITTEST => {
+            // 强制整个窗口区域都被视为客户区（HTCLIENT）
+            // 防止系统在窗口边缘检测到 NC 区域（如边框、标题栏）
+            // 从而避免 DWM 对这些区域进行特殊渲染
+            return HTCLIENT as LRESULT;
+        }
+        _ => {}
     }
 
     // 其他消息转发给原始 WndProc
@@ -263,7 +276,48 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             return Err("SetParent failed".into());
         }
 
-        // 4a. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也被正确清零
+        // 4a. 禁用 DWM 圆角和 NC 渲染
+        //     24H2 的 DWM 可能在合成层面绘制窗口圆角装饰（1px 边框线），
+        //     即使 WM_NCCALCSIZE 返回 0 也无法阻止。
+        //     通过 DwmSetWindowAttribute 从 DWM 层面彻底禁用这些装饰。
+        {
+            use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+
+            // DWMWA_NCRENDERING_POLICY = 2
+            // DWMNCRP_DISABLED = 1
+            // 告诉 DWM 不要渲染任何非客户区装饰
+            const DWMWA_NCRENDERING_POLICY: u32 = 2;
+            const DWMNCRP_DISABLED: u32 = 1;
+            let ncrp: u32 = DWMNCRP_DISABLED;
+            DwmSetWindowAttribute(
+                hwnd as HWND,
+                DWMWA_NCRENDERING_POLICY,
+                &ncrp as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+            println!("[DesktopEmbedder] DWM: NC rendering policy set to DISABLED");
+
+            // DWMWA_WINDOW_CORNER_PREFERENCE = 33 (Win11 22H2+)
+            // DWMWCP_DONOTROUND = 1
+            // 强制窗口使用直角，不绘制圆角
+            const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+            const DWMWCP_DONOTROUND: u32 = 1;
+            let corner_pref: u32 = DWMWCP_DONOTROUND;
+            let hr = DwmSetWindowAttribute(
+                hwnd as HWND,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner_pref as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+            if hr == 0 {
+                println!("[DesktopEmbedder] DWM: Window corner preference set to DONOTROUND");
+            } else {
+                // 在 Win10 或更早系统上此属性不支持，忽略错误
+                println!("[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE not supported (hr=0x{:X}), skipping", hr);
+            }
+        }
+
+        // 4b. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也被正确清零
         SetWindowPos(
             hwnd as HWND,
             std::ptr::null_mut(),

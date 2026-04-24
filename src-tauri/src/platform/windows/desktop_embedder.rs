@@ -94,7 +94,7 @@ unsafe extern "system" fn subclass_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_NCCALCSIZE, WM_NCPAINT, WM_NCHITTEST, HTCLIENT,
+        CallWindowProcW, WM_NCCALCSIZE, WM_NCPAINT, WM_NCHITTEST, WM_ERASEBKGND, HTCLIENT,
     };
 
     match msg {
@@ -116,6 +116,22 @@ unsafe extern "system" fn subclass_wndproc(
             // 防止系统在窗口边缘检测到 NC 区域（如边框、标题栏）
             // 从而避免 DWM 对这些区域进行特殊渲染
             return HTCLIENT as LRESULT;
+        }
+        WM_ERASEBKGND => {
+            // 用黑色画刷填充窗口背景
+            // 当使用 overscan（窗口比显示器大 2px）消除 DWM 圆角时，
+            // 溢出区域如果不填充会显示为白色（默认窗口背景色）。
+            // 黑色在 DWM 合成透明窗口时会被视为透明区域，
+            // 即使不完全透明，黑色在桌面边缘也远比白色不显眼。
+            use windows_sys::Win32::Graphics::Gdi::{
+                FillRect, GetStockObject, BLACK_BRUSH,
+            };
+            use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
+            let hdc = wparam as windows_sys::Win32::Graphics::Gdi::HDC;
+            let mut rc: RECT = std::mem::zeroed();
+            GetClientRect(hwnd, &mut rc);
+            FillRect(hdc, &rc, GetStockObject(BLACK_BRUSH as i32) as _);
+            return 1; // 返回非零值表示已处理背景擦除
         }
         _ => {}
     }
@@ -272,7 +288,7 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
         //     DWMWA_WINDOW_CORNER_PREFERENCE 只对顶层窗口生效，
         //     SetParent 后窗口变为子窗口就无法设置了。
         //     所以必须在 SetParent 之前调用。
-        let corner_disabled_ok;
+        let _corner_disabled_ok;
         {
             use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 
@@ -289,10 +305,10 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
                 std::mem::size_of::<u32>() as u32,
             );
             if hr == 0 {
-                corner_disabled_ok = true;
+                _corner_disabled_ok = true;
                 println!("[DesktopEmbedder] DWM: Window corner preference set to DONOTROUND (pre-SetParent)");
             } else {
-                corner_disabled_ok = false;
+                _corner_disabled_ok = false;
                 println!("[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE failed (hr=0x{:X}), will use overscan fallback", hr);
             }
 
@@ -389,25 +405,26 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
         } else {
             println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
 
-            // ===== 6a. DWM 圆角过扫描补偿（仅在圆角禁用失败时启用） =====
+            // ===== 6a. DWM 圆角过扫描补偿（始终启用） =====
             //
-            // 如果 DWMWA_WINDOW_CORNER_PREFERENCE 在 pre-SetParent 阶段成功设置，
-            // 则 DWM 圆角已被禁用，不需要 overscan。
-            // 只有当圆角禁用失败时，才通过微量过扫描来裁掉圆角区域。
-            if !corner_disabled_ok {
-                const OVERSCAN: i32 = 2;
-                let os_x = target_x - OVERSCAN;
-                let os_y = target_y - OVERSCAN;
-                let os_w = target_w + OVERSCAN * 2;
-                let os_h = target_h + OVERSCAN * 2;
-                MoveWindow(hwnd as HWND, os_x, os_y, os_w, os_h, 1);
-                println!(
-                    "[DesktopEmbedder] DWM corner overscan: pos=({}, {}), size={}x{} (overscan={}px per edge)",
-                    os_x, os_y, os_w, os_h, OVERSCAN
-                );
-            } else {
-                println!("[DesktopEmbedder] DWM corner already disabled via DWMWA_WINDOW_CORNER_PREFERENCE, no overscan needed");
-            }
+            // 问题：24H2 的 DWM 会在合成层面对子窗口应用圆角渲染。
+            // DWMWA_WINDOW_CORNER_PREFERENCE 即使在 pre-SetParent 阶段设置成功（hr=0），
+            // SetParent 后 DWM 也会重置该属性，导致圆角重新出现。
+            //
+            // 解决方案：微量过扫描（overscan）
+            // 在四边各多扩展 2px，让 DWM 的圆角区域溢出到 WorkerW 的裁剪边界之外。
+            // 同时通过 WM_ERASEBKGND 拦截将窗口背景色设为黑色，
+            // 防止溢出区域显示为白边（黑色在 DWM 透明合成下不可见）。
+            const OVERSCAN: i32 = 2;
+            let os_x = target_x - OVERSCAN;
+            let os_y = target_y - OVERSCAN;
+            let os_w = target_w + OVERSCAN * 2;
+            let os_h = target_h + OVERSCAN * 2;
+            MoveWindow(hwnd as HWND, os_x, os_y, os_w, os_h, 1);
+            println!(
+                "[DesktopEmbedder] DWM corner overscan applied: pos=({}, {}), size={}x{} (overscan={}px per edge)",
+                os_x, os_y, os_w, os_h, OVERSCAN
+            );
         }
 
         println!(

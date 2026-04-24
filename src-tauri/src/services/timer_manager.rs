@@ -1,18 +1,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use log::{error, info, warn};
 use sea_orm::DatabaseConnection;
 use tauri::Emitter;
+use tauri::Manager;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
 use crate::entities::monitor_config;
 use crate::services::{collection_service, monitor_config_service};
+use crate::services::wallpaper_window_service::WallpaperWindowManagerState;
 
-/// 壁纸变更事件 payload（发送给前端）
+/// 缩略图变更事件 payload（发送给主窗口更新缩略图）
 #[derive(Clone, serde::Serialize)]
-pub struct WallpaperChangedPayload {
+pub struct ThumbnailChangedPayload {
     pub monitor_id: String,
     pub wallpaper_id: i32,
 }
@@ -118,13 +121,21 @@ impl TimerManager {
                             continue;
                         }
 
-                        // 发送全局事件通知前端
-                        let payload = WallpaperChangedPayload {
+                        // 1. 通知指定壁纸窗口更新壁纸（精确定向发送）
+                        let wm = app_handle.state::<WallpaperWindowManagerState>();
+                        let wm_guard = wm.lock().await;
+                        if let Err(e) = wm_guard.update_window(&app_handle, &mid, new_wid) {
+                            warn!("[TimerManager] 壁纸窗口更新失败: {}", e);
+                        }
+                        drop(wm_guard);
+
+                        // 2. 通知主窗口更新缩略图（全局广播）
+                        let payload = ThumbnailChangedPayload {
                             monitor_id: mid.clone(),
                             wallpaper_id: new_wid,
                         };
-                        if let Err(e) = app_handle.emit("wallpaper-changed", &payload) {
-                            eprintln!("[TimerManager] Failed to emit event: {}", e);
+                        if let Err(e) = app_handle.emit("thumbnail-changed", &payload) {
+                            error!("[TimerManager] Failed to emit thumbnail-changed: {}", e);
                         }
                     }
                     Ok(None) => {

@@ -7,11 +7,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use log::{error, info, warn};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 use crate::platform::windows::desktop_embedder;
+
+/// 壁纸变更事件 payload（发送给指定壁纸窗口）
+#[derive(Clone, serde::Serialize)]
+pub struct WallpaperChangedPayload {
+    pub monitor_id: String,
+    pub wallpaper_id: i32,
+}
 
 /// 壁纸窗口管理器 managed state
 pub type WallpaperWindowManagerState = Arc<Mutex<WallpaperWindowManager>>;
@@ -150,6 +157,42 @@ impl WallpaperWindowManager {
                 let _ = window.show();
             }
         }
+    }
+
+    /// 通知指定显示器的壁纸窗口更新壁纸
+    ///
+    /// 通过 HashMap 精确获取 monitor_id 对应的窗口 label，
+    /// 使用 emit_to 向该窗口单独发送 wallpaper-changed 事件。
+    /// 相比全局广播，这种方式实现了逻辑解耦，也更适合窗口独立设置壁纸的场景。
+    pub fn update_window(
+        &self,
+        app: &AppHandle,
+        monitor_id: &str,
+        wallpaper_id: i32,
+    ) -> Result<(), String> {
+        let label = self.windows.get(monitor_id).ok_or_else(|| {
+            format!("壁纸窗口不存在: monitor_id='{}'", monitor_id)
+        })?;
+
+        // 确认窗口实例仍然存在
+        let _window = app.get_webview_window(label).ok_or_else(|| {
+            format!("窗口实例已丢失: label='{}', monitor_id='{}'", label, monitor_id)
+        })?;
+
+        let payload = WallpaperChangedPayload {
+            monitor_id: monitor_id.to_string(),
+            wallpaper_id,
+        };
+
+        app.emit_to(label, "wallpaper-changed", &payload)
+            .map_err(|e| format!("发送事件失败: {}", e))?;
+
+        info!(
+            "壁纸更新事件已发送: monitor='{}', wallpaper_id={}, target='{}'",
+            monitor_id, wallpaper_id, label
+        );
+
+        Ok(())
     }
 
     /// 获取当前管理的窗口数量

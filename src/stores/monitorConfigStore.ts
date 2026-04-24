@@ -191,10 +191,10 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
 
       await doSyncMonitors(set);
 
-      // 监听 wallpaper-changed 事件
+      // 监听 thumbnail-changed 事件（主窗口缩略图更新）
       if (!_eventUnlisten) {
         _eventUnlisten = await listen(
-          EVENTS.WALLPAPER_CHANGED,
+          EVENTS.THUMBNAIL_CHANGED,
           ({ monitor_id, wallpaper_id }) => {
             set((state) => ({
               configs: state.configs.map((c) =>

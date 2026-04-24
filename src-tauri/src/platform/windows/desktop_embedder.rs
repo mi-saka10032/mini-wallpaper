@@ -14,7 +14,7 @@
 //! 并通过定时器维护 Z-order 稳定性。
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FindWindowExW, FindWindowW, GetWindow, MoveWindow, SendMessageTimeoutW,
@@ -28,7 +28,7 @@ use std::sync::Mutex;
 
 // ===== Z-order 监控相关全局状态 =====
 
-/// 已嵌入的壁纸窗口列表（HWND, monitor_x, monitor_y, monitor_w, monitor_h）
+/// 已嵌入的壁纸窗口列表
 #[cfg(target_os = "windows")]
 static EMBEDDED_WINDOWS: Mutex<Option<Vec<EmbeddedWindow>>> = Mutex::new(None);
 
@@ -81,10 +81,11 @@ pub fn embed_in_desktop(
 
         // ===== 1. 找到 Progman 窗口 =====
         let progman = FindWindowW(encode_wide("Progman\0").as_ptr(), std::ptr::null());
-        if progman.is_null() {
+        if progman == std::ptr::null_mut() {
             return Err("Failed to find Progman window".into());
         }
         CACHED_PROGMAN.store(progman as isize, Ordering::SeqCst);
+        println!("[DesktopEmbedder] Found Progman: 0x{:X}", progman as isize);
 
         // ===== 2. 发送 0x052C 消息触发 WorkerW 创建 =====
         let mut _result: usize = 0;
@@ -101,57 +102,24 @@ pub fn embed_in_desktop(
 
         // ===== 3. 准备窗口样式（SetParent 之前） =====
 
-        // 3a. 禁用 DWM 圆角（顶层窗口时设置有效）
-        {
-            const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-            const DWMWCP_DONOTROUND: u32 = 1;
-            let corner_pref: u32 = DWMWCP_DONOTROUND;
-            let hr = DwmSetWindowAttribute(
-                hwnd as HWND,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                &corner_pref as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            );
-            if hr == 0 {
-                println!("[DesktopEmbedder] DWM: Corner preference set to DONOTROUND");
-            } else {
-                println!(
-                    "[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE not supported (hr=0x{:X})",
-                    hr
-                );
-            }
-        }
-
-        // 3b. 禁用 DWM NC 渲染
+        // 3a. 禁用 DWM NC 渲染
         {
             const DWMWA_NCRENDERING_POLICY: u32 = 2;
             const DWMNCRP_DISABLED: u32 = 1;
             let ncrp: u32 = DWMNCRP_DISABLED;
-            DwmSetWindowAttribute(
+            let hr = DwmSetWindowAttribute(
                 hwnd as HWND,
                 DWMWA_NCRENDERING_POLICY,
                 &ncrp as *const u32 as *const _,
                 std::mem::size_of::<u32>() as u32,
             );
-            println!("[DesktopEmbedder] DWM: NC rendering policy set to DISABLED");
-        }
-
-        // 3c. 设置 DWM 透明化（Cloak）— 让 DWM 将窗口视为透明合成层
-        //     DWMWA_CLOAK = 13, 值 = 2 (DWM_CLOAKED_APP)
-        //     这可以帮助消除 DWM 在子窗口边缘绘制的任何装饰
-        {
-            // 先 cloak，SetParent 后再 uncloak
-            const DWMWA_CLOAK: u32 = 13;
-            let cloak_val: u32 = 2;
-            let _ = DwmSetWindowAttribute(
-                hwnd as HWND,
-                DWMWA_CLOAK,
-                &cloak_val as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
+            println!(
+                "[DesktopEmbedder] DWM: NC rendering policy set to DISABLED (hr=0x{:X})",
+                hr
             );
         }
 
-        // 3d. 清除窗口样式中的所有边框位，设置为子窗口
+        // 3b. 清除窗口样式中的所有边框位，设置为子窗口
         let style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
         let clean_style = (style
             & !(WS_CAPTION as isize)
@@ -162,7 +130,7 @@ pub fn embed_in_desktop(
             | WS_VISIBLE as isize;
         SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, clean_style);
 
-        // 3e. 设置扩展样式：WS_EX_LAYERED + WS_EX_TRANSPARENT（鼠标穿透）
+        // 3c. 设置扩展样式：WS_EX_LAYERED + WS_EX_TRANSPARENT（鼠标穿透）
         let ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
         let clean_ex = (ex_style
             & !(WS_EX_CLIENTEDGE as isize)
@@ -173,13 +141,13 @@ pub fn embed_in_desktop(
             | WS_EX_TRANSPARENT as isize;
         SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, clean_ex);
 
-        // 3f. 设置 Layered 窗口属性：完全不透明
+        // 3d. 设置 Layered 窗口属性：完全不透明
         SetLayeredWindowAttributes(hwnd as HWND, 0, 0xFF, LWA_ALPHA);
 
-        // 3g. SWP_FRAMECHANGED 强制系统重新计算窗口框架
+        // 3e. SWP_FRAMECHANGED 强制系统重新计算窗口框架
         SetWindowPos(
             hwnd as HWND,
-            std::ptr::null_mut(),
+            std::ptr::null_mut(), // HWND_TOP，此处不关心 Z-order
             0,
             0,
             0,
@@ -195,7 +163,7 @@ pub fn embed_in_desktop(
         // 这样壁纸窗口和 SHELLDLL_DefView 成为兄弟窗口，
         // 通过 Z-order 控制壁纸在图标层之下。
         let prev_parent = SetParent(hwnd as HWND, progman);
-        if prev_parent.is_null() {
+        if prev_parent == std::ptr::null_mut() {
             return Err("SetParent to Progman failed".into());
         }
         println!(
@@ -203,17 +171,16 @@ pub fn embed_in_desktop(
             hwnd, progman as isize
         );
 
-        // 4a. Uncloak 窗口
-        {
-            const DWMWA_CLOAK: u32 = 13;
-            let uncloak_val: u32 = 0;
-            let _ = DwmSetWindowAttribute(
-                hwnd as HWND,
-                DWMWA_CLOAK,
-                &uncloak_val as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            );
-        }
+        // 4a. SetParent 后再次清除样式（SetParent 可能重置部分样式）
+        let style_after = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
+        let clean_style_after = (style_after
+            & !(WS_CAPTION as isize)
+            & !(WS_THICKFRAME as isize)
+            & !(WS_BORDER as isize)
+            & !(WS_DLGFRAME as isize))
+            | WS_CHILD as isize
+            | WS_VISIBLE as isize;
+        SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, clean_style_after);
 
         // 4b. 再次设置 DWM NC 渲染策略（SetParent 可能重置）
         {
@@ -240,13 +207,20 @@ pub fn embed_in_desktop(
         );
 
         // ===== 5. 定位窗口到目标显示器区域 =====
+        //
+        // 注意：作为 Progman 的子窗口，坐标是相对于 Progman 客户区的。
+        // Progman 的客户区覆盖整个虚拟桌面，所以 monitor_x/monitor_y 可以直接使用。
         MoveWindow(
             hwnd as HWND,
             monitor_x,
             monitor_y,
             monitor_width,
             monitor_height,
-            1,
+            1, // bRepaint = TRUE
+        );
+        println!(
+            "[DesktopEmbedder] MoveWindow: pos=({},{}), size={}x{}",
+            monitor_x, monitor_y, monitor_width, monitor_height
         );
 
         // ===== 6. 调整 Z-order：壁纸窗口放到 SHELLDLL_DefView 之下 =====
@@ -285,13 +259,17 @@ pub fn embed_in_desktop(
 }
 
 /// 修正单个壁纸窗口的 Z-order，使其位于 SHELLDLL_DefView 之下
+///
+/// Z-order 规则：
+/// - Progman 的子窗口列表中，Z-order 从高到低排列
+/// - SetWindowPos(hwnd, hWndInsertAfter, ...) 将 hwnd 放到 hWndInsertAfter 之后
+/// - "之后" = Z-order 更低 = 视觉上在下面
+/// - 我们需要壁纸在 DefView（桌面图标层）之下
 #[cfg(target_os = "windows")]
 unsafe fn fix_zorder_for_hwnd(progman: HWND, wallpaper_hwnd: HWND) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDNEXT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
 
-    // 在 Progman 的子窗口中找到 SHELLDLL_DefView
+    // 先在 Progman 的直接子窗口中找 SHELLDLL_DefView
     let defview = FindWindowExW(
         progman,
         std::ptr::null_mut(),
@@ -299,50 +277,73 @@ unsafe fn fix_zorder_for_hwnd(progman: HWND, wallpaper_hwnd: HWND) {
         std::ptr::null(),
     );
 
-    if defview.is_null() {
-        // SHELLDLL_DefView 可能在 WorkerW 中（经典布局），尝试在 WorkerW 中查找
-        let workerw = find_workerw_with_defview();
-        if !workerw.is_null() {
-            // 如果 DefView 在 WorkerW 中，我们需要把壁纸窗口放到该 WorkerW 之下
-            SetWindowPos(
-                wallpaper_hwnd,
-                workerw,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-            println!(
-                "[DesktopEmbedder] Z-order: HWND 0x{:X} placed after WorkerW(DefView) 0x{:X}",
-                wallpaper_hwnd as isize, workerw as isize
-            );
-        } else {
-            println!("[DesktopEmbedder] WARNING: Cannot find SHELLDLL_DefView anywhere!");
-        }
+    if defview != std::ptr::null_mut() {
+        // 情况 A：SHELLDLL_DefView 是 Progman 的直接子窗口
+        // 壁纸窗口也是 Progman 的子窗口，它们是兄弟关系
+        // 将壁纸放到 DefView 之后（Z-order 更低 = 视觉上在下面）
+        let ret = SetWindowPos(
+            wallpaper_hwnd,
+            defview,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        println!(
+            "[DesktopEmbedder] Z-order: HWND 0x{:X} placed after DefView 0x{:X} (ret={})",
+            wallpaper_hwnd as isize, defview as isize, ret
+        );
         return;
     }
 
-    // SHELLDLL_DefView 在 Progman 中（Direct Child 布局）
-    // 将壁纸窗口放到 DefView 之后（Z-order 更低 = 视觉上在下面）
-    SetWindowPos(
-        wallpaper_hwnd,
-        defview,
-        0,
-        0,
-        0,
-        0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-    );
-    println!(
-        "[DesktopEmbedder] Z-order: HWND 0x{:X} placed after DefView 0x{:X}",
-        wallpaper_hwnd as isize, defview as isize
-    );
+    // 情况 B：SHELLDLL_DefView 不在 Progman 中，可能在某个 WorkerW 中
+    // 这是 0x052C 消息触发后的经典布局
+    let workerw_with_defview = find_workerw_with_defview();
+    if workerw_with_defview != std::ptr::null_mut() {
+        // 找到包含 DefView 的 WorkerW 后，需要找到另一个空的 WorkerW
+        // 在经典布局中，有两个 WorkerW：
+        //   - WorkerW1: 包含 SHELLDLL_DefView（桌面图标）
+        //   - WorkerW2: 空的，用于壁纸渲染
+        // 但在 Direct Child 方案中，我们不嵌入 WorkerW，而是嵌入 Progman
+        // 所以壁纸窗口和 WorkerW 不是兄弟关系（壁纸在 Progman 下，WorkerW 是顶层窗口）
+        //
+        // 这种情况下，我们需要把壁纸放到 Progman 子窗口列表的最底部
+        // 因为 Progman 本身在 Z-order 上低于 WorkerW（包含 DefView 的那个）
+        use windows_sys::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
+        let ret = SetWindowPos(
+            wallpaper_hwnd,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        println!(
+            "[DesktopEmbedder] Z-order: HWND 0x{:X} placed at HWND_BOTTOM (DefView in WorkerW 0x{:X}, ret={})",
+            wallpaper_hwnd as isize, workerw_with_defview as isize, ret
+        );
+    } else {
+        println!("[DesktopEmbedder] WARNING: Cannot find SHELLDLL_DefView anywhere!");
+        // 兜底：放到最底部
+        use windows_sys::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
+        SetWindowPos(
+            wallpaper_hwnd,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
 }
 
 /// 查找包含 SHELLDLL_DefView 的 WorkerW 窗口
 #[cfg(target_os = "windows")]
 unsafe fn find_workerw_with_defview() -> HWND {
+    // 使用 AtomicIsize 在回调中存储结果
     static FOUND: AtomicIsize = AtomicIsize::new(0);
     FOUND.store(0, Ordering::SeqCst);
 
@@ -353,11 +354,11 @@ unsafe fn find_workerw_with_defview() -> HWND {
             encode_wide("SHELLDLL_DefView\0").as_ptr(),
             std::ptr::null(),
         );
-        if !defview.is_null() {
+        if defview != std::ptr::null_mut() {
             FOUND.store(hwnd as isize, Ordering::SeqCst);
             return 0; // 停止枚举
         }
-        1
+        1 // 继续枚举
     }
 
     EnumWindows(Some(enum_cb), 0);
@@ -392,7 +393,9 @@ fn start_zorder_timer() {
                     _ => {
                         // 没有嵌入窗口了，停止定时器
                         ZORDER_TIMER_RUNNING.store(false, Ordering::SeqCst);
-                        println!("[DesktopEmbedder] Z-order monitor timer stopped (no embedded windows)");
+                        println!(
+                            "[DesktopEmbedder] Z-order monitor timer stopped (no embedded windows)"
+                        );
                         return;
                     }
                 }
@@ -405,91 +408,12 @@ fn start_zorder_timer() {
             let progman = progman_val as HWND;
 
             unsafe {
-                // 找到 SHELLDLL_DefView 的位置（可能在 Progman 或 WorkerW 中）
-                let defview_in_progman = FindWindowExW(
-                    progman,
-                    std::ptr::null_mut(),
-                    encode_wide("SHELLDLL_DefView\0").as_ptr(),
-                    std::ptr::null(),
-                );
-
                 for ew in &windows {
-                    if defview_in_progman.is_null() {
-                        // DefView 在 WorkerW 中，找到那个 WorkerW
-                        let workerw = find_workerw_with_defview();
-                        if !workerw.is_null() {
-                            // 检查壁纸窗口是否在 WorkerW 之后
-                            if !is_hwnd_after(ew.hwnd as HWND, workerw, progman) {
-                                use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                                };
-                                SetWindowPos(
-                                    ew.hwnd as HWND,
-                                    workerw,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                                );
-                                println!(
-                                    "[DesktopEmbedder] Z-order fix: HWND 0x{:X} repositioned after WorkerW 0x{:X}",
-                                    ew.hwnd, workerw as isize
-                                );
-                            }
-                        }
-                    } else {
-                        // DefView 在 Progman 中，壁纸应在 DefView 之后
-                        if !is_hwnd_after(ew.hwnd as HWND, defview_in_progman, progman) {
-                            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                            };
-                            SetWindowPos(
-                                ew.hwnd as HWND,
-                                defview_in_progman,
-                                0,
-                                0,
-                                0,
-                                0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                            );
-                            println!(
-                                "[DesktopEmbedder] Z-order fix: HWND 0x{:X} repositioned after DefView 0x{:X}",
-                                ew.hwnd, defview_in_progman as isize
-                            );
-                        }
-                    }
+                    fix_zorder_for_hwnd(progman, ew.hwnd as HWND);
                 }
             }
         }
     });
-}
-
-/// 检查 target_hwnd 是否在 after_hwnd 的紧后面（Z-order 上更低）
-///
-/// 在父窗口的子窗口列表中，Z-order 从高到低排列。
-/// 我们需要确保 target_hwnd 在 after_hwnd 之后（即 Z-order 更低）。
-#[cfg(target_os = "windows")]
-unsafe fn is_hwnd_after(target_hwnd: HWND, after_hwnd: HWND, _parent: HWND) -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::GW_HWNDNEXT;
-
-    // 从 after_hwnd 开始往下遍历，看 target_hwnd 是否紧跟其后
-    let next = GetWindow(after_hwnd, GW_HWNDNEXT);
-    if next == target_hwnd {
-        return true;
-    }
-
-    // 如果不是紧跟其后，检查是否在 after_hwnd 之后的任意位置
-    // （允许中间有其他壁纸窗口）
-    let mut current = next;
-    while !current.is_null() {
-        if current == target_hwnd {
-            return true;
-        }
-        current = GetWindow(current, GW_HWNDNEXT);
-    }
-
-    false
 }
 
 /// 从桌面层级中移除嵌入的窗口

@@ -272,6 +272,7 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
         //     DWMWA_WINDOW_CORNER_PREFERENCE 只对顶层窗口生效，
         //     SetParent 后窗口变为子窗口就无法设置了。
         //     所以必须在 SetParent 之前调用。
+        let corner_disabled_ok;
         {
             use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 
@@ -288,8 +289,10 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
                 std::mem::size_of::<u32>() as u32,
             );
             if hr == 0 {
+                corner_disabled_ok = true;
                 println!("[DesktopEmbedder] DWM: Window corner preference set to DONOTROUND (pre-SetParent)");
             } else {
+                corner_disabled_ok = false;
                 println!("[DesktopEmbedder] DWM: DWMWA_WINDOW_CORNER_PREFERENCE failed (hr=0x{:X}), will use overscan fallback", hr);
             }
 
@@ -386,28 +389,25 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
         } else {
             println!("[DesktopEmbedder] Plan A success: WM_NCCALCSIZE interception eliminated NC offset!");
 
-            // ===== 6a. DWM 圆角过扫描补偿 =====
+            // ===== 6a. DWM 圆角过扫描补偿（仅在圆角禁用失败时启用） =====
             //
-            // 问题：24H2 的 DWM 会在合成层面对子窗口应用圆角渲染，
-            // 而 DWMWA_WINDOW_CORNER_PREFERENCE 对子窗口无效（返回 ERROR_INVALID_HANDLE）。
-            // 这导致窗口四角（尤其是右上角）出现 1-2px 的圆角缺口。
-            //
-            // 解决方案：微量过扫描（overscan）
-            // 在四边各多扩展 2px，让 DWM 的圆角区域溢出到显示器可视区域之外，
-            // 被 WorkerW 的裁剪区域（clip region）自然裁掉，视觉上圆角消失。
-            //
-            // 这不会影响 WebView 内容渲染——多出的 2px 在显示器边缘之外，
-            // 用户看不到，但足以覆盖 DWM 的圆角半径。
-            const OVERSCAN: i32 = 2;
-            let os_x = target_x - OVERSCAN;
-            let os_y = target_y - OVERSCAN;
-            let os_w = target_w + OVERSCAN * 2;
-            let os_h = target_h + OVERSCAN * 2;
-            MoveWindow(hwnd as HWND, os_x, os_y, os_w, os_h, 1);
-            println!(
-                "[DesktopEmbedder] DWM corner overscan: pos=({}, {}), size={}x{} (overscan={}px per edge)",
-                os_x, os_y, os_w, os_h, OVERSCAN
-            );
+            // 如果 DWMWA_WINDOW_CORNER_PREFERENCE 在 pre-SetParent 阶段成功设置，
+            // 则 DWM 圆角已被禁用，不需要 overscan。
+            // 只有当圆角禁用失败时，才通过微量过扫描来裁掉圆角区域。
+            if !corner_disabled_ok {
+                const OVERSCAN: i32 = 2;
+                let os_x = target_x - OVERSCAN;
+                let os_y = target_y - OVERSCAN;
+                let os_w = target_w + OVERSCAN * 2;
+                let os_h = target_h + OVERSCAN * 2;
+                MoveWindow(hwnd as HWND, os_x, os_y, os_w, os_h, 1);
+                println!(
+                    "[DesktopEmbedder] DWM corner overscan: pos=({}, {}), size={}x{} (overscan={}px per edge)",
+                    os_x, os_y, os_w, os_h, OVERSCAN
+                );
+            } else {
+                println!("[DesktopEmbedder] DWM corner already disabled via DWMWA_WINDOW_CORNER_PREFERENCE, no overscan needed");
+            }
         }
 
         println!(

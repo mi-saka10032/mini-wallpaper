@@ -32,7 +32,8 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
         },
         UI::WindowsAndMessaging::{
             GetClientRect, GetWindowLongPtrW, GetWindowRect, MoveWindow, SetWindowLongPtrW,
-            SetWindowPos, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+            SetWindowPos, SetLayeredWindowAttributes, GWL_EXSTYLE, GWL_STYLE, LWA_ALPHA,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_CHILD,
             WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
             WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_THICKFRAME, WS_VISIBLE,
@@ -66,11 +67,7 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             std::ptr::null(),
         );
 
-        // 3. 枚举所有顶层窗口，找到目标 WorkerW
-        // let workerw = find_workerw()?;
-
         // 使用前端传入的显示器坐标和尺寸（单个显示器的物理分辨率）
-        // 而非 WorkerW 客户区（覆盖整个虚拟桌面，多显示器下会合并）
         let target_x = monitor_x;
         let target_y = monitor_y;
         let target_w = monitor_width;
@@ -81,26 +78,20 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             target_x, target_y, target_w, target_h
         );
 
-        // 4. SetParent 嵌入
-        let prev_parent = SetParent(hwnd as HWND, workerw);
-        if prev_parent == std::ptr::null_mut() {
-            return Err("SetParent failed".into());
-        }
-
-        // ===== 5. 修复 24H2 非客户区偏移问题 =====
+        // ===== 3. 方案 B：在 SetParent 之前设置 WS_EX_LAYERED =====
         //
-        // Windows 11 24H2 在 SetParent 后会重新触发 WM_NCCALCSIZE，
-        // 可能给无边框子窗口注入隐藏边框（~8px），导致：
-        // - X 轴：壁纸内容整体右移
-        // - Y 轴：顶部出现白边间隙
+        // Windows 11 24H2 改变了 DWM 桌面合成机制，要求嵌入桌面的窗口
+        // 必须是 Layered 窗口才能正确参与合成。如果在 SetParent 之后才设置
+        // WS_EX_LAYERED，DWM 已经按非 Layered 窗口的方式处理了 NC 区域，
+        // 会注入隐藏边框（~8px 偏移）。
         //
-        // 修复策略：
-        // 1. 清除所有边框样式 → SWP_FRAMECHANGED 强制重算 NC 区域
-        // 2. 以前端传入的显示器物理分辨率为目标尺寸（避免 WorkerW 客户区合并多显示器）
-        // 3. 精确测量四边 NC 偏移（不假设对称），反向补偿
-        // 4. 测量→补偿→验证 闭环
+        // 方案 B 的核心思路：
+        // 1. 在 SetParent 之前就将窗口标记为 Layered 并清除所有边框样式
+        // 2. 调用 SetLayeredWindowAttributes 设置完全不透明（bAlpha=0xFF）
+        // 3. 这样 DWM 在 SetParent 触发的 WM_NCCALCSIZE 中就不会注入 NC 边框
+        // 4. 从根源消除偏移问题，无需事后补偿
 
-        // 5a. 清除窗口样式中可能被注入的边框位
+        // 3a. 清除窗口样式中的所有边框位
         let style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
         let clean_style = (style
             & !(WS_CAPTION as isize)
@@ -111,15 +102,13 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             | WS_VISIBLE as isize;
         SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, clean_style);
 
-        // 5b. 清除扩展样式中的边框位，并设置鼠标事件穿透
+        // 3b. 设置扩展样式：WS_EX_LAYERED + WS_EX_TRANSPARENT（鼠标穿透）
+        //     清除所有可能的边框扩展样式
         //
-        // WS_EX_LAYERED + WS_EX_TRANSPARENT 组合效果：
-        // - WS_EX_LAYERED：将窗口标记为分层窗口，启用 alpha 混合能力
-        // - WS_EX_TRANSPARENT：让窗口在命中测试（hit-test）中被跳过，
+        // WS_EX_LAYERED：将窗口标记为分层窗口，启用 alpha 混合能力
+        //   - 24H2 要求壁纸窗口必须是 Layered 才能正确参与 DWM 合成
+        // WS_EX_TRANSPARENT：让窗口在命中测试（hit-test）中被跳过，
         //   鼠标点击会穿透到 Z-order 下方的窗口（即桌面图标层 SHELLDLL_DefView）
-        //
-        // 这样用户在桌面上的所有鼠标操作（左键点击图标、右键弹出桌面菜单、
-        // 拖拽选择等）都会直接作用于桌面，而非被 WebView 拦截
         let ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
         let clean_ex = (ex_style
             & !(WS_EX_CLIENTEDGE as isize)
@@ -130,8 +119,13 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             | WS_EX_TRANSPARENT as isize;
         SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, clean_ex);
 
-        // 5c. SWP_FRAMECHANGED 强制系统重新发送 WM_NCCALCSIZE，
-        //     在边框样式已清除的情况下，NC 区域会被重算为 0
+        // 3c. 设置 Layered 窗口属性：完全不透明（bAlpha=0xFF）
+        //     这是 24H2 下 Layered 窗口正确显示的关键调用
+        //     如果不调用此函数，Layered 窗口默认是完全透明（不可见）的
+        SetLayeredWindowAttributes(hwnd as HWND, 0, 0xFF, LWA_ALPHA);
+
+        // 3d. SWP_FRAMECHANGED 强制系统重新发送 WM_NCCALCSIZE，
+        //     在边框样式已清除 + Layered 已设置的情况下，NC 区域应被重算为 0
         SetWindowPos(
             hwnd as HWND,
             std::ptr::null_mut(),
@@ -142,75 +136,77 @@ pub fn embed_in_desktop(hwnd: isize, monitor_x: i32, monitor_y: i32, monitor_wid
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
         );
 
-        // 5d. 先将窗口移到 WorkerW 中该显示器对应的位置，尺寸设为目标尺寸
-        //     注意：WorkerW 覆盖整个虚拟桌面，所以需要用显示器在虚拟桌面中的坐标定位
-        //     这是初始定位，后续会根据实际测量结果进行补偿
+        println!("[DesktopEmbedder] Pre-SetParent: WS_EX_LAYERED set, SetLayeredWindowAttributes(0xFF) called");
+
+        // ===== 4. SetParent 嵌入 =====
+        let prev_parent = SetParent(hwnd as HWND, workerw);
+        if prev_parent == std::ptr::null_mut() {
+            return Err("SetParent failed".into());
+        }
+
+        // 4a. SetParent 后再次 SWP_FRAMECHANGED，确保 NC 区域在新父窗口下也正确
+        SetWindowPos(
+            hwnd as HWND,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+        );
+
+        // ===== 5. 定位窗口到目标显示器区域 =====
         MoveWindow(hwnd as HWND, target_x, target_y, target_w, target_h, 1);
 
-        // 5e. 测量→补偿→验证 闭环（最多 3 轮）
-        //
-        // 原理：MoveWindow 设置的是窗口矩形（包含 NC 区域），但我们需要的是
-        // 客户区完全覆盖该显示器区域。如果存在 NC 偏移，客户区会比窗口矩形小，
-        // 导致右侧/底部出现缺口。
-        //
-        // 通过测量 "窗口矩形 vs 客户区矩形" 的差值，精确计算四边 NC 尺寸，
-        // 然后扩大窗口矩形并偏移位置来补偿。
-        let mut final_x = target_x;
-        let mut final_y = target_y;
-        let mut final_w = target_w;
-        let mut final_h = target_h;
+        // ===== 6. 验证：测量实际 NC 偏移，输出日志 =====
+        //     如果方案 B 生效，NC 偏移应该全部为 0
+        let mut win_rect: RECT = zeroed();
+        GetWindowRect(hwnd as HWND, &mut win_rect);
 
-        for round in 0..3 {
-            // 测量当前窗口矩形和客户区矩形
-            let mut win_rect: RECT = zeroed();
-            GetWindowRect(hwnd as HWND, &mut win_rect);
+        let mut client_rect: RECT = zeroed();
+        GetClientRect(hwnd as HWND, &mut client_rect);
 
-            let mut client_rect: RECT = zeroed();
-            GetClientRect(hwnd as HWND, &mut client_rect);
+        let mut client_origin = POINT { x: 0, y: 0 };
+        ClientToScreen(hwnd as HWND, &mut client_origin);
 
-            // 客户区左上角在屏幕上的坐标
-            let mut client_origin = POINT { x: 0, y: 0 };
-            ClientToScreen(hwnd as HWND, &mut client_origin);
+        let nc_left = client_origin.x - win_rect.left;
+        let nc_top = client_origin.y - win_rect.top;
+        let nc_right = win_rect.right - (client_origin.x + client_rect.right);
+        let nc_bottom = win_rect.bottom - (client_origin.y + client_rect.bottom);
 
-            // 四边 NC 尺寸（精确测量，不假设对称）
-            let nc_left = client_origin.x - win_rect.left;
-            let nc_top = client_origin.y - win_rect.top;
-            let nc_right = win_rect.right - (client_origin.x + client_rect.right);
-            let nc_bottom = win_rect.bottom - (client_origin.y + client_rect.bottom);
+        let client_w = client_rect.right - client_rect.left;
+        let client_h = client_rect.bottom - client_rect.top;
 
-            let client_w = client_rect.right - client_rect.left;
-            let client_h = client_rect.bottom - client_rect.top;
+        println!(
+            "[DesktopEmbedder] Verify: NC edges L={} T={} R={} B={}, client={}x{}, target={}x{}",
+            nc_left, nc_top, nc_right, nc_bottom, client_w, client_h, target_w, target_h
+        );
 
+        if nc_left != 0 || nc_top != 0 || nc_right != 0 || nc_bottom != 0 {
             println!(
-                "[DesktopEmbedder] Round {}: NC edges L={} T={} R={} B={}, client={}x{}, target={}x{}",
-                round, nc_left, nc_top, nc_right, nc_bottom, client_w, client_h, target_w, target_h
+                "[DesktopEmbedder] WARNING: NC offset still present after Plan B! L={} T={} R={} B={}",
+                nc_left, nc_top, nc_right, nc_bottom
             );
-
-            // 如果客户区已经完全覆盖目标区域，补偿完成
-            if nc_left == 0 && nc_top == 0 && nc_right == 0 && nc_bottom == 0
-                && client_w == target_w && client_h == target_h
-            {
-                println!("[DesktopEmbedder] Round {}: No NC offset, perfect fit!", round);
-                break;
-            }
-
-            // 计算补偿：窗口位置向左上偏移 NC 尺寸，窗口大小扩大 NC 总量
-            final_x = target_x - nc_left;
-            final_y = target_y - nc_top;
-            final_w = target_w + nc_left + nc_right;
-            final_h = target_h + nc_top + nc_bottom;
-
             println!(
-                "[DesktopEmbedder] Round {}: Compensating → pos=({}, {}), size={}x{}",
-                round, final_x, final_y, final_w, final_h
+                "[DesktopEmbedder] Falling back to NC compensation...",
             );
-
-            MoveWindow(hwnd as HWND, final_x, final_y, final_w, final_h, 1);
+            // 回退：如果 Layered 前置仍未消除 NC，则进行一次补偿
+            let comp_x = target_x - nc_left;
+            let comp_y = target_y - nc_top;
+            let comp_w = target_w + nc_left + nc_right;
+            let comp_h = target_h + nc_top + nc_bottom;
+            MoveWindow(hwnd as HWND, comp_x, comp_y, comp_w, comp_h, 1);
+            println!(
+                "[DesktopEmbedder] Compensated → pos=({}, {}), size={}x{}",
+                comp_x, comp_y, comp_w, comp_h
+            );
+        } else {
+            println!("[DesktopEmbedder] Plan B success: No NC offset detected!");
         }
 
         println!(
-            "[DesktopEmbedder] Embedded HWND {:?} into WorkerW {:?} (final: pos=({},{}), size={}x{})",
-            hwnd, workerw, final_x, final_y, final_w, final_h
+            "[DesktopEmbedder] Embedded HWND {:?} into WorkerW {:?} (pos=({},{}), size={}x{})",
+            hwnd, workerw, target_x, target_y, target_w, target_h
         );
 
         Ok(())

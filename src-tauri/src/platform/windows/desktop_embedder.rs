@@ -23,11 +23,42 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, FindWindowW, GetClassNameW, GetWindow, MoveWindow,
     SendMessageTimeoutW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, SMTO_NORMAL,
 };
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Graphics::Gdi::CreateRectRgn;
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 #[cfg(target_os = "windows")]
 use std::sync::Mutex;
+
+// ===== DWM API 原始 FFI 声明 =====
+// windows-sys 中 DwmExtendFrameIntoClientArea / DwmEnableBlurBehindWindow 可能缺失，
+// 直接通过 extern 绑定 dwmapi.dll
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct MARGINS {
+    pub cxLeftWidth: i32,
+    pub cxRightWidth: i32,
+    pub cyTopHeight: i32,
+    pub cyBottomHeight: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct DWM_BLURBEHIND {
+    pub dwFlags: u32,
+    pub fEnable: i32,
+    pub hRgnBlur: windows_sys::Win32::Graphics::Gdi::HRGN,
+    pub fTransitionOnMaximized: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmExtendFrameIntoClientArea(hwnd: HWND, pMarInset: *const MARGINS) -> i32;
+    fn DwmEnableBlurBehindWindow(hwnd: HWND, pBlurBehind: *const DWM_BLURBEHIND) -> i32;
+}
 
 // ===== 全局状态 =====
 
@@ -161,11 +192,6 @@ pub fn embed_in_desktop(
     monitor_width: i32,
     monitor_height: i32,
 ) -> Result<(), String> {
-    use windows_sys::Win32::Graphics::Dwm::{
-        DwmEnableBlurBehindWindow, DwmExtendFrameIntoClientArea,
-        DWM_BLURBEHIND, MARGINS,
-    };
-    use windows_sys::Win32::Graphics::Gdi::CreateRectRgn;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetLayeredWindowAttributes, GWL_EXSTYLE, GWL_STYLE,
         GW_HWNDPREV, HWND_BOTTOM, HWND_TOP, LWA_ALPHA,

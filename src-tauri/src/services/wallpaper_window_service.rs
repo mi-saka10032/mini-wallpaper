@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use log::{error, info, warn};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
@@ -79,7 +80,6 @@ impl WallpaperWindowManager {
         // Windows 平台：嵌入桌面
         #[cfg(target_os = "windows")]
         {
-            // 获取 HWND 并嵌入，传入该显示器在虚拟桌面中的坐标和物理分辨率
             if let Ok(hwnd) = window.hwnd() {
                 let hwnd_isize = hwnd.0 as isize;
                 if let Err(e) = desktop_embedder::embed_in_desktop(
@@ -89,7 +89,8 @@ impl WallpaperWindowManager {
                     width as i32,
                     height as i32,
                 ) {
-                    eprintln!("[WallpaperWindowManager] embed failed: {}", e);
+                    // anyhow::Error 使用 {:#} 输出完整错误链
+                    error!("桌面嵌入失败: {:#}", e);
                     // 嵌入失败不阻止窗口创建，壁纸仍然可以显示为普通窗口
                 }
             }
@@ -99,8 +100,8 @@ impl WallpaperWindowManager {
         let _ = window.show();
 
         self.windows.insert(monitor_id.to_string(), label.clone());
-        println!(
-            "[WallpaperWindowManager] Created window '{}' for monitor '{}' at ({}, {}) {}x{}",
+        info!(
+            "壁纸窗口已创建: label='{}', monitor='{}', pos=({}, {}), size={}x{}",
             label, monitor_id, x, y, width, height
         );
 
@@ -120,10 +121,7 @@ impl WallpaperWindowManager {
                 }
                 let _ = window.close();
             }
-            println!(
-                "[WallpaperWindowManager] Destroyed window for monitor '{}'",
-                monitor_id
-            );
+            info!("壁纸窗口已销毁: monitor='{}'", monitor_id);
         }
     }
 

@@ -1,4 +1,5 @@
 use sea_orm::DatabaseConnection;
+use log::info;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
@@ -35,6 +36,11 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // 初始化日志系统
+            env_logger::Builder::from_env(
+                env_logger::Env::default().default_filter_or("info")
+            ).init();
+
             let handle = app.handle().clone();
 
             // 同步初始化数据库（release 模式下 <50ms）

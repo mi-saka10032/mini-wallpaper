@@ -308,34 +308,75 @@ MoveWindow(hwnd, comp_x, comp_y, comp_w, comp_h, 1);
 
 ## 六、代码架构
 
+### 6.1 设计模式：策略模式（Strategy Pattern）
+
+重构后采用策略模式封装不同 Windows 版本的嵌入行为差异：
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  EmbedStrategy trait                  │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  + name() -> &str                             │  │
+│  │  + find_workerw(progman) -> Result<HWND>      │  │
+│  │  + embed(hwnd, workerw, rect) -> Result<()>   │  │
+│  └───────────────────┬───────────────────────────┘  │
+│                      │                               │
+│          ┌───────────┴───────────┐                   │
+│          │                       │                   │
+│  ┌───────┴───────┐   ┌──────────┴──────────┐       │
+│  │ ModernStrategy │   │  LegacyStrategy     │       │
+│  │  (24H2+)      │   │  (Win7~Win11 23H2)  │       │
+│  │               │   │                     │       │
+│  │ • WndProc 子类化│   │ • 简单 SetParent    │       │
+│  │ • 样式清理     │   │ • WS_EX_TRANSPARENT │       │
+│  │ • NC 补偿      │   │ • MoveWindow        │       │
+│  └───────────────┘   └─────────────────────┘       │
+│                                                      │
+│  select_strategy() → 根据版本自动选择                  │
+└─────────────────────────────────────────────────────┘
+```
+
+### 6.2 日志与错误处理
+
+| 组件 | 方案 | 说明 |
+|------|------|------|
+| **日志** | `log` + `env_logger` | Rust 标准日志门面，通过 `RUST_LOG` 环境变量控制级别 |
+| **错误处理** | `anyhow` | 应用级错误处理，支持 `.context()` 错误链和 `bail!` 宏 |
+
+日志级别使用规范：
+- `error!` — 嵌入失败等不可恢复错误
+- `warn!` — 降级路径、子类化槽位不足等可恢复异常
+- `info!` — 版本检测结果、嵌入完成、策略选择等关键流程
+- `debug!` — WndProc 替换地址、子类化槽位分配等调试信息
+
+### 6.3 模块结构
+
 ```
 desktop_embedder.rs
 │
-├── 全局状态
-│   ├── ORIGINAL_WNDPROCS[8]  — 保存原始 WndProc（支持最多 8 个显示器）
-│   └── SUBCLASSED_HWNDS[8]   — 保存对应的 HWND
+├── EmbedStrategy trait          — 嵌入策略接口
+│   ├── ModernStrategy           — 24H2+ 实现（WndProc 子类化 + 样式清理 + NC 补偿）
+│   └── LegacyStrategy           — 旧版本实现（经典 SetParent + MoveWindow）
 │
-├── WndProc 子类化（仅 24H2+ 使用）
-│   ├── find_original_wndproc() — 根据 HWND 查找原始 WndProc
-│   ├── register_subclass()     — 注册子类化信息到全局槽位
-│   └── subclass_wndproc()      — 替换的窗口过程（拦截 WM_NCCALCSIZE）
+├── WndProc 子类化基础设施（仅 ModernStrategy 使用）
+│   ├── ORIGINAL_WNDPROCS[8]     — 原始 WndProc 全局槽位
+│   ├── SUBCLASSED_HWNDS[8]      — 对应 HWND 全局槽位
+│   ├── find_original_wndproc()  — 根据 HWND 查找原始 WndProc
+│   ├── register_subclass()      — 注册子类化信息
+│   └── subclass_wndproc()       — 替换的窗口过程（拦截 WM_NCCALCSIZE）
 │
-├── 版本检测
-│   └── is_win11_24h2_or_later() — 通过 RtlGetVersion 检测 Build >= 26100
+├── 辅助模块
+│   ├── MonitorRect              — 显示器矩形区域值对象
+│   ├── NcOffset                 — NC 偏移测量结果
+│   ├── measure_nc_offset()      — 测量窗口 NC 偏移
+│   ├── is_win11_24h2_or_later() — 版本检测（RtlGetVersion）
+│   ├── select_strategy()        — 策略选择工厂函数
+│   ├── find_workerw_classic()   — EnumWindows 经典方案
+│   └── encode_wide()            — UTF-8 → UTF-16 编码
 │
-├── 嵌入流程
-│   └── embed_in_desktop()
-│       ├── Step 1: FindWindow("Progman")
-│       ├── Step 2: SendMessage(0x052C) 触发 WorkerW
-│       ├── Step 3: 版本检测 → is_24h2
-│       ├── Step 4: WorkerW 查找（24H2+ 直接子窗口 / 旧版本 EnumWindows）
-│       ├── Step 5a [24H2+]: 子类化 WndProc + 清理样式 + SetParent + NC 补偿
-│       └── Step 5b [旧版本]: WS_EX_TRANSPARENT + SetParent + MoveWindow
-│
-├── 辅助函数
-│   ├── find_workerw()          — EnumWindows 经典方案（旧版本 + 24H2 fallback）
-│   ├── encode_wide()           — UTF-8 → UTF-16 编码
-│   └── unembed_from_desktop()  — 从桌面层级移除窗口
+├── 公共 API
+│   ├── embed_in_desktop()       — 嵌入桌面（自动选择策略）
+│   └── unembed_from_desktop()   — 解除嵌入
 │
 └── 跨平台空实现
     └── #[cfg(not(target_os = "windows"))] 版本
@@ -376,12 +417,47 @@ de9b935  fix: Overscan 方案（8px 版本）
 ec9c6eb  fix: 精细化 overscan（仅顶部+左右）
 7beb4a7  Revert 精细化 overscan
 9f21eb6  feat: DWM_CORNER_RADIUS: 1（Overscan 1px 版本）
-         ↓ 回退 Overscan + 增加版本兼容（当前版本 ⭐）
+         ↓ 回退 Overscan + 增加版本兼容
+         ↓ refactor: 策略模式 + log 日志 + anyhow 错误处理（当前版本 ⭐）
 ```
 
 ---
 
-## 八、后续优化方向
+## 八、代码质量改进记录
+
+### 8.1 策略模式重构（2026-04-25）
+
+**动机**：原始代码在 `embed_in_desktop()` 中通过 `if is_24h2 { ... } else { ... }` 大段分支处理两种嵌入路径，函数体超过 200 行，可读性差。
+
+**改进**：
+- 引入 `EmbedStrategy` trait，定义 `name()`、`find_workerw()`、`embed()` 三个接口
+- `ModernStrategy`（24H2+）和 `LegacyStrategy`（旧版本）分别实现
+- `select_strategy()` 工厂函数根据版本自动选择
+- `embed_in_desktop()` 简化为：找 Progman → 触发 WorkerW → 选策略 → 执行
+
+### 8.2 日志系统（2026-04-25）
+
+**动机**：全项目使用 `println!` 输出日志，无级别控制、无模块信息、无运行时过滤能力。
+
+**改进**：
+- 引入 `log`（门面）+ `env_logger`（后端）
+- 所有 `println!` → `info!`/`warn!`/`debug!`/`error!`
+- 通过 `RUST_LOG` 环境变量运行时控制日志级别
+- 模块名由 `log` 自动附加，不再需要手动写 `[DesktopEmbedder]` 前缀
+
+### 8.3 错误处理（2026-04-25）
+
+**动机**：错误类型为 `Result<(), String>`，无错误链、无上下文信息、调试困难。
+
+**改进**：
+- `desktop_embedder` 模块返回 `anyhow::Result<()>`
+- 使用 `bail!` 替代 `Err("...".into())`
+- 使用 `.context()` 为错误附加上下文链
+- 调用方通过 `{:#}` 格式化输出完整错误链
+
+---
+
+## 九、后续优化方向
 
 1. **旧版本实测验证**：在 Win10 / Win11 23H2 等旧版本上验证经典嵌入路径的正确性
 2. **监听 DPI 变化**：当用户切换显示器缩放比例时，可能需要重新嵌入

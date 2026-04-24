@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use log::{info, debug};
 use tauri::Emitter;
 use tokio::task::JoinHandle;
 
@@ -44,9 +45,9 @@ impl FullscreenDetector {
 
                 if is_fullscreen != was_fullscreen {
                     if is_fullscreen {
-                        println!("[FullscreenDetector] Fullscreen app detected — pausing wallpaper");
+                        info!("检测到全屏应用 — 暂停壁纸");
                     } else {
-                        println!("[FullscreenDetector] Fullscreen app exited — resuming wallpaper");
+                        info!("全屏应用已退出 — 恢复壁纸");
                     }
 
                     let _ = app_handle.emit(
@@ -61,7 +62,7 @@ impl FullscreenDetector {
         });
 
         self.handle = Some(handle);
-        println!("[FullscreenDetector] Started");
+        info!("全屏检测器已启动");
     }
 
     /// 停止全屏检测
@@ -70,7 +71,7 @@ impl FullscreenDetector {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
-        println!("[FullscreenDetector] Stopped");
+        info!("全屏检测器已停止");
     }
 
     pub fn is_running(&self) -> bool {

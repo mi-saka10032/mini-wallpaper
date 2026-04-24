@@ -240,7 +240,7 @@ unsafe fn find_defview_globally(progman: HWND) -> (HWND, HWND) {
 ///
 /// 频闪修复：
 /// - 只有在真正需要修正时才调用 SetWindowPos
-/// - prev 是 DefView / WorkerW / 其他嵌入窗口 都视为正常
+/// - prev 是 DefView / WorkerW / 其他嵌入窗口 / null 都视为正常
 /// - 不使用 SWP_DRAWFRAME 避免触发重绘
 #[cfg(target_os = "windows")]
 unsafe fn ensure_embed_below_defview(defview: HWND, embed_wnd: HWND) -> (bool, HWND) {
@@ -249,6 +249,11 @@ unsafe fn ensure_embed_below_defview(defview: HWND, embed_wnd: HWND) -> (bool, H
     };
 
     let prev = GetWindow(embed_wnd, GW_HWNDPREV);
+
+    // prev 为 null 表示窗口已经是第一个子窗口（最顶层），层级正常
+    if prev == std::ptr::null_mut() {
+        return (true, std::ptr::null_mut());
+    }
 
     // 层级已正确：壁纸窗口的上一个兄弟就是 DefView
     if prev == defview {
@@ -545,6 +550,38 @@ pub fn embed_in_desktop(
             hwnd, embed_target as isize, prev_parent as isize
         );
 
+        // ===== 8.5 SetParent 后重新设置 WS_CHILD 样式，彻底消除 NC 区域 =====
+        //
+        // 关键原理：
+        // - 步骤6中移除 WS_CHILD 是为了让 DWM 透明 hack 生效（DWM 要求顶级窗口）
+        // - SetParent 后窗口已经是子窗口，此时显式设置 WS_CHILD 样式
+        //   可以让 Windows 完全按子窗口处理，不再有任何 NC（非客户区）边框
+        // - 这彻底解决了多屏幕场景下 NC offset 导致的 8px 缝隙问题
+        {
+            let mut child_style = GetWindowLongPtrW(hwnd as HWND, GWL_STYLE);
+            child_style |= WS_CHILD as isize;
+            // 再次确保没有任何边框样式
+            child_style &= !(WS_CAPTION as isize);
+            child_style &= !(WS_BORDER as isize);
+            child_style &= !(WS_THICKFRAME as isize);
+            child_style &= !(WS_SYSMENU as isize);
+            child_style &= !(WS_POPUP as isize);
+            child_style &= !(WS_OVERLAPPED as isize);
+            SetWindowLongPtrW(hwnd as HWND, GWL_STYLE, child_style);
+
+            // 通知系统重新计算帧（使 WS_CHILD 生效，消除 NC 区域）
+            SetWindowPos(
+                hwnd as HWND,
+                std::ptr::null_mut(),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_DRAWFRAME | 0x0004, // SWP_FRAMECHANGED | SWP_NOZORDER
+            );
+            println!(
+                "[DesktopEmbedder] Post-SetParent: WS_CHILD applied, style=0x{:X}",
+                child_style
+            );
+        }
+
         // ===== 9. Z-order 管理（参照博主代码） =====
         // 壁纸 → HWND_TOP
         SetWindowPos(
@@ -563,28 +600,28 @@ pub fn embed_in_desktop(
         );
         println!("[DesktopEmbedder] Z-order set: DefView > EmbedWnd > WorkerW");
 
-        // ===== 10. 定位窗口到目标显示器 + 方案C: Win32 层面补偿 NC offset =====
+        // ===== 10. 定位窗口到目标显示器 =====
         //
-        // 方案C（参照博主 AdjustWindowRect 方案）：
-        // 1. 先按目标尺寸 MoveWindow
-        // 2. 检测 NC offset（窗口矩形 vs 客户区矩形）
-        // 3. 如果有 NC offset，扩大窗口尺寸并偏移位置，使客户区恰好 = 显示器区域
-        // 这样 WebView 渲染区域自然覆盖整个显示器，无需前端任何补偿
+        // WS_CHILD 子窗口没有 NC 区域，窗口矩形 = 客户区矩形
+        // 因此直接 MoveWindow 到显示器坐标即可，无需任何 NC offset 补偿
         {
-            use windows_sys::Win32::Foundation::{POINT, RECT};
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                ClientToScreen, GetClientRect, GetWindowRect,
-            };
-
-            // 第一次：按目标尺寸定位窗口
             MoveWindow(
                 hwnd as HWND,
                 monitor_x, monitor_y,
                 monitor_width, monitor_height,
                 1,
             );
+            println!(
+                "[DesktopEmbedder] MoveWindow: pos=({},{}), size={}x{} (WS_CHILD, no NC compensation needed)",
+                monitor_x, monitor_y, monitor_width, monitor_height
+            );
 
-            // 检测 NC 偏移：比较窗口矩形和客户区矩形
+            // 验证：确认客户区与显示器完全匹配
+            use windows_sys::Win32::Foundation::{POINT, RECT};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                ClientToScreen, GetClientRect, GetWindowRect,
+            };
+
             let mut window_rect: RECT = std::mem::zeroed();
             let mut client_rect: RECT = std::mem::zeroed();
             GetWindowRect(hwnd as HWND, &mut window_rect);
@@ -595,7 +632,16 @@ pub fn embed_in_desktop(
             let client_w = client_rect.right - client_rect.left;
             let client_h = client_rect.bottom - client_rect.top;
 
-            if client_w != monitor_width || client_h != monitor_height {
+            let nc_w_diff = window_w - client_w;
+            let nc_h_diff = window_h - client_h;
+
+            if nc_w_diff == 0 && nc_h_diff == 0 {
+                println!(
+                    "[DesktopEmbedder] Verified: window=client={}x{}, NC offset eliminated!",
+                    client_w, client_h
+                );
+            } else {
+                // WS_CHILD 后仍有 NC offset（不应该发生），打印警告并做兜底补偿
                 let mut client_origin = POINT { x: 0, y: 0 };
                 ClientToScreen(hwnd as HWND, &mut client_origin);
 
@@ -605,13 +651,10 @@ pub fn embed_in_desktop(
                 let nc_bottom = window_h - client_h - nc_top;
 
                 println!(
-                    "[DesktopEmbedder] NC offset detected: L={} T={} R={} B={}",
+                    "[DesktopEmbedder] WARNING: NC offset still present after WS_CHILD! L={} T={} R={} B={}, applying fallback compensation",
                     nc_left, nc_top, nc_right, nc_bottom
                 );
 
-                // 方案C核心：扩大窗口尺寸，使客户区恰好覆盖显示器
-                // 窗口位置向左上偏移 NC_left/NC_top
-                // 窗口尺寸扩大 (NC_left + NC_right) / (NC_top + NC_bottom)
                 let compensated_x = monitor_x - nc_left;
                 let compensated_y = monitor_y - nc_top;
                 let compensated_w = monitor_width + nc_left + nc_right;
@@ -623,40 +666,9 @@ pub fn embed_in_desktop(
                     compensated_w, compensated_h,
                     1,
                 );
-
-                // 验证补偿结果
-                let mut verify_rect: RECT = std::mem::zeroed();
-                let mut verify_client: RECT = std::mem::zeroed();
-                GetWindowRect(hwnd as HWND, &mut verify_rect);
-                GetClientRect(hwnd as HWND, &mut verify_client);
-                let mut verify_origin = POINT { x: 0, y: 0 };
-                ClientToScreen(hwnd as HWND, &mut verify_origin);
-
-                let final_client_w = verify_client.right - verify_client.left;
-                let final_client_h = verify_client.bottom - verify_client.top;
-
                 println!(
-                    "[DesktopEmbedder] Plan C compensated: window=({},{}) {}x{}, client origin=({},{}), client size={}x{}",
-                    compensated_x, compensated_y, compensated_w, compensated_h,
-                    verify_origin.x, verify_origin.y,
-                    final_client_w, final_client_h
-                );
-
-                if final_client_w == monitor_width && final_client_h == monitor_height
-                    && verify_origin.x == monitor_x && verify_origin.y == monitor_y
-                {
-                    println!("[DesktopEmbedder] Plan C SUCCESS: client area matches monitor exactly!");
-                } else {
-                    println!(
-                        "[DesktopEmbedder] Plan C WARNING: client area mismatch! expected ({},{}) {}x{}, got ({},{}) {}x{}",
-                        monitor_x, monitor_y, monitor_width, monitor_height,
-                        verify_origin.x, verify_origin.y, final_client_w, final_client_h
-                    );
-                }
-            } else {
-                println!(
-                    "[DesktopEmbedder] No NC offset detected, pos=({},{}), size={}x{}",
-                    monitor_x, monitor_y, monitor_width, monitor_height
+                    "[DesktopEmbedder] Fallback compensation applied: window=({},{}) {}x{}",
+                    compensated_x, compensated_y, compensated_w, compensated_h
                 );
             }
         }

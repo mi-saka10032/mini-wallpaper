@@ -4,9 +4,9 @@
 //! 每个物理显示器对应一个壁纸窗口，通过 URL 参数传递 monitorId。
 //! Windows 上创建后会调用 desktop_embedder 嵌入桌面层级。
 
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
-use log::{error, info, warn};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
@@ -68,22 +68,18 @@ impl WallpaperWindowManager {
             _ => format!("/wallpaper?monitorId={}", monitor_id),
         };
 
-        let window = WebviewWindowBuilder::new(
-            app,
-            &label,
-            WebviewUrl::App(url.into()),
-        )
-        .title("Wallpaper")
-        .decorations(false)
-        .skip_taskbar(true)
-        .transparent(true)
-        .resizable(false)
-        .visible(false)
-        .position(x as f64, y as f64)
-        .inner_size(width as f64, height as f64)
-        .always_on_bottom(true)
-        .build()
-        .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
+        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+            .title("Wallpaper")
+            .decorations(false)
+            .skip_taskbar(true)
+            .transparent(true)
+            .resizable(false)
+            .visible(false)
+            .position(x as f64, y as f64)
+            .inner_size(width as f64, height as f64)
+            .always_on_bottom(true)
+            .build()
+            .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
 
         // Windows 平台：嵌入桌面
         #[cfg(target_os = "windows")]
@@ -170,13 +166,17 @@ impl WallpaperWindowManager {
         monitor_id: &str,
         wallpaper_id: i32,
     ) -> Result<(), String> {
-        let label = self.windows.get(monitor_id).ok_or_else(|| {
-            format!("壁纸窗口不存在: monitor_id='{}'", monitor_id)
-        })?;
+        let label = self
+            .windows
+            .get(monitor_id)
+            .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
 
         // 确认窗口实例仍然存在
         let _window = app.get_webview_window(label).ok_or_else(|| {
-            format!("窗口实例已丢失: label='{}', monitor_id='{}'", label, monitor_id)
+            format!(
+                "窗口实例已丢失: label='{}', monitor_id='{}'",
+                label, monitor_id
+            )
         })?;
 
         let payload = WallpaperChangedPayload {
@@ -211,8 +211,12 @@ impl WallpaperWindowManager {
 fn sanitize_label(monitor_id: &str) -> String {
     monitor_id
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
-
-```

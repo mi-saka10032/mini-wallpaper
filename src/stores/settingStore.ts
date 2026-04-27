@@ -5,7 +5,6 @@ import { getSettings, setSetting } from "@/api/appSetting";
 export const SETTING_KEYS = {
   THEME: "theme",
   LANGUAGE: "language",
-  AUTO_START: "auto_start",
   CLOSE_TO_TRAY: "close_to_tray",
   PAUSE_ON_FULLSCREEN: "pause_on_fullscreen",
   GLOBAL_VOLUME: "global_volume",

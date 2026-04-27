@@ -38,6 +38,34 @@ const WallpaperRenderer: React.FC = () => {
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // ===== 音量状态 =====
+  // 初始化时从 DB 读取，后续通过 volume-changed 事件实时更新
+  const [volume, setVolume] = useState<number>(0);
+
+  // 初始化读取全局音量设置
+  useEffect(() => {
+    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }).then((val) => {
+      const v = Number(val ?? "0");
+      setVolume(Math.min(Math.max(v, 0), 100));
+    }).catch(() => {});
+  }, []);
+
+  // 监听音量变更事件（后端 setting effect 广播）
+  useEffect(() => {
+    const unlisten = listen(EVENTS.VOLUME_CHANGED, (payload) => {
+      setVolume(Math.min(Math.max(payload.volume, 0), 100));
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  // 音量变化时同步到 video 元素
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = volume / 100;
+    video.muted = volume === 0;
+  }, [volume, wallpaper]);
+
   // ===== 禁用所有用户输入事件 =====
   // 壁纸窗口是纯展示层，不需要任何交互，直接一刀切禁用全部鼠标和键盘事件
   useEffect(() => {
@@ -197,7 +225,7 @@ const WallpaperRenderer: React.FC = () => {
             src={src}
             autoPlay
             loop
-            muted
+            muted={volume === 0}
             playsInline
             style={extendStyle}
           />
@@ -225,7 +253,7 @@ const WallpaperRenderer: React.FC = () => {
           src={src}
           autoPlay
           loop
-          muted
+          muted={volume === 0}
           playsInline
           className="h-full w-full"
           style={{ objectFit: fitMode as React.CSSProperties["objectFit"] }}

@@ -1,8 +1,5 @@
 use sea_orm_migration::prelude::*;
 
-use super::m001_create_wallpapers::Wallpapers;
-use super::m002_create_collections::Collections;
-
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -41,33 +38,37 @@ impl MigrationTrait for Migration {
                             .col(CollectionWallpapers::CollectionId)
                             .col(CollectionWallpapers::WallpaperId),
                     )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(
-                                CollectionWallpapers::Table,
-                                CollectionWallpapers::CollectionId,
-                            )
-                            .to(Collections::Table, Collections::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(
-                                CollectionWallpapers::Table,
-                                CollectionWallpapers::WallpaperId,
-                            )
-                            .to(Wallpapers::Table, Wallpapers::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
                     .to_owned(),
             )
-            .await
+            .await?;
+
+        // 为关联字段创建索引，提升 JOIN/WHERE 查询性能
+        manager
+            .create_index(
+                sea_orm_migration::prelude::Index::create()
+                    .name("idx-collection_wallpapers-collection_id")
+                    .table(CollectionWallpapers::Table)
+                    .col(CollectionWallpapers::CollectionId)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                sea_orm_migration::prelude::Index::create()
+                    .name("idx-collection_wallpapers-wallpaper_id")
+                    .table(CollectionWallpapers::Table)
+                    .col(CollectionWallpapers::WallpaperId)
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
     }
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(Table::drop().table(CollectionWallpapers::Table).to_owned())
-            .await
+    async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+        // 生产环境不支持回滚，如需变更请新建 migration
+        Ok(())
     }
 }
 

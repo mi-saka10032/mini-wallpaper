@@ -2,7 +2,7 @@ use anyhow::Result;
 use sea_orm::prelude::Expr;
 use sea_orm::*;
 
-use crate::entities::{collection, collection_wallpaper, wallpaper};
+use crate::entities::{collection, collection_wallpaper, monitor_config, wallpaper};
 
 /// 获取所有收藏夹
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<collection::Model>> {
@@ -63,8 +63,25 @@ pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<co
         .ok_or_else(|| anyhow::anyhow!("Collection not found"))
 }
 
-/// 删除收藏夹（关联记录会通过 ON DELETE CASCADE 自动删除）
+/// 删除收藏夹（手动清理关联记录，不依赖外键级联）
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
+    // 1. 清理 collection_wallpapers 关联记录
+    collection_wallpaper::Entity::delete_many()
+        .filter(collection_wallpaper::Column::CollectionId.eq(id))
+        .exec(db)
+        .await?;
+
+    // 2. 清理 monitor_configs 中引用该收藏夹的字段置空
+    monitor_config::Entity::update_many()
+        .col_expr(
+            monitor_config::Column::CollectionId,
+            Expr::value(sea_orm::Value::Int(None)),
+        )
+        .filter(monitor_config::Column::CollectionId.eq(id))
+        .exec(db)
+        .await?;
+
+    // 3. 删除收藏夹本身
     collection::Entity::delete_by_id(id).exec(db).await?;
     Ok(())
 }

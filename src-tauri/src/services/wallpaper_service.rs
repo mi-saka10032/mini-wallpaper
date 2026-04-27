@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use image::GenericImageView;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::entities::wallpaper;
+use crate::entities::{collection_wallpaper, monitor_config, wallpaper};
 use crate::utils::ffmpeg;
 
 /// 支持的图片扩展名
@@ -251,7 +251,25 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
             }
         }
 
-        // 4. 删除数据库记录
+        // 4. 清理关联表：collection_wallpapers 中引用该壁纸的记录
+        collection_wallpaper::Entity::delete_many()
+            .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
+            .exec(db)
+            .await
+            .context("Failed to clean up collection_wallpapers")?;
+
+        // 5. 清理关联表：monitor_configs 中引用该壁纸的字段置空
+        monitor_config::Entity::update_many()
+            .col_expr(
+                monitor_config::Column::WallpaperId,
+                sea_orm::prelude::Expr::value(sea_orm::Value::Int(None)),
+            )
+            .filter(monitor_config::Column::WallpaperId.eq(*id))
+            .exec(db)
+            .await
+            .context("Failed to clean up monitor_configs wallpaper_id")?;
+
+        // 6. 删除数据库记录
         wallpaper::Entity::delete_by_id(*id)
             .exec(db)
             .await

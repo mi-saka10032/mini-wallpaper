@@ -6,14 +6,13 @@ use tauri::State;
 
 use crate::platform::fullscreen_detector::{self, FULLSCREEN_TIMER_KEY};
 use crate::services::app_setting_service;
+use crate::services::wallpaper_window_service::WallpaperWindowManagerState;
 use crate::utils::timer_registry::TimerRegistryState;
 
 /// 已知的 setting key 常量（与前端 SETTING_KEYS 保持一致）
 mod keys {
     pub const PAUSE_ON_FULLSCREEN: &str = "pause_on_fullscreen";
-    // 后续可扩展更多需要副作用的 key：
-    // pub const GLOBAL_VOLUME: &str = "global_volume";
-    // pub const CLOSE_TO_TRAY: &str = "close_to_tray";
+    pub const GLOBAL_VOLUME: &str = "global_volume";
 }
 
 /// 获取所有设置（返回 key-value 对象）
@@ -53,6 +52,7 @@ pub async fn get_setting(
 pub async fn set_setting(
     db: State<'_, DatabaseConnection>,
     registry: State<'_, TimerRegistryState>,
+    window_manager: State<'_, WallpaperWindowManagerState>,
     app_handle: tauri::AppHandle,
     key: String,
     value: String,
@@ -63,9 +63,16 @@ pub async fn set_setting(
         .map_err(|e| e.to_string())?;
 
     // 2. 按 key 执行副作用
-    apply_setting_side_effect(&key, &value, &registry, &app_handle).await;
+    apply_setting_side_effect(&key, &value, &registry, &window_manager, &app_handle).await;
 
     Ok(())
+}
+
+/// 音量变更事件 payload（广播给所有壁纸窗口）
+#[derive(Clone, serde::Serialize)]
+struct VolumeChangedPayload {
+    /// 音量值 0-100
+    volume: u32,
 }
 
 /// 根据 setting key 执行对应的副作用
@@ -76,6 +83,7 @@ async fn apply_setting_side_effect(
     key: &str,
     value: &str,
     registry: &TimerRegistryState,
+    window_manager: &WallpaperWindowManagerState,
     app_handle: &tauri::AppHandle,
 ) {
     match key {
@@ -94,9 +102,12 @@ async fn apply_setting_side_effect(
                 info!("[Setting] 全屏检测已停止");
             }
         }
-        // 后续扩展示例：
-        // keys::GLOBAL_VOLUME => { /* 通知壁纸窗口调整音量 */ }
-        // keys::CLOSE_TO_TRAY => { /* 更新托盘行为 */ }
+        keys::GLOBAL_VOLUME => {
+            let volume = value.parse::<u32>().unwrap_or(0).min(100);
+            let mgr = window_manager.lock().await;
+            mgr.broadcast(app_handle, "volume-changed", &VolumeChangedPayload { volume });
+            info!("[Setting] 音量已更新: {}%", volume);
+        }
         _ => {
             // 无副作用的 key，仅写入 DB 即可
         }

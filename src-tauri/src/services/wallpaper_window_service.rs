@@ -155,6 +155,26 @@ impl WallpaperWindowManager {
         }
     }
 
+    /// 向所有壁纸窗口广播事件
+    ///
+    /// 遍历 manager 管理的全部窗口 label，逐一 emit_to，
+    /// 确保事件仅发送给壁纸窗口，不会波及 main 等其他窗口。
+    pub fn broadcast<S: serde::Serialize + Clone>(
+        &self,
+        app: &AppHandle,
+        event: &str,
+        payload: &S,
+    ) {
+        for (monitor_id, label) in &self.windows {
+            if let Err(e) = app.emit_to(label, event, payload.clone()) {
+                log::warn!(
+                    "[WallpaperWindowManager] 广播事件 '{}' 到 '{}' 失败: {}",
+                    event, monitor_id, e
+                );
+            }
+        }
+    }
+
     /// 通知指定显示器的壁纸窗口更新壁纸
     ///
     /// 通过 HashMap 精确获取 monitor_id 对应的窗口 label，

@@ -9,6 +9,8 @@ export const EVENTS = {
   FULLSCREEN_CHANGED: "fullscreen-changed",
   /** extend 模式视频同步：master 窗口广播 currentTime，slave 窗口对齐 */
   VIDEO_SYNC: "video-sync",
+  /** 全局音量变更事件（后端 setting effect 广播给所有壁纸窗口） */
+  VOLUME_CHANGED: "volume-changed",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -34,6 +36,11 @@ export interface FullscreenChangedPayload {
   is_fullscreen: boolean;
 }
 
+/** 音量变更事件 payload */
+export interface VolumeChangedPayload {
+  volume: number;
+}
+
 /** 视频同步事件 payload（extend 模式跨窗口帧同步） */
 export interface VideoSyncPayload {
   current_time: number;
@@ -46,6 +53,7 @@ export interface EventMap {
   [EVENTS.BACKUP_PROGRESS]: BackupProgressPayload;
   [EVENTS.FULLSCREEN_CHANGED]: FullscreenChangedPayload;
   [EVENTS.VIDEO_SYNC]: VideoSyncPayload;
+  [EVENTS.VOLUME_CHANGED]: VolumeChangedPayload;
 }
 
 /**

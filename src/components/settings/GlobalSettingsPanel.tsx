@@ -111,14 +111,8 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
   );
 
   const togglePauseOnFullscreen = useCallback(
-    async (checked: boolean) => {
+    (checked: boolean) => {
       updateSetting(SETTING_KEYS.PAUSE_ON_FULLSCREEN, checked ? "true" : "false");
-      // 同步启停全屏检测器
-      try {
-        await invoke(COMMANDS.SET_FULLSCREEN_DETECTION, { enabled: checked });
-      } catch (e) {
-        console.error("[togglePauseOnFullscreen]", e);
-      }
     },
     [updateSetting],
   );

@@ -41,7 +41,7 @@ macro_rules! all_handlers {
             $crate::commands::backup::import_backup,
             $crate::commands::backup::get_data_size,
             // fullscreen
-            $crate::commands::fullscreen::set_fullscreen_detection,
+            $crate::commands::fullscreen::init_fullscreen_detection,
             // wallpaper_window
             $crate::commands::wallpaper_window::create_wallpaper_window,
             $crate::commands::wallpaper_window::destroy_wallpaper_window,

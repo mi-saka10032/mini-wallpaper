@@ -31,7 +31,7 @@ export const COMMANDS = {
   IMPORT_BACKUP: "import_backup",
   GET_DATA_SIZE: "get_data_size",
   // fullscreen
-  SET_FULLSCREEN_DETECTION: "set_fullscreen_detection",
+  INIT_FULLSCREEN_DETECTION: "init_fullscreen_detection",
   // wallpaper window
   CREATE_WALLPAPER_WINDOW: "create_wallpaper_window",
   DESTROY_WALLPAPER_WINDOW: "destroy_wallpaper_window",
@@ -187,8 +187,8 @@ export interface CommandMap {
     params: Record<string, never>;
     result: number;
   };
-  [COMMANDS.SET_FULLSCREEN_DETECTION]: {
-    params: { enabled: boolean };
+  [COMMANDS.INIT_FULLSCREEN_DETECTION]: {
+    params: Record<string, never>;
     result: void;
   };
   [COMMANDS.CREATE_WALLPAPER_WINDOW]: {

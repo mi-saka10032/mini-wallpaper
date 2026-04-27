@@ -14,6 +14,8 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { changeLanguage } from "@/i18n";
+import { invoke } from "@/api/invoke";
+import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 
@@ -43,6 +45,10 @@ const App: React.FC = () => {
     fetchSettings();
     fetchWallpapers();
     initMonitors();
+    // 初始化全屏检测（读取 DB 设置，按需启动，首次且唯一一次调用）
+    invoke(COMMANDS.INIT_FULLSCREEN_DETECTION).catch((e) =>
+      console.error("[initFullscreenDetection]", e),
+    );
   }, [fetchSettings, fetchWallpapers, initMonitors]);
 
   // DB 中 language 变化时同步 i18n

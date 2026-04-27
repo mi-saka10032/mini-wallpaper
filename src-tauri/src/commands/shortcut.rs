@@ -2,7 +2,8 @@ use log::warn;
 use tauri::{Emitter, Manager, State};
 
 use crate::services::{collection_service, monitor_config_service};
-use crate::services::timer_manager::{TimerManagerState, ThumbnailChangedPayload};
+use crate::services::timer_manager::{self, carousel_key, ThumbnailChangedPayload};
+use crate::utils::timer_registry::TimerRegistryState;
 use sea_orm::DatabaseConnection;
 
 /// 切换壁纸方向
@@ -19,7 +20,7 @@ pub enum Direction {
 pub async fn switch_wallpaper(
     direction: Direction,
     db: State<'_, DatabaseConnection>,
-    timer_state: State<'_, TimerManagerState>,
+    registry: State<'_, TimerRegistryState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     // 获取所有 active 的 monitor_config
@@ -83,13 +84,15 @@ pub async fn switch_wallpaper(
             );
 
             // 3. 如果有运行中的定时器，重置计时
-            let mut manager = timer_state.lock().await;
-            if manager.is_running(&config.monitor_id) {
-                manager.restart(
+            let key = carousel_key(&config.monitor_id);
+            let mut reg = registry.lock().await;
+            if reg.is_running(&key) {
+                let handle = timer_manager::spawn_carousel_task(
                     config.monitor_id.clone(),
                     db.inner().clone(),
                     app_handle.clone(),
                 );
+                reg.restart(key, handle);
             }
         }
     }

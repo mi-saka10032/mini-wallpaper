@@ -4,8 +4,9 @@ use tauri::State;
 use crate::entities::monitor_config;
 use crate::services::monitor_config_service;
 use crate::services::timer_manager::{
-    collection_has_enough_wallpapers, should_start_timer, TimerManagerState,
+    self, carousel_key, collection_has_enough_wallpapers, should_start_timer,
 };
+use crate::utils::timer_registry::TimerRegistryState;
 
 use log::info;
 
@@ -33,12 +34,12 @@ pub async fn get_monitor_config(
 /// 创建或更新显示器配置
 ///
 /// upsert 后自动管理定时器：
-/// - 满足轮播条件 → 启动/重启定时器
-/// - 不满足 → 停止定时器
+/// - 满足轮播条件 → 通过 TimerRegistry 启动/重启定时器
+/// - 不满足 → 通过 TimerRegistry 停止定时器
 #[tauri::command]
 pub async fn upsert_monitor_config(
     db: State<'_, DatabaseConnection>,
-    timer_state: State<'_, TimerManagerState>,
+    registry: State<'_, TimerRegistryState>,
     app_handle: tauri::AppHandle,
     monitor_id: String,
     wallpaper_id: Option<i32>,
@@ -68,7 +69,7 @@ pub async fn upsert_monitor_config(
     .map_err(|e| e.to_string())?;
 
     // ===== 定时器管理 =====
-    manage_timer_for_config(db.inner(), &timer_state, &app_handle, &config).await;
+    manage_timer_for_config(db.inner(), &registry, &app_handle, &config).await;
 
     Ok(config)
 }
@@ -76,11 +77,12 @@ pub async fn upsert_monitor_config(
 /// 根据 config 状态管理定时器
 async fn manage_timer_for_config(
     db: &sea_orm::DatabaseConnection,
-    timer_state: &TimerManagerState,
+    registry: &TimerRegistryState,
     app_handle: &tauri::AppHandle,
     config: &monitor_config::Model,
 ) {
-    let mut manager = timer_state.lock().await;
+    let key = carousel_key(&config.monitor_id);
+    let mut reg = registry.lock().await;
 
     if should_start_timer(config) {
         let cid = config.collection_id.unwrap(); // safe: should_start_timer 已检查
@@ -88,25 +90,26 @@ async fn manage_timer_for_config(
         // 检查收藏夹壁纸数 > 1
         match collection_has_enough_wallpapers(db, cid).await {
             Ok(true) => {
-                manager.restart(
+                let handle = timer_manager::spawn_carousel_task(
                     config.monitor_id.clone(),
                     db.clone(),
                     app_handle.clone(),
                 );
+                reg.restart(key, handle);
             }
             Ok(false) => {
-                manager.stop(&config.monitor_id);
+                reg.stop(&key);
             }
             Err(e) => {
-                eprintln!(
+                log::warn!(
                     "[upsert] Failed to check collection wallpapers: {}",
                     e
                 );
-                manager.stop(&config.monitor_id);
+                reg.stop(&key);
             }
         }
     } else {
-        manager.stop(&config.monitor_id);
+        reg.stop(&key);
     }
 }
 
@@ -114,14 +117,14 @@ async fn manage_timer_for_config(
 #[tauri::command]
 pub async fn delete_monitor_config(
     db: State<'_, DatabaseConnection>,
-    timer_state: State<'_, TimerManagerState>,
+    registry: State<'_, TimerRegistryState>,
     id: i32,
     monitor_id: Option<String>,
 ) -> Result<(), String> {
     // 先停止可能存在的定时器
     if let Some(mid) = &monitor_id {
-        let mut manager = timer_state.lock().await;
-        manager.stop(mid);
+        let mut reg = registry.lock().await;
+        reg.stop(&carousel_key(mid));
     }
 
     monitor_config_service::delete(db.inner(), id)
@@ -133,24 +136,27 @@ pub async fn delete_monitor_config(
 #[tauri::command]
 pub async fn start_timers(
     db: State<'_, DatabaseConnection>,
-    timer_state: State<'_, TimerManagerState>,
+    registry: State<'_, TimerRegistryState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let configs = monitor_config_service::get_all(db.inner())
         .await
         .map_err(|e| e.to_string())?;
 
+    let mut reg = registry.lock().await;
+
     for config in &configs {
         if should_start_timer(config) {
             let cid = config.collection_id.unwrap();
             match collection_has_enough_wallpapers(db.inner(), cid).await {
                 Ok(true) => {
-                    let mut manager = timer_state.lock().await;
-                    manager.start(
+                    let key = carousel_key(&config.monitor_id);
+                    let handle = timer_manager::spawn_carousel_task(
                         config.monitor_id.clone(),
                         db.inner().clone(),
                         app_handle.clone(),
                     );
+                    reg.register(key, handle);
                     info!("[start_timers] 启动定时器: {}", config.monitor_id);
                 }
                 Ok(false) => {}

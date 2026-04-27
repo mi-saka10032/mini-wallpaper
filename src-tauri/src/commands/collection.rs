@@ -1,15 +1,15 @@
+use sea_orm::DatabaseConnection;
 use tauri::State;
 
 use crate::entities::{collection, wallpaper};
 use crate::services::collection_service;
-use crate::AppState;
 
 /// 获取所有收藏夹
 #[tauri::command]
 pub async fn get_collections(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
 ) -> Result<Vec<collection::Model>, String> {
-    collection_service::get_all(&state.db)
+    collection_service::get_all(db.inner())
         .await
         .map_err(|e| e.to_string())
 }
@@ -17,10 +17,10 @@ pub async fn get_collections(
 /// 创建收藏夹
 #[tauri::command]
 pub async fn create_collection(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     name: String,
 ) -> Result<collection::Model, String> {
-    collection_service::create(&state.db, name)
+    collection_service::create(db.inner(), name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -28,11 +28,11 @@ pub async fn create_collection(
 /// 重命名收藏夹
 #[tauri::command]
 pub async fn rename_collection(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     id: i32,
     name: String,
 ) -> Result<collection::Model, String> {
-    collection_service::rename(&state.db, id, name)
+    collection_service::rename(db.inner(), id, name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -40,10 +40,10 @@ pub async fn rename_collection(
 /// 删除收藏夹
 #[tauri::command]
 pub async fn delete_collection(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     id: i32,
 ) -> Result<(), String> {
-    collection_service::delete(&state.db, id)
+    collection_service::delete(db.inner(), id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -51,10 +51,10 @@ pub async fn delete_collection(
 /// 获取收藏夹内的壁纸列表
 #[tauri::command]
 pub async fn get_collection_wallpapers(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     collection_id: i32,
 ) -> Result<Vec<wallpaper::Model>, String> {
-    collection_service::get_wallpapers(&state.db, collection_id)
+    collection_service::get_wallpapers(db.inner(), collection_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -62,11 +62,11 @@ pub async fn get_collection_wallpapers(
 /// 向收藏夹添加壁纸
 #[tauri::command]
 pub async fn add_wallpapers_to_collection(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     collection_id: i32,
     wallpaper_ids: Vec<i32>,
 ) -> Result<u32, String> {
-    collection_service::add_wallpapers(&state.db, collection_id, wallpaper_ids)
+    collection_service::add_wallpapers(db.inner(), collection_id, wallpaper_ids)
         .await
         .map_err(|e| e.to_string())
 }
@@ -74,11 +74,11 @@ pub async fn add_wallpapers_to_collection(
 /// 从收藏夹移除壁纸
 #[tauri::command]
 pub async fn remove_wallpapers_from_collection(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     collection_id: i32,
     wallpaper_ids: Vec<i32>,
 ) -> Result<u64, String> {
-    collection_service::remove_wallpapers(&state.db, collection_id, wallpaper_ids)
+    collection_service::remove_wallpapers(db.inner(), collection_id, wallpaper_ids)
         .await
         .map_err(|e| e.to_string())
 }
@@ -86,11 +86,11 @@ pub async fn remove_wallpapers_from_collection(
 /// 重新排序收藏夹内的壁纸
 #[tauri::command]
 pub async fn reorder_collection_wallpapers(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     collection_id: i32,
     wallpaper_ids: Vec<i32>,
 ) -> Result<(), String> {
-    collection_service::reorder_wallpapers(&state.db, collection_id, wallpaper_ids)
+    collection_service::reorder_wallpapers(db.inner(), collection_id, wallpaper_ids)
         .await
         .map_err(|e| e.to_string())
 }

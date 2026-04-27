@@ -1,3 +1,4 @@
+use sea_orm::DatabaseConnection;
 use tauri::State;
 
 use crate::entities::monitor_config;
@@ -5,16 +6,15 @@ use crate::services::monitor_config_service;
 use crate::services::timer_manager::{
     collection_has_enough_wallpapers, should_start_timer, TimerManagerState,
 };
-use crate::AppState;
 
 use log::info;
 
 /// 获取所有显示器配置
 #[tauri::command]
 pub async fn get_monitor_configs(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
 ) -> Result<Vec<monitor_config::Model>, String> {
-    monitor_config_service::get_all(&state.db)
+    monitor_config_service::get_all(db.inner())
         .await
         .map_err(|e| e.to_string())
 }
@@ -22,10 +22,10 @@ pub async fn get_monitor_configs(
 /// 根据 monitor_id 获取配置
 #[tauri::command]
 pub async fn get_monitor_config(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     monitor_id: String,
 ) -> Result<Option<monitor_config::Model>, String> {
-    monitor_config_service::get_by_monitor_id(&state.db, &monitor_id)
+    monitor_config_service::get_by_monitor_id(db.inner(), &monitor_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -37,7 +37,7 @@ pub async fn get_monitor_config(
 /// - 不满足 → 停止定时器
 #[tauri::command]
 pub async fn upsert_monitor_config(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     timer_state: State<'_, TimerManagerState>,
     app_handle: tauri::AppHandle,
     monitor_id: String,
@@ -52,7 +52,7 @@ pub async fn upsert_monitor_config(
     active: Option<bool>,
 ) -> Result<monitor_config::Model, String> {
     let config = monitor_config_service::upsert(
-        &state.db,
+        db.inner(),
         &monitor_id,
         wallpaper_id,
         collection_id,
@@ -68,7 +68,7 @@ pub async fn upsert_monitor_config(
     .map_err(|e| e.to_string())?;
 
     // ===== 定时器管理 =====
-    manage_timer_for_config(&state.db, &timer_state, &app_handle, &config).await;
+    manage_timer_for_config(db.inner(), &timer_state, &app_handle, &config).await;
 
     Ok(config)
 }
@@ -113,7 +113,7 @@ async fn manage_timer_for_config(
 /// 删除显示器配置
 #[tauri::command]
 pub async fn delete_monitor_config(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     timer_state: State<'_, TimerManagerState>,
     id: i32,
     monitor_id: Option<String>,
@@ -124,7 +124,7 @@ pub async fn delete_monitor_config(
         manager.stop(mid);
     }
 
-    monitor_config_service::delete(&state.db, id)
+    monitor_config_service::delete(db.inner(), id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -132,23 +132,23 @@ pub async fn delete_monitor_config(
 /// 启动所有满足轮播条件的定时器（应用启动时由前端调用）
 #[tauri::command]
 pub async fn start_timers(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     timer_state: State<'_, TimerManagerState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let configs = monitor_config_service::get_all(&state.db)
+    let configs = monitor_config_service::get_all(db.inner())
         .await
         .map_err(|e| e.to_string())?;
 
     for config in &configs {
         if should_start_timer(config) {
             let cid = config.collection_id.unwrap();
-            match collection_has_enough_wallpapers(&state.db, cid).await {
+            match collection_has_enough_wallpapers(db.inner(), cid).await {
                 Ok(true) => {
                     let mut manager = timer_state.lock().await;
                     manager.start(
                         config.monitor_id.clone(),
-                        state.db.clone(),
+                        db.inner().clone(),
                         app_handle.clone(),
                     );
                     info!("[start_timers] 启动定时器: {}", config.monitor_id);

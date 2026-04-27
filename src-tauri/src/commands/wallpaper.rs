@@ -1,18 +1,18 @@
+use sea_orm::DatabaseConnection;
 use sea_orm::EntityTrait;
 use tauri::{Manager, State};
 
 use crate::entities::wallpaper;
 use crate::services::wallpaper_service;
 use crate::utils::ffmpeg;
-use crate::AppState;
 
 /// 获取壁纸列表
 #[tauri::command]
 pub async fn get_wallpapers(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
 ) -> Result<Vec<wallpaper::Model>, String> {
     wallpaper::Entity::find()
-        .all(&state.db)
+        .all(db.inner())
         .await
         .map_err(|e| e.to_string())
 }
@@ -21,7 +21,7 @@ pub async fn get_wallpapers(
 #[tauri::command]
 pub async fn import_wallpapers(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     paths: Vec<String>,
 ) -> Result<Vec<wallpaper::Model>, String> {
     let app_data_dir = app
@@ -38,7 +38,7 @@ pub async fn import_wallpapers(
         eprintln!("[WARN] ffmpeg not found at '{}', video thumbnails will be skipped", ffmpeg_path);
     }
 
-    wallpaper_service::import_batch(&state.db, paths, &wallpapers_dir, &thumbnails_dir, &ffmpeg_path)
+    wallpaper_service::import_batch(db.inner(), paths, &wallpapers_dir, &thumbnails_dir, &ffmpeg_path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -46,10 +46,10 @@ pub async fn import_wallpapers(
 /// 批量删除壁纸（删文件 + 删缩略图 + 删数据库记录）
 #[tauri::command]
 pub async fn delete_wallpapers(
-    state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     ids: Vec<i32>,
 ) -> Result<u64, String> {
-    wallpaper_service::delete_batch(&state.db, ids)
+    wallpaper_service::delete_batch(db.inner(), ids)
         .await
         .map_err(|e| e.to_string())
 }

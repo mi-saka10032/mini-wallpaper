@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use log::{error, info, warn};
 use sea_orm::DatabaseConnection;
-use tauri::Emitter;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
@@ -122,8 +121,8 @@ impl TimerManager {
                         }
 
                         // 1. 通知指定壁纸窗口更新壁纸（精确定向发送）
-                        let wm = app_handle.state::<WallpaperWindowManagerState>();
-                        let wm_guard = wm.lock().await;
+                        let ww_manager = app_handle.state::<WallpaperWindowManagerState>();
+                        let wm_guard = ww_manager.lock().await;
                         if let Err(e) = wm_guard.update_window(&app_handle, &mid, new_wid) {
                             warn!("[TimerManager] 壁纸窗口更新失败: {}", e);
                         }

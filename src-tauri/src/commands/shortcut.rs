@@ -3,8 +3,7 @@ use tauri::{Emitter, Manager, State};
 
 use crate::services::{collection_service, monitor_config_service};
 use crate::services::timer_manager::{TimerManagerState, ThumbnailChangedPayload};
-use crate::services::wallpaper_window_service::WallpaperWindowManagerState;
-use crate::AppState;
+use sea_orm::DatabaseConnection;
 
 /// 切换壁纸方向
 #[derive(serde::Deserialize)]
@@ -19,14 +18,12 @@ pub enum Direction {
 #[tauri::command]
 pub async fn switch_wallpaper(
     direction: Direction,
-    app_state: State<'_, AppState>,
+    db: State<'_, DatabaseConnection>,
     timer_state: State<'_, TimerManagerState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let db = &app_state.db;
-
     // 获取所有 active 的 monitor_config
-    let configs = monitor_config_service::get_all(db)
+    let configs = monitor_config_service::get_all(&db)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -44,7 +41,7 @@ pub async fn switch_wallpaper(
         let new_wid = match direction {
             Direction::Next => {
                 collection_service::next_wallpaper_id(
-                    db,
+                    &db,
                     collection_id,
                     config.wallpaper_id,
                     &config.play_mode,
@@ -53,7 +50,7 @@ pub async fn switch_wallpaper(
             }
             Direction::Prev => {
                 collection_service::prev_wallpaper_id(
-                    db,
+                    &db,
                     collection_id,
                     config.wallpaper_id,
                     &config.play_mode,
@@ -64,13 +61,13 @@ pub async fn switch_wallpaper(
         .map_err(|e| e.to_string())?;
 
         if let Some(wid) = new_wid {
-            monitor_config_service::update_wallpaper_id(db, &config.monitor_id, wid)
+            monitor_config_service::update_wallpaper_id(&db, &config.monitor_id, wid)
                 .await
                 .map_err(|e| e.to_string())?;
 
             // 1. 通知指定壁纸窗口更新壁纸
-            let wm = app_handle.state::<WallpaperWindowManagerState>();
-            let wm_guard = wm.lock().await;
+            let wm_state = app_handle.state::<crate::services::wallpaper_window_service::WallpaperWindowManagerState>();
+            let wm_guard = wm_state.lock().await;
             if let Err(e) = wm_guard.update_window(&app_handle, &config.monitor_id, wid) {
                 warn!("[switch_wallpaper] 壁纸窗口更新失败: {}", e);
             }
@@ -90,7 +87,7 @@ pub async fn switch_wallpaper(
             if manager.is_running(&config.monitor_id) {
                 manager.restart(
                     config.monitor_id.clone(),
-                    db.clone(),
+                    db.inner().clone(),
                     app_handle.clone(),
                 );
             }

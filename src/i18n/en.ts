@@ -63,6 +63,7 @@ export default {
     removeConfirmDesc: "Remove {{count}} selected wallpaper(s) from this collection? Files will not be deleted.",
     releaseToImport: "Drop to import wallpapers",
     supportedFormats: "Supports images, videos, and GIF files",
+    wallpaperFiles: "Wallpaper Files",
   },
 
   // MonitorSettingsPanel

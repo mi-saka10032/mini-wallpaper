@@ -514,12 +514,12 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
 
       {wallpaper.type === "video" && (
         <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          视频
+          {t("preview.video")}
         </div>
       )}
       {wallpaper.type === "gif" && (
         <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          GIF
+          {t("preview.gif")}
         </div>
       )}
     </div>

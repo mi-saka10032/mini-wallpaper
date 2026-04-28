@@ -1,9 +1,12 @@
-use sea_orm::DatabaseConnection;
-use tauri::State;
+use std::sync::Arc;
 
-use crate::platform::fullscreen_detector::{self, FULLSCREEN_TIMER_KEY};
+use tauri::State;
+use tokio::sync::Mutex;
+
+use crate::ctx::AppContext;
+use crate::runtime::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
+use crate::runtime::Scheduler;
 use crate::services::app_setting_service;
-use crate::utils::timer_registry::TimerRegistryState;
 
 /// 初始化全屏检测（由前端 App.tsx useEffect 首次且唯一一次调用）
 ///
@@ -15,21 +18,22 @@ use crate::utils::timer_registry::TimerRegistryState;
 /// 不再需要单独的 set_fullscreen_detection command。
 #[tauri::command]
 pub async fn init_fullscreen_detection(
-    db: State<'_, DatabaseConnection>,
-    registry: State<'_, TimerRegistryState>,
-    app_handle: tauri::AppHandle,
+    ctx: State<'_, AppContext>,
+    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
 ) -> Result<(), String> {
-    let should_start = app_setting_service::get(db.inner(), "pause_on_fullscreen")
+    let should_start = app_setting_service::get(&ctx.db, "pause_on_fullscreen")
         .await
         .unwrap_or(None)
         .map(|v| v == "true")
         .unwrap_or(false);
 
     if should_start {
-        let mut reg = registry.lock().await;
-        if !reg.is_running(FULLSCREEN_TIMER_KEY) {
-            let handle = fullscreen_detector::spawn_detection_task(app_handle);
-            reg.register(FULLSCREEN_TIMER_KEY.to_string(), handle);
+        let mut sched = scheduler.lock().await;
+        if !sched.is_running(FULLSCREEN_TIMER_KEY) {
+            sched.spawn(
+                FULLSCREEN_TIMER_KEY.to_string(),
+                FullscreenDetectionTask { app: ctx.app_handle.clone() },
+            );
         }
     }
 

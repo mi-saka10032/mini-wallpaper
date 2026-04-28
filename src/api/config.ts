@@ -1,8 +1,10 @@
 /** Tauri command 名称常量 */
 export const COMMANDS = {
   // wallpaper
+  GET_SUPPORTED_EXTENSIONS: "get_supported_extensions",
   GET_WALLPAPERS: "get_wallpapers",
   IMPORT_WALLPAPERS: "import_wallpapers",
+  SAVE_VIDEO_THUMBNAIL: "save_video_thumbnail",
   DELETE_WALLPAPERS: "delete_wallpapers",
   // collection
   GET_COLLECTIONS: "get_collections",
@@ -39,6 +41,8 @@ export const COMMANDS = {
   HIDE_WALLPAPER_WINDOWS: "hide_wallpaper_windows",
   SHOW_WALLPAPER_WINDOWS: "show_wallpaper_windows",
 } as const;
+
+// ==================== 实体模型 ====================
 
 /** 壁纸模型 */
 export interface Wallpaper {
@@ -82,18 +86,151 @@ export interface MonitorConfig {
   updated_at: string;
 }
 
+// ==================== DTO 请求类型 ====================
+
+/** 创建收藏夹请求 */
+export interface CreateCollectionReq {
+  name: string;
+}
+
+/** 重命名收藏夹请求 */
+export interface RenameCollectionReq {
+  id: number;
+  name: string;
+}
+
+/** 删除收藏夹请求 */
+export interface DeleteCollectionReq {
+  id: number;
+}
+
+/** 获取收藏夹壁纸请求 */
+export interface GetCollectionWallpapersReq {
+  collectionId: number;
+}
+
+/** 向收藏夹添加壁纸请求 */
+export interface AddWallpapersReq {
+  collectionId: number;
+  wallpaperIds: number[];
+}
+
+/** 从收藏夹移除壁纸请求 */
+export interface RemoveWallpapersReq {
+  collectionId: number;
+  wallpaperIds: number[];
+}
+
+/** 重新排序收藏夹壁纸请求 */
+export interface ReorderWallpapersReq {
+  collectionId: number;
+  wallpaperIds: number[];
+}
+
+/** 导入壁纸请求 */
+export interface ImportWallpapersReq {
+  paths: string[];
+}
+
+/** 保存视频缩略图请求 */
+export interface SaveVideoThumbnailReq {
+  wallpaperId: number;
+  data: number[];
+}
+
+/** 批量删除壁纸请求 */
+export interface DeleteWallpapersReq {
+  ids: number[];
+}
+
+/** Upsert 显示器配置请求 */
+export interface UpsertMonitorConfigReq {
+  monitorId: string;
+  wallpaperId?: number | null;
+  collectionId?: number | null;
+  clearCollection?: boolean;
+  displayMode?: string;
+  fitMode?: string;
+  playMode?: string;
+  playInterval?: number;
+  isEnabled?: boolean;
+  active?: boolean;
+}
+
+/** 获取单个显示器配置请求 */
+export interface GetMonitorConfigReq {
+  monitorId: string;
+}
+
+/** 删除显示器配置请求 */
+export interface DeleteMonitorConfigReq {
+  id: number;
+  monitorId?: string;
+}
+
+/** 获取单个设置值请求 */
+export interface GetSettingReq {
+  key: string;
+}
+
+/** 设置键值对请求 */
+export interface SetSettingReq {
+  key: string;
+  value: string;
+}
+
+/** 切换壁纸请求 */
+export interface SwitchWallpaperReq {
+  direction: "next" | "prev";
+}
+
+/** 导出备份请求 */
+export interface ExportBackupReq {
+  outputPath: string;
+}
+
+/** 导入备份请求 */
+export interface ImportBackupReq {
+  zipPath: string;
+}
+
+/** 创建壁纸窗口请求 */
+export interface CreateWallpaperWindowReq {
+  monitorId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  extraQuery?: string;
+}
+
+/** 销毁壁纸窗口请求 */
+export interface DestroyWallpaperWindowReq {
+  monitorId: string;
+}
+
+// ==================== Command 入参/出参类型映射 ====================
+
 /** Command 入参/出参类型映射 */
 export interface CommandMap {
+  [COMMANDS.GET_SUPPORTED_EXTENSIONS]: {
+    params: Record<string, never>;
+    result: string[];
+  };
   [COMMANDS.GET_WALLPAPERS]: {
     params: Record<string, never>;
     result: Wallpaper[];
   };
   [COMMANDS.IMPORT_WALLPAPERS]: {
-    params: { paths: string[] };
+    params: { req: ImportWallpapersReq };
     result: Wallpaper[];
   };
+  [COMMANDS.SAVE_VIDEO_THUMBNAIL]: {
+    params: { wallpaperId: number; data: number[] };
+    result: string;
+  };
   [COMMANDS.DELETE_WALLPAPERS]: {
-    params: { ids: number[] };
+    params: { req: DeleteWallpapersReq };
     result: number;
   };
   [COMMANDS.GET_COLLECTIONS]: {
@@ -101,31 +238,31 @@ export interface CommandMap {
     result: Collection[];
   };
   [COMMANDS.CREATE_COLLECTION]: {
-    params: { name: string };
+    params: { req: CreateCollectionReq };
     result: Collection;
   };
   [COMMANDS.RENAME_COLLECTION]: {
-    params: { id: number; name: string };
+    params: { req: RenameCollectionReq };
     result: Collection;
   };
   [COMMANDS.DELETE_COLLECTION]: {
-    params: { id: number };
+    params: { req: DeleteCollectionReq };
     result: void;
   };
   [COMMANDS.GET_COLLECTION_WALLPAPERS]: {
-    params: { collectionId: number };
+    params: { req: GetCollectionWallpapersReq };
     result: Wallpaper[];
   };
   [COMMANDS.ADD_WALLPAPERS_TO_COLLECTION]: {
-    params: { collectionId: number; wallpaperIds: number[] };
+    params: { req: AddWallpapersReq };
     result: number;
   };
   [COMMANDS.REMOVE_WALLPAPERS_FROM_COLLECTION]: {
-    params: { collectionId: number; wallpaperIds: number[] };
+    params: { req: RemoveWallpapersReq };
     result: number;
   };
   [COMMANDS.REORDER_COLLECTION_WALLPAPERS]: {
-    params: { collectionId: number; wallpaperIds: number[] };
+    params: { req: ReorderWallpapersReq };
     result: void;
   };
   [COMMANDS.GET_MONITOR_CONFIGS]: {
@@ -133,26 +270,15 @@ export interface CommandMap {
     result: MonitorConfig[];
   };
   [COMMANDS.GET_MONITOR_CONFIG]: {
-    params: { monitorId: string };
+    params: { req: GetMonitorConfigReq };
     result: MonitorConfig | null;
   };
   [COMMANDS.UPSERT_MONITOR_CONFIG]: {
-    params: {
-      monitorId: string;
-      wallpaperId?: number | null;
-      collectionId?: number | null;
-      clearCollection?: boolean;
-      displayMode?: string;
-      fitMode?: string;
-      playMode?: string;
-      playInterval?: number;
-      isEnabled?: boolean;
-      active?: boolean;
-    };
+    params: { req: UpsertMonitorConfigReq };
     result: MonitorConfig;
   };
   [COMMANDS.DELETE_MONITOR_CONFIG]: {
-    params: { id: number };
+    params: { req: DeleteMonitorConfigReq };
     result: void;
   };
   [COMMANDS.START_TIMERS]: {
@@ -164,23 +290,23 @@ export interface CommandMap {
     result: Record<string, string>;
   };
   [COMMANDS.GET_SETTING]: {
-    params: { key: string };
+    params: { req: GetSettingReq };
     result: string | null;
   };
   [COMMANDS.SET_SETTING]: {
-    params: { key: string; value: string };
+    params: { req: SetSettingReq };
     result: void;
   };
   [COMMANDS.SWITCH_WALLPAPER]: {
-    params: { direction: "next" | "prev" };
+    params: { req: SwitchWallpaperReq };
     result: void;
   };
   [COMMANDS.EXPORT_BACKUP]: {
-    params: { outputPath: string };
+    params: { req: ExportBackupReq };
     result: string;
   };
   [COMMANDS.IMPORT_BACKUP]: {
-    params: { zipPath: string };
+    params: { req: ImportBackupReq };
     result: number;
   };
   [COMMANDS.GET_DATA_SIZE]: {
@@ -192,11 +318,11 @@ export interface CommandMap {
     result: void;
   };
   [COMMANDS.CREATE_WALLPAPER_WINDOW]: {
-    params: { monitorId: string; x: number; y: number; width: number; height: number; extraQuery?: string };
+    params: { req: CreateWallpaperWindowReq };
     result: void;
   };
   [COMMANDS.DESTROY_WALLPAPER_WINDOW]: {
-    params: { monitorId: string };
+    params: { req: DestroyWallpaperWindowReq };
     result: void;
   };
   [COMMANDS.DESTROY_ALL_WALLPAPER_WINDOWS]: {

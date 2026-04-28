@@ -1,13 +1,16 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use log::info;
-use sea_orm::DatabaseConnection;
 use tauri::State;
+use tokio::sync::Mutex;
 
-use crate::platform::fullscreen_detector::{self, FULLSCREEN_TIMER_KEY};
+use crate::ctx::AppContext;
+use crate::runtime::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
+use crate::runtime::Scheduler;
+use crate::dto::app_setting_dto::{GetSettingRequest, SetSettingRequest};
+use crate::dto::Validated;
 use crate::services::app_setting_service;
-use crate::services::wallpaper_window_service::WallpaperWindowManagerState;
-use crate::utils::timer_registry::TimerRegistryState;
 
 /// 已知的 setting key 常量（与前端 SETTING_KEYS 保持一致）
 mod keys {
@@ -18,9 +21,9 @@ mod keys {
 /// 获取所有设置（返回 key-value 对象）
 #[tauri::command]
 pub async fn get_settings(
-    db: State<'_, DatabaseConnection>,
+    ctx: State<'_, AppContext>,
 ) -> Result<HashMap<String, String>, String> {
-    let settings = app_setting_service::get_all(db.inner())
+    let settings = app_setting_service::get_all(&ctx.db)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -35,10 +38,11 @@ pub async fn get_settings(
 /// 获取单个设置值
 #[tauri::command]
 pub async fn get_setting(
-    db: State<'_, DatabaseConnection>,
-    key: String,
+    ctx: State<'_, AppContext>,
+    req: Validated<GetSettingRequest>,
 ) -> Result<Option<String>, String> {
-    app_setting_service::get(db.inner(), &key)
+    let req = req.into_inner();
+    app_setting_service::get(&ctx.db, &req.key)
         .await
         .map_err(|e| e.to_string())
 }
@@ -50,20 +54,22 @@ pub async fn get_setting(
 /// 确保设置变更即时生效。
 #[tauri::command]
 pub async fn set_setting(
-    db: State<'_, DatabaseConnection>,
-    registry: State<'_, TimerRegistryState>,
-    window_manager: State<'_, WallpaperWindowManagerState>,
-    app_handle: tauri::AppHandle,
-    key: String,
-    value: String,
+    ctx: State<'_, AppContext>,
+    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    req: Validated<SetSettingRequest>,
 ) -> Result<(), String> {
+    let req = req.into_inner();
+
+    // 跨字段校验：按 key 校验 value 格式
+    req.validate_value_format()?;
+
     // 1. 写入 DB
-    app_setting_service::set(db.inner(), &key, &value)
+    app_setting_service::set(&ctx.db, &req.key, &req.value)
         .await
         .map_err(|e| e.to_string())?;
 
     // 2. 按 key 执行副作用
-    apply_setting_side_effect(&key, &value, &registry, &window_manager, &app_handle).await;
+    apply_setting_side_effect(&req.key, &req.value, &ctx, &scheduler).await;
 
     Ok(())
 }
@@ -82,30 +88,31 @@ struct VolumeChangedPayload {
 async fn apply_setting_side_effect(
     key: &str,
     value: &str,
-    registry: &TimerRegistryState,
-    window_manager: &WallpaperWindowManagerState,
-    app_handle: &tauri::AppHandle,
+    ctx: &AppContext,
+    scheduler: &Arc<Mutex<Scheduler>>,
 ) {
     match key {
         keys::PAUSE_ON_FULLSCREEN => {
             let enabled = value == "true";
-            let mut reg = registry.lock().await;
+            let mut sched = scheduler.lock().await;
             if enabled {
-                if !reg.is_running(FULLSCREEN_TIMER_KEY) {
-                    let handle =
-                        fullscreen_detector::spawn_detection_task(app_handle.clone());
-                    reg.register(FULLSCREEN_TIMER_KEY.to_string(), handle);
+                if !sched.is_running(FULLSCREEN_TIMER_KEY) {
+                    sched.spawn(
+                        FULLSCREEN_TIMER_KEY.to_string(),
+                        FullscreenDetectionTask { app: ctx.app_handle.clone() },
+                    );
                     info!("[Setting] 全屏检测已启动");
                 }
             } else {
-                reg.stop(FULLSCREEN_TIMER_KEY);
+                sched.stop(FULLSCREEN_TIMER_KEY);
                 info!("[Setting] 全屏检测已停止");
             }
         }
         keys::GLOBAL_VOLUME => {
+            // DTO 层已校验 value 为 0~100 的合法整数，此处 parse 安全
             let volume = value.parse::<u32>().unwrap_or(0).min(100);
-            let mgr = window_manager.lock().await;
-            mgr.broadcast(app_handle, "volume-changed", &VolumeChangedPayload { volume });
+            let mgr = ctx.window_manager.lock().await;
+            mgr.broadcast("volume-changed", &VolumeChangedPayload { volume });
             info!("[Setting] 音量已更新: {}%", volume);
         }
         _ => {

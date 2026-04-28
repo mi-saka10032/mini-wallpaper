@@ -7,7 +7,7 @@ use tauri::Manager;
 use crate::migration::Migrator;
 
 /// 获取数据库文件路径（AppData 目录下）
-pub fn get_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+pub(super) fn get_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -17,7 +17,7 @@ pub fn get_db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
 }
 
 /// 初始化数据库连接并执行迁移
-pub async fn init_db(app: &tauri::AppHandle) -> Result<DatabaseConnection> {
+pub(super) async fn init_db(app: &tauri::AppHandle) -> Result<DatabaseConnection> {
     let start = std::time::Instant::now();
 
     let db_path = get_db_path(app)?;

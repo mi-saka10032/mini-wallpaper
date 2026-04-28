@@ -12,8 +12,10 @@ macro_rules! all_handlers {
     () => {
         tauri::generate_handler![
             // wallpaper
+            $crate::commands::wallpaper::get_supported_extensions,
             $crate::commands::wallpaper::get_wallpapers,
             $crate::commands::wallpaper::import_wallpapers,
+            $crate::commands::wallpaper::save_video_thumbnail,
             $crate::commands::wallpaper::delete_wallpapers,
             // collection
             $crate::commands::collection::get_collections,

@@ -14,21 +14,8 @@ pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<collection::Model>> 
     Ok(collections)
 }
 
-/// 校验收藏夹名称
-fn validate_name(name: &str) -> Result<()> {
-    let name = name.trim();
-    if name.is_empty() {
-        anyhow::bail!("收藏夹名称不能为空");
-    }
-    if name.chars().count() > 32 {
-        anyhow::bail!("收藏夹名称不能超过 32 个字符");
-    }
-    Ok(())
-}
-
 /// 创建收藏夹
 pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection::Model> {
-    validate_name(&name)?;
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = collection::ActiveModel {
         name: Set(name),
@@ -47,7 +34,6 @@ pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection:
 
 /// 重命名收藏夹
 pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<collection::Model> {
-    validate_name(&name)?;
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = collection::ActiveModel {
         id: Set(id),
@@ -206,93 +192,67 @@ pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Re
     Ok(count)
 }
 
-/// 根据 play_mode 获取收藏夹中的下一张壁纸 ID
-///
-/// - sequential: 按 sort_order 取当前 wallpaper_id 的下一张，末尾回首
-/// - random: SQLite RANDOM() 随机取一张（排除当前）
-pub async fn next_wallpaper_id(
+// ==================== 可复用的 ORM 辅助函数 ====================
+
+/// 查询某壁纸在收藏夹中的 sort_order
+async fn find_sort_order(
     db: &DatabaseConnection,
     collection_id: i32,
-    current_wallpaper_id: Option<i32>,
-    play_mode: &str,
+    wallpaper_id: i32,
 ) -> Result<Option<i32>> {
-    use sea_orm::{ConnectionTrait, Statement};
+    let record = collection_wallpaper::Entity::find()
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(collection_wallpaper::Column::WallpaperId.eq(wallpaper_id))
+        .one(db)
+        .await?;
+    Ok(record.map(|r| r.sort_order))
+}
 
-    match play_mode {
-        "random" => {
-            // 随机取一张，排除当前
-            let sql = if let Some(cwid) = current_wallpaper_id {
-                format!(
-                    "SELECT wallpaper_id FROM collection_wallpapers
-                     WHERE collection_id = {} AND wallpaper_id != {}
-                     ORDER BY RANDOM() LIMIT 1",
-                    collection_id, cwid
-                )
-            } else {
-                format!(
-                    "SELECT wallpaper_id FROM collection_wallpapers
-                     WHERE collection_id = {}
-                     ORDER BY RANDOM() LIMIT 1",
-                    collection_id
-                )
-            };
+/// 按 sort_order 边界条件查找壁纸 ID
+///
+/// - `order_bound > 0`：查找 sort_order > order_bound 的最小值（下一张）
+/// - `order_bound < 0`：查找 sort_order < |order_bound| 的最大值（上一张）
+/// - 内部通过 `direction` 参数区分方向
+async fn find_adjacent_wallpaper(
+    db: &DatabaseConnection,
+    collection_id: i32,
+    current_order: i32,
+    direction: Direction,
+) -> Result<Option<i32>> {
+    let query = match direction {
+        Direction::Next => collection_wallpaper::Entity::find()
+            .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+            .filter(collection_wallpaper::Column::SortOrder.gt(current_order))
+            .order_by_asc(collection_wallpaper::Column::SortOrder),
+        Direction::Prev => collection_wallpaper::Entity::find()
+            .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+            .filter(collection_wallpaper::Column::SortOrder.lt(current_order))
+            .order_by_desc(collection_wallpaper::Column::SortOrder),
+    };
 
-            let result = db
-                .query_one(Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    sql,
-                ))
-                .await?;
+    let record = query.one(db).await?;
+    Ok(record.map(|r| r.wallpaper_id))
+}
 
-            if let Some(row) = result {
-                let wid: i32 = row.try_get("", "wallpaper_id")?;
-                Ok(Some(wid))
-            } else {
-                // 只有一张时 fallback 取第一张
-                first_wallpaper_id(db, collection_id).await
-            }
-        }
-        _ => {
-            // sequential: 找当前 wallpaper_id 在 sort_order 中的位置，取下一张
-            if let Some(cwid) = current_wallpaper_id {
-                let current_row = db
-                    .query_one(Statement::from_string(
-                        sea_orm::DatabaseBackend::Sqlite,
-                        format!(
-                            "SELECT sort_order FROM collection_wallpapers
-                             WHERE collection_id = {} AND wallpaper_id = {}",
-                            collection_id, cwid
-                        ),
-                    ))
-                    .await?;
+/// 随机取一张壁纸 ID（可排除指定 ID）
+async fn find_random_wallpaper(
+    db: &DatabaseConnection,
+    collection_id: i32,
+    exclude_id: Option<i32>,
+) -> Result<Option<i32>> {
+    let mut query = collection_wallpaper::Entity::find()
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id));
 
-                if let Some(row) = current_row {
-                    let current_order: i32 = row.try_get("", "sort_order")?;
-
-                    // 取 sort_order 大于当前的下一张
-                    let next = db
-                        .query_one(Statement::from_string(
-                            sea_orm::DatabaseBackend::Sqlite,
-                            format!(
-                                "SELECT wallpaper_id FROM collection_wallpapers
-                                 WHERE collection_id = {} AND sort_order > {}
-                                 ORDER BY sort_order ASC LIMIT 1",
-                                collection_id, current_order
-                            ),
-                        ))
-                        .await?;
-
-                    if let Some(row) = next {
-                        let wid: i32 = row.try_get("", "wallpaper_id")?;
-                        return Ok(Some(wid));
-                    }
-                }
-            }
-
-            // fallback: 当前壁纸不在收藏夹中 / 已到末尾 → 回到第一张
-            first_wallpaper_id(db, collection_id).await
-        }
+    if let Some(eid) = exclude_id {
+        query = query.filter(collection_wallpaper::Column::WallpaperId.ne(eid));
     }
+
+    // RANDOM() 是 SQLite 特有函数，通过 Expr::cust 表达
+    let record = query
+        .order_by(Expr::cust("RANDOM()"), Order::Asc)
+        .one(db)
+        .await?;
+    Ok(record.map(|r| r.wallpaper_id))
 }
 
 /// 获取收藏夹中 sort_order 最小的第一张壁纸 ID
@@ -300,21 +260,12 @@ async fn first_wallpaper_id(
     db: &DatabaseConnection,
     collection_id: i32,
 ) -> Result<Option<i32>> {
-    use sea_orm::{ConnectionTrait, Statement};
-
-    let result = db
-        .query_one(Statement::from_string(
-            sea_orm::DatabaseBackend::Sqlite,
-            format!(
-                "SELECT wallpaper_id FROM collection_wallpapers
-                 WHERE collection_id = {} ORDER BY sort_order ASC LIMIT 1",
-                collection_id
-            ),
-        ))
+    let record = collection_wallpaper::Entity::find()
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .order_by_asc(collection_wallpaper::Column::SortOrder)
+        .one(db)
         .await?;
-
-    Ok(result
-        .and_then(|r| r.try_get::<i32>("", "wallpaper_id").ok()))
+    Ok(record.map(|r| r.wallpaper_id))
 }
 
 /// 获取收藏夹中 sort_order 最大的最后一张壁纸 ID
@@ -322,21 +273,58 @@ async fn last_wallpaper_id(
     db: &DatabaseConnection,
     collection_id: i32,
 ) -> Result<Option<i32>> {
-    use sea_orm::{ConnectionTrait, Statement};
-
-    let result = db
-        .query_one(Statement::from_string(
-            sea_orm::DatabaseBackend::Sqlite,
-            format!(
-                "SELECT wallpaper_id FROM collection_wallpapers
-                 WHERE collection_id = {} ORDER BY sort_order DESC LIMIT 1",
-                collection_id
-            ),
-        ))
+    let record = collection_wallpaper::Entity::find()
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .order_by_desc(collection_wallpaper::Column::SortOrder)
+        .one(db)
         .await?;
+    Ok(record.map(|r| r.wallpaper_id))
+}
 
-    Ok(result
-        .and_then(|r| r.try_get::<i32>("", "wallpaper_id").ok()))
+/// 方向枚举，用于 find_adjacent_wallpaper
+enum Direction {
+    Next,
+    Prev,
+}
+
+// ==================== 公开的切换壁纸接口 ====================
+
+/// 根据 play_mode 获取收藏夹中的下一张壁纸 ID
+///
+/// - sequential: 按 sort_order 取当前 wallpaper_id 的下一张，末尾回首
+/// - random: RANDOM() 随机取一张（排除当前）
+pub async fn next_wallpaper_id(
+    db: &DatabaseConnection,
+    collection_id: i32,
+    current_wallpaper_id: Option<i32>,
+    play_mode: &str,
+) -> Result<Option<i32>> {
+    match play_mode {
+        "random" => {
+            let result = find_random_wallpaper(db, collection_id, current_wallpaper_id).await?;
+            // 只有一张时排除自身后查不到，fallback 取第一张
+            if result.is_some() {
+                Ok(result)
+            } else {
+                first_wallpaper_id(db, collection_id).await
+            }
+        }
+        _ => {
+            // sequential: 找当前 wallpaper_id 的 sort_order，取下一张
+            if let Some(cwid) = current_wallpaper_id {
+                if let Some(current_order) = find_sort_order(db, collection_id, cwid).await? {
+                    if let Some(wid) =
+                        find_adjacent_wallpaper(db, collection_id, current_order, Direction::Next)
+                            .await?
+                    {
+                        return Ok(Some(wid));
+                    }
+                }
+            }
+            // fallback: 当前壁纸不在收藏夹中 / 已到末尾 → 回到第一张
+            first_wallpaper_id(db, collection_id).await
+        }
+    }
 }
 
 /// 根据 play_mode 获取收藏夹中的上一张壁纸 ID
@@ -349,50 +337,23 @@ pub async fn prev_wallpaper_id(
     current_wallpaper_id: Option<i32>,
     play_mode: &str,
 ) -> Result<Option<i32>> {
-    use sea_orm::{ConnectionTrait, Statement};
-
     match play_mode {
         "random" => {
             // 随机模式下上一张等同于随机取一张
             next_wallpaper_id(db, collection_id, current_wallpaper_id, play_mode).await
         }
         _ => {
-            // sequential: 找当前 wallpaper_id 在 sort_order 中的位置，取前一张
+            // sequential: 找当前 wallpaper_id 的 sort_order，取前一张
             if let Some(cwid) = current_wallpaper_id {
-                let current_row = db
-                    .query_one(Statement::from_string(
-                        sea_orm::DatabaseBackend::Sqlite,
-                        format!(
-                            "SELECT sort_order FROM collection_wallpapers
-                             WHERE collection_id = {} AND wallpaper_id = {}",
-                            collection_id, cwid
-                        ),
-                    ))
-                    .await?;
-
-                if let Some(row) = current_row {
-                    let current_order: i32 = row.try_get("", "sort_order")?;
-
-                    // 取 sort_order 小于当前的上一张
-                    let prev = db
-                        .query_one(Statement::from_string(
-                            sea_orm::DatabaseBackend::Sqlite,
-                            format!(
-                                "SELECT wallpaper_id FROM collection_wallpapers
-                                 WHERE collection_id = {} AND sort_order < {}
-                                 ORDER BY sort_order DESC LIMIT 1",
-                                collection_id, current_order
-                            ),
-                        ))
-                        .await?;
-
-                    if let Some(row) = prev {
-                        let wid: i32 = row.try_get("", "wallpaper_id")?;
+                if let Some(current_order) = find_sort_order(db, collection_id, cwid).await? {
+                    if let Some(wid) =
+                        find_adjacent_wallpaper(db, collection_id, current_order, Direction::Prev)
+                            .await?
+                    {
                         return Ok(Some(wid));
                     }
                 }
             }
-
             // fallback: 当前壁纸不在收藏夹中 / 已到首部 → 回到最后一张
             last_wallpaper_id(db, collection_id).await
         }

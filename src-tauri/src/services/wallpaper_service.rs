@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::entities::{collection_wallpaper, monitor_config, wallpaper};
-use crate::utils::ffmpeg;
 
 /// 支持的图片扩展名
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "webp"];
@@ -15,6 +14,16 @@ const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov"];
 
 /// 支持的 GIF 扩展名
 const GIF_EXTENSIONS: &[&str] = &["gif"];
+
+/// 获取所有支持的壁纸文件扩展名
+pub fn get_supported_extensions() -> Vec<String> {
+    IMAGE_EXTENSIONS
+        .iter()
+        .chain(VIDEO_EXTENSIONS.iter())
+        .chain(GIF_EXTENSIONS.iter())
+        .map(|s| s.to_string())
+        .collect()
+}
 
 /// 判断文件类型
 fn detect_file_type(ext: &str) -> Option<&'static str> {
@@ -54,33 +63,14 @@ fn copy_to_app_dir(source: &Path, wallpapers_dir: &Path) -> Result<PathBuf> {
     Ok(dest)
 }
 
-/// 生成图片缩略图（image crate）
-fn generate_image_thumbnail(source: &Path, thumb_path: &Path) -> Result<()> {
+/// 生成图片/GIF 缩略图（image crate，等比缩放最大宽度 480px）
+fn generate_static_thumbnail(source: &Path, thumb_path: &Path) -> Result<()> {
     let img = image::open(source).context("Failed to open image")?;
-    let thumbnail = img.thumbnail(400, 400);
+    let thumbnail = img.thumbnail(480, 480);
     thumbnail
         .save(thumb_path)
         .context("Failed to save thumbnail")?;
     Ok(())
-}
-
-/// 按文件类型分发缩略图生成
-///
-/// - image: image crate 缩放
-/// - gif: image crate 解码第一帧
-/// - video: ffmpeg 抽帧
-fn generate_thumbnail(
-    file_type: &str,
-    source: &Path,
-    thumb_path: &Path,
-    ffmpeg_path: &str,
-) -> Result<()> {
-    match file_type {
-        "image" => generate_image_thumbnail(source, thumb_path),
-        "gif" => ffmpeg::generate_gif_thumbnail(source, thumb_path),
-        "video" => ffmpeg::generate_video_thumbnail(ffmpeg_path, source, thumb_path),
-        _ => anyhow::bail!("Unsupported file type for thumbnail: {}", file_type),
-    }
 }
 
 /// 获取图片尺寸
@@ -89,12 +79,14 @@ fn get_image_dimensions(path: &Path) -> Option<(u32, u32)> {
 }
 
 /// 导入单个壁纸文件
+///
+/// 图片/GIF 在导入时由 image crate 生成缩略图；
+/// 视频缩略图由前端 canvas 抽帧后通过 `save_video_thumbnail` 单独写入。
 pub async fn import_single(
     db: &DatabaseConnection,
     source_path: &str,
     wallpapers_dir: &Path,
     thumbnails_dir: &Path,
-    ffmpeg_path: &str,
 ) -> Result<wallpaper::Model> {
     let source = Path::new(source_path);
 
@@ -128,25 +120,27 @@ pub async fn import_single(
     let dest_path = copy_to_app_dir(source, wallpapers_dir)?;
     let dest_path_str = dest_path.to_string_lossy().to_string();
 
-    // 6. 生成缩略图（按文件类型分发：image→image crate, gif→image crate 第一帧, video→ffmpeg）
-    ensure_dir(thumbnails_dir)?;
-    // 视频缩略图输出 jpg（ffmpeg 输出），图片/GIF 输出 webp（image crate）
-    let thumb_ext = if file_type == "video" { "jpg" } else { "webp" };
-    let thumb_name = format!(
-        "{}.{}",
-        dest_path.file_stem().unwrap().to_string_lossy(),
-        thumb_ext
-    );
-    let thumb_path = thumbnails_dir.join(&thumb_name);
-    let thumb_path_str = match generate_thumbnail(file_type, &dest_path, &thumb_path, ffmpeg_path) {
-        Ok(()) => {
-            println!("[Thumbnail] Generated: {:?}", thumb_path);
-            Some(thumb_path.to_string_lossy().to_string())
+    // 6. 生成缩略图：仅图片/GIF 在此生成，视频由前端 canvas 抽帧后单独写入
+    let thumb_path_str = if file_type == "image" || file_type == "gif" {
+        ensure_dir(thumbnails_dir)?;
+        let thumb_name = format!(
+            "{}.webp",
+            dest_path.file_stem().unwrap().to_string_lossy(),
+        );
+        let thumb_path = thumbnails_dir.join(&thumb_name);
+        match generate_static_thumbnail(&dest_path, &thumb_path) {
+            Ok(()) => {
+                println!("[Thumbnail] Generated: {:?}", thumb_path);
+                Some(thumb_path.to_string_lossy().to_string())
+            }
+            Err(e) => {
+                eprintln!("[WARN] Thumbnail generation failed for {}: {}", original_name, e);
+                None
+            }
         }
-        Err(e) => {
-            eprintln!("[WARN] Thumbnail generation failed for {}: {}", original_name, e);
-            None
-        }
+    } else {
+        // 视频：thumb_path 暂为 None，等待前端回传
+        None
     };
 
     // 7. 获取图片/GIF 尺寸（视频尺寸暂不提取）
@@ -195,13 +189,12 @@ pub async fn import_batch(
     source_paths: Vec<String>,
     wallpapers_dir: &Path,
     thumbnails_dir: &Path,
-    ffmpeg_path: &str,
 ) -> Result<Vec<wallpaper::Model>> {
     let mut results = Vec::new();
     let mut errors = Vec::new();
 
     for path in &source_paths {
-        match import_single(db, path, wallpapers_dir, thumbnails_dir, ffmpeg_path).await {
+        match import_single(db, path, wallpapers_dir, thumbnails_dir).await {
             Ok(model) => results.push(model),
             Err(e) => {
                 eprintln!("[Import Error] {}: {}", path, e);
@@ -215,6 +208,47 @@ pub async fn import_batch(
     }
 
     Ok(results)
+}
+
+/// 保存前端 canvas 生成的视频缩略图
+///
+/// 接收前端传来的图片字节数据（WebP/JPEG），持久化到 thumbnails 目录，
+/// 并更新对应壁纸记录的 thumb_path。
+pub async fn save_video_thumbnail(
+    db: &DatabaseConnection,
+    wallpaper_id: i32,
+    data: Vec<u8>,
+    thumbnails_dir: &Path,
+) -> Result<String> {
+    // 1. 查找壁纸记录
+    let model = wallpaper::Entity::find_by_id(wallpaper_id)
+        .one(db)
+        .await
+        .context("Failed to query wallpaper")?
+        .ok_or_else(|| anyhow::anyhow!("Wallpaper not found: {}", wallpaper_id))?;
+
+    // 2. 根据壁纸文件名生成缩略图文件名（与壁纸文件同 stem）
+    ensure_dir(thumbnails_dir)?;
+    let stem = Path::new(&model.file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+    let thumb_name = format!("{}.webp", stem);
+    let thumb_path = thumbnails_dir.join(&thumb_name);
+
+    // 3. 写入文件
+    std::fs::write(&thumb_path, &data)
+        .context("Failed to write video thumbnail")?;
+
+    let thumb_path_str = thumb_path.to_string_lossy().to_string();
+
+    // 4. 更新数据库 thumb_path
+    let mut active: wallpaper::ActiveModel = model.into();
+    active.thumb_path = Set(Some(thumb_path_str.clone()));
+    active.update(db).await.context("Failed to update wallpaper thumb_path")?;
+
+    println!("[VideoThumbnail] Saved: {}", thumb_path_str);
+    Ok(thumb_path_str)
 }
 
 /// 批量删除壁纸（删文件 + 删缩略图 + 删数据库记录）

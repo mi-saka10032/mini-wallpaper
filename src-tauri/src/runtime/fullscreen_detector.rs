@@ -1,11 +1,14 @@
 //! 全屏检测模块
 //!
-//! 提供 Windows 平台的全屏应用检测功能。
+//! 提供全屏应用检测功能，Windows 平台通过 Win32 API 实现，
+//! 非 Windows 平台始终返回 false（无全屏检测需求）。
+//!
 //! 本模块不持有定时器句柄，仅提供：
 //! - `check_fullscreen()`: 纯检测函数，返回当前是否有全屏应用
-//! - `spawn_detection_task()`: 工厂函数，创建轮询检测异步任务并返回 JoinHandle
+//! - `FullscreenDetectionTask`: 任务定义，实现 `TaskSpawner` trait
 //!
-//! 定时器生命周期由 `TimerRegistry` 统一管理。
+//! 定时器生命周期由 `Scheduler` 统一管理，
+//! `FullscreenDetectionTask` 自身持有 `AppHandle`，`spawn` 零参数消费 self。
 
 use std::time::Duration;
 
@@ -13,7 +16,9 @@ use log::info;
 use tauri::Emitter;
 use tokio::task::JoinHandle;
 
-/// 全屏检测定时器在 TimerRegistry 中的 key
+use super::scheduler::TaskSpawner;
+
+/// 全屏检测定时器在 Scheduler 中的 key
 pub const FULLSCREEN_TIMER_KEY: &str = "fullscreen_detector";
 
 /// 全屏状态变更事件 payload
@@ -22,34 +27,42 @@ pub struct FullscreenChangedPayload {
     pub is_fullscreen: bool,
 }
 
-/// 创建全屏检测轮询任务（工厂函数）
+/// 全屏检测任务定义
 ///
-/// 返回 `JoinHandle`，由调用方注册到 `TimerRegistry`。
-/// 任务内部每 2 秒检测一次全屏状态，状态变化时 emit 事件通知前端。
-pub fn spawn_detection_task(app_handle: tauri::AppHandle) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut was_fullscreen = false;
+/// 自身持有 `AppHandle`（用于 emit 事件），`spawn` 消费 self 即可启动，
+/// 无需外部注入任何依赖。
+pub struct FullscreenDetectionTask {
+    pub app: tauri::AppHandle,
+}
 
-        loop {
-            let is_fullscreen = check_fullscreen();
+impl TaskSpawner for FullscreenDetectionTask {
+    fn spawn(self) -> JoinHandle<()> {
+        let app = self.app;
 
-            if is_fullscreen != was_fullscreen {
-                if is_fullscreen {
-                    info!("检测到全屏应用 — 暂停壁纸");
-                } else {
-                    info!("全屏应用已退出 — 恢复壁纸");
+        tokio::spawn(async move {
+            let mut was_fullscreen = false;
+
+            loop {
+                let is_fullscreen = check_fullscreen();
+
+                if is_fullscreen != was_fullscreen {
+                    if is_fullscreen {
+                        info!("检测到全屏应用 — 暂停壁纸");
+                    } else {
+                        info!("全屏应用已退出 — 恢复壁纸");
+                    }
+
+                    let _ = app.emit(
+                        "fullscreen-changed",
+                        FullscreenChangedPayload { is_fullscreen },
+                    );
+                    was_fullscreen = is_fullscreen;
                 }
 
-                let _ = app_handle.emit(
-                    "fullscreen-changed",
-                    FullscreenChangedPayload { is_fullscreen },
-                );
-                was_fullscreen = is_fullscreen;
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
-
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    })
+        })
+    }
 }
 
 /// Windows 全屏检测实现
@@ -60,11 +73,11 @@ pub fn spawn_detection_task(app_handle: tauri::AppHandle) -> JoinHandle<()> {
 #[cfg(target_os = "windows")]
 fn check_fullscreen() -> bool {
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowRect, GetClassNameW, GetDesktopWindow,
-    };
     use windows_sys::Win32::Graphics::Gdi::{
-        MonitorFromWindow, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetWindowRect,
     };
 
     unsafe {

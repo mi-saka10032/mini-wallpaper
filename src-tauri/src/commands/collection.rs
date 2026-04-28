@@ -1,15 +1,21 @@
-use sea_orm::DatabaseConnection;
 use tauri::State;
 
+use crate::ctx::AppContext;
+use crate::dto::collection_dto::{
+    AddWallpapersRequest, CreateCollectionRequest, DeleteCollectionRequest,
+    GetCollectionWallpapersRequest, RemoveWallpapersRequest, RenameCollectionRequest,
+    ReorderWallpapersRequest,
+};
+use crate::dto::Validated;
 use crate::entities::{collection, wallpaper};
 use crate::services::collection_service;
 
 /// 获取所有收藏夹
 #[tauri::command]
 pub async fn get_collections(
-    db: State<'_, DatabaseConnection>,
+    ctx: State<'_, AppContext>,
 ) -> Result<Vec<collection::Model>, String> {
-    collection_service::get_all(db.inner())
+    collection_service::get_all(&ctx.db)
         .await
         .map_err(|e| e.to_string())
 }
@@ -17,10 +23,11 @@ pub async fn get_collections(
 /// 创建收藏夹
 #[tauri::command]
 pub async fn create_collection(
-    db: State<'_, DatabaseConnection>,
-    name: String,
+    ctx: State<'_, AppContext>,
+    req: Validated<CreateCollectionRequest>,
 ) -> Result<collection::Model, String> {
-    collection_service::create(db.inner(), name)
+    let req = req.into_inner();
+    collection_service::create(&ctx.db, req.name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -28,11 +35,11 @@ pub async fn create_collection(
 /// 重命名收藏夹
 #[tauri::command]
 pub async fn rename_collection(
-    db: State<'_, DatabaseConnection>,
-    id: i32,
-    name: String,
+    ctx: State<'_, AppContext>,
+    req: Validated<RenameCollectionRequest>,
 ) -> Result<collection::Model, String> {
-    collection_service::rename(db.inner(), id, name)
+    let req = req.into_inner();
+    collection_service::rename(&ctx.db, req.id, req.name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -40,10 +47,11 @@ pub async fn rename_collection(
 /// 删除收藏夹
 #[tauri::command]
 pub async fn delete_collection(
-    db: State<'_, DatabaseConnection>,
-    id: i32,
+    ctx: State<'_, AppContext>,
+    req: Validated<DeleteCollectionRequest>,
 ) -> Result<(), String> {
-    collection_service::delete(db.inner(), id)
+    let req = req.into_inner();
+    collection_service::delete(&ctx.db, req.id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -51,10 +59,11 @@ pub async fn delete_collection(
 /// 获取收藏夹内的壁纸列表
 #[tauri::command]
 pub async fn get_collection_wallpapers(
-    db: State<'_, DatabaseConnection>,
-    collection_id: i32,
+    ctx: State<'_, AppContext>,
+    req: Validated<GetCollectionWallpapersRequest>,
 ) -> Result<Vec<wallpaper::Model>, String> {
-    collection_service::get_wallpapers(db.inner(), collection_id)
+    let req = req.into_inner();
+    collection_service::get_wallpapers(&ctx.db, req.collection_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -62,11 +71,11 @@ pub async fn get_collection_wallpapers(
 /// 向收藏夹添加壁纸
 #[tauri::command]
 pub async fn add_wallpapers_to_collection(
-    db: State<'_, DatabaseConnection>,
-    collection_id: i32,
-    wallpaper_ids: Vec<i32>,
+    ctx: State<'_, AppContext>,
+    req: Validated<AddWallpapersRequest>,
 ) -> Result<u32, String> {
-    collection_service::add_wallpapers(db.inner(), collection_id, wallpaper_ids)
+    let req = req.into_inner();
+    collection_service::add_wallpapers(&ctx.db, req.collection_id, req.wallpaper_ids)
         .await
         .map_err(|e| e.to_string())
 }
@@ -74,11 +83,11 @@ pub async fn add_wallpapers_to_collection(
 /// 从收藏夹移除壁纸
 #[tauri::command]
 pub async fn remove_wallpapers_from_collection(
-    db: State<'_, DatabaseConnection>,
-    collection_id: i32,
-    wallpaper_ids: Vec<i32>,
+    ctx: State<'_, AppContext>,
+    req: Validated<RemoveWallpapersRequest>,
 ) -> Result<u64, String> {
-    collection_service::remove_wallpapers(db.inner(), collection_id, wallpaper_ids)
+    let req = req.into_inner();
+    collection_service::remove_wallpapers(&ctx.db, req.collection_id, req.wallpaper_ids)
         .await
         .map_err(|e| e.to_string())
 }
@@ -86,11 +95,11 @@ pub async fn remove_wallpapers_from_collection(
 /// 重新排序收藏夹内的壁纸
 #[tauri::command]
 pub async fn reorder_collection_wallpapers(
-    db: State<'_, DatabaseConnection>,
-    collection_id: i32,
-    wallpaper_ids: Vec<i32>,
+    ctx: State<'_, AppContext>,
+    req: Validated<ReorderWallpapersRequest>,
 ) -> Result<(), String> {
-    collection_service::reorder_wallpapers(db.inner(), collection_id, wallpaper_ids)
+    let req = req.into_inner();
+    collection_service::reorder_wallpapers(&ctx.db, req.collection_id, req.wallpaper_ids)
         .await
         .map_err(|e| e.to_string())
 }

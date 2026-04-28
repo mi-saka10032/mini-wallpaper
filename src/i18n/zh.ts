@@ -63,6 +63,7 @@ export default {
     removeConfirmDesc: "确定要从收藏夹中移除选中的 {{count}} 项壁纸吗？壁纸文件不会被删除。",
     releaseToImport: "释放以导入壁纸",
     supportedFormats: "支持图片、视频、GIF 文件",
+    wallpaperFiles: "壁纸文件",
   },
 
   // MonitorSettingsPanel

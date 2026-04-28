@@ -1,16 +1,21 @@
-use tauri::Manager;
-
 mod commands;
-mod db;
+mod ctx;
+mod dto;
 mod entities;
 mod migration;
 mod platform;
+mod runtime;
 mod services;
 mod utils;
 
-use utils::timer_registry::{self, TimerRegistryState};
-use services::wallpaper_window_service;
+use std::sync::Arc;
+
+use tauri::Manager;
+use tokio::sync::Mutex;
+
+use ctx::AppContext;
 use platform::tray;
+use runtime::Scheduler;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -31,19 +36,16 @@ pub fn run() {
 
             let handle = app.handle().clone();
 
-            // 同步初始化数据库（release 模式下 <50ms）
-            let db = tauri::async_runtime::block_on(async { db::init_db(&handle).await })
-                .expect("Failed to initialize database");
+            // 构造 AppContext（内部完成 DB 初始化）并注册为全局 state
+            let ctx = tauri::async_runtime::block_on(async {
+                AppContext::new(handle.clone()).await
+            })
+            .expect("Failed to initialize AppContext");
+            app.manage(ctx);
 
-            app.manage(db);
-
-            // 注入 TimerRegistry state（全局唯一定时器管理）
-            let timer_registry = timer_registry::create_timer_registry();
-            app.manage(timer_registry);
-
-            // 注入 WallpaperWindowManager state
-            let ww_manager = wallpaper_window_service::create_wallpaper_window_manager();
-            app.manage(ww_manager);
+            // 构造 Scheduler（独立全局 state，纯 JoinHandle 注册表）
+            let scheduler = Arc::new(Mutex::new(Scheduler::new()));
+            app.manage(scheduler);
 
             // ===== 系统托盘 =====
             tray::setup_tray(app)?;
@@ -55,12 +57,12 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = &event {
-                // 统一停止所有定时器（轮播 + 全屏检测等）
-                if let Some(registry_state) = app.try_state::<TimerRegistryState>() {
-                    let registry_state = registry_state.inner().clone();
+                // 统一停止调度器内所有后台任务（轮播 + 全屏检测等）
+                if let Some(scheduler) = app.try_state::<Arc<Mutex<Scheduler>>>() {
+                    let scheduler = scheduler.inner().clone();
                     tauri::async_runtime::block_on(async {
-                        let mut registry = registry_state.lock().await;
-                        registry.stop_all();
+                        let mut sched = scheduler.lock().await;
+                        sched.stop_all();
                     });
                 }
             }

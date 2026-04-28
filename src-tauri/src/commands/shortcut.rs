@@ -1,30 +1,27 @@
+use std::sync::Arc;
+
 use log::warn;
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, State};
+use tokio::sync::Mutex;
 
+use crate::ctx::AppContext;
+use crate::runtime::carousel::{carousel_key, CarouselTask, ThumbnailChangedPayload};
+use crate::runtime::Scheduler;
+use crate::dto::shortcut_dto::{Direction, SwitchWallpaperRequest};
+use crate::dto::Validated;
 use crate::services::{collection_service, monitor_config_service};
-use crate::services::timer_manager::{self, carousel_key, ThumbnailChangedPayload};
-use crate::utils::timer_registry::TimerRegistryState;
-use sea_orm::DatabaseConnection;
-
-/// 切换壁纸方向
-#[derive(serde::Deserialize)]
-pub enum Direction {
-    #[serde(rename = "next")]
-    Next,
-    #[serde(rename = "prev")]
-    Prev,
-}
 
 /// 切换所有活跃显示器的壁纸（上一张/下一张）
 #[tauri::command]
 pub async fn switch_wallpaper(
-    direction: Direction,
-    db: State<'_, DatabaseConnection>,
-    registry: State<'_, TimerRegistryState>,
-    app_handle: tauri::AppHandle,
+    ctx: State<'_, AppContext>,
+    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    req: Validated<SwitchWallpaperRequest>,
 ) -> Result<(), String> {
+    let req = req.into_inner();
+
     // 获取所有 active 的 monitor_config
-    let configs = monitor_config_service::get_all(&db)
+    let configs = monitor_config_service::get_all(&ctx.db)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -39,10 +36,10 @@ pub async fn switch_wallpaper(
             None => continue,
         };
 
-        let new_wid = match direction {
+        let new_wid = match req.direction {
             Direction::Next => {
                 collection_service::next_wallpaper_id(
-                    &db,
+                    &ctx.db,
                     collection_id,
                     config.wallpaper_id,
                     &config.play_mode,
@@ -51,7 +48,7 @@ pub async fn switch_wallpaper(
             }
             Direction::Prev => {
                 collection_service::prev_wallpaper_id(
-                    &db,
+                    &ctx.db,
                     collection_id,
                     config.wallpaper_id,
                     &config.play_mode,
@@ -62,20 +59,19 @@ pub async fn switch_wallpaper(
         .map_err(|e| e.to_string())?;
 
         if let Some(wid) = new_wid {
-            monitor_config_service::update_wallpaper_id(&db, &config.monitor_id, wid)
+            monitor_config_service::update_wallpaper_id(&ctx.db, &config.monitor_id, wid)
                 .await
                 .map_err(|e| e.to_string())?;
 
             // 1. 通知指定壁纸窗口更新壁纸
-            let wm_state = app_handle.state::<crate::services::wallpaper_window_service::WallpaperWindowManagerState>();
-            let wm_guard = wm_state.lock().await;
-            if let Err(e) = wm_guard.update_window(&app_handle, &config.monitor_id, wid) {
+            let wm_guard = ctx.window_manager.lock().await;
+            if let Err(e) = wm_guard.update_window(&config.monitor_id, wid) {
                 warn!("[switch_wallpaper] 壁纸窗口更新失败: {}", e);
             }
             drop(wm_guard);
 
             // 2. 通知主窗口更新缩略图
-            let _ = app_handle.emit(
+            let _ = ctx.app_handle.emit(
                 "thumbnail-changed",
                 &ThumbnailChangedPayload {
                     monitor_id: config.monitor_id.clone(),
@@ -85,14 +81,15 @@ pub async fn switch_wallpaper(
 
             // 3. 如果有运行中的定时器，重置计时
             let key = carousel_key(&config.monitor_id);
-            let mut reg = registry.lock().await;
-            if reg.is_running(&key) {
-                let handle = timer_manager::spawn_carousel_task(
-                    config.monitor_id.clone(),
-                    db.inner().clone(),
-                    app_handle.clone(),
+            let mut sched = scheduler.lock().await;
+            if sched.is_running(&key) {
+                sched.restart(
+                    key,
+                    CarouselTask {
+                        app: ctx.app_handle.clone(),
+                        monitor_id: config.monitor_id.clone(),
+                    },
                 );
-                reg.restart(key, handle);
             }
         }
     }

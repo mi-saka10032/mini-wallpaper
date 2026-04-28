@@ -6,42 +6,24 @@ use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-/// 进度回调类型：(current, total)
-pub type ProgressFn = Box<dyn Fn(u64, u64) + Send>;
-
-/// 统计待打包的文件数量
-fn count_files_to_pack(app_data_dir: &Path) -> u64 {
-    let mut count = 0u64;
-    let dirs = ["wallpapers", "thumbnails"];
-    for dir_name in &dirs {
-        let dir_path = app_data_dir.join(dir_name);
-        if !dir_path.exists() {
-            continue;
-        }
-        for entry in WalkDir::new(&dir_path).into_iter().filter_map(|e| e.ok()) {
-            if entry.path().is_file() {
-                count += 1;
-            }
-        }
-    }
-    // +1 for app.db
-    if app_data_dir.join("app.db").exists() {
-        count += 1;
-    }
-    count
-}
+use crate::utils::progress_io::{ByteProgressFn, ProgressCounter, ProgressWriter};
 
 /// 导出备份：将 wallpapers/ + thumbnails/ + app.db 打包为 zip
+///
+/// 进度回调为字节级精度（已写入字节数 / 总字节数），
+/// 传入 `None` 时不追踪进度，零额外开销。
 pub fn export_backup(
     app_data_dir: &Path,
     output_path: &Path,
-    on_progress: Option<ProgressFn>,
+    on_progress: Option<ByteProgressFn>,
 ) -> Result<()> {
-    let total = count_files_to_pack(app_data_dir);
-    let mut current = 0u64;
+    let total = get_data_size(app_data_dir);
 
     let file = File::create(output_path).context("Failed to create backup file")?;
-    let mut zip = ZipWriter::new(file);
+    let counter = ProgressCounter::new(total, on_progress);
+    let writer = ProgressWriter::new(file, counter);
+    let mut zip = ZipWriter::new(writer);
+
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
@@ -65,10 +47,6 @@ pub fn export_backup(
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf)?;
                 zip.write_all(&buf)?;
-                current += 1;
-                if let Some(ref cb) = on_progress {
-                    cb(current, total);
-                }
             } else if path.is_dir() && path != app_data_dir {
                 zip.add_directory(&name, options)
                     .context(format!("Failed to add directory: {}", name))?;
@@ -85,10 +63,6 @@ pub fn export_backup(
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         zip.write_all(&buf)?;
-        current += 1;
-        if let Some(ref cb) = on_progress {
-            cb(current, total);
-        }
     }
 
     zip.finish().context("Failed to finalize zip")?;
@@ -98,15 +72,28 @@ pub fn export_backup(
 }
 
 /// 导入备份：解压 zip 到 app_data_dir，覆盖已有文件
+///
+/// 进度回调为字节级精度（已解压写出字节数 / 解压后总字节数），
+/// 多个文件共享同一个 `ProgressCounter`，传入 `None` 时不追踪进度。
 pub fn import_backup(
     app_data_dir: &Path,
     zip_path: &Path,
-    on_progress: Option<ProgressFn>,
+    on_progress: Option<ByteProgressFn>,
 ) -> Result<u64> {
     let file = File::open(zip_path).context("Failed to open backup file")?;
     let mut archive = ZipArchive::new(file).context("Failed to read zip archive")?;
 
-    let total = archive.len() as u64;
+    // 计算解压后总字节数（所有文件条目的 size 之和）
+    let mut total = 0u64;
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(i) {
+            if !entry.is_dir() {
+                total += entry.size();
+            }
+        }
+    }
+
+    let counter = ProgressCounter::new(total, on_progress);
     let mut count = 0u64;
 
     for i in 0..archive.len() {
@@ -129,14 +116,13 @@ pub fn import_backup(
                 fs::create_dir_all(parent)?;
             }
 
-            let mut out_file = File::create(&out_path)
+            let out_file = File::create(&out_path)
                 .context(format!("Failed to create file: {}", out_path.display()))?;
-            std::io::copy(&mut entry, &mut out_file)?;
-            count += 1;
-        }
 
-        if let Some(ref cb) = on_progress {
-            cb(i as u64 + 1, total);
+            // 共享同一个 counter，多文件解压的字节进度自动累加
+            let mut progress_out = ProgressWriter::new(out_file, counter.clone());
+            std::io::copy(&mut entry, &mut progress_out)?;
+            count += 1;
         }
     }
 

@@ -1,5 +1,5 @@
 import { COMMANDS } from "@/api/config";
-import type { MonitorConfig } from "@/api/config";
+import type { MonitorConfig, UpsertMonitorConfigReq } from "@/api/config";
 import { invoke } from "@/api/invoke";
 
 /** 获取所有显示器配置 */
@@ -13,22 +13,11 @@ export async function getMonitorConfig(monitorId: string): Promise<MonitorConfig
 }
 
 /** 创建或更新显示器配置 */
-export async function upsertMonitorConfig(params: {
-  monitorId: string;
-  wallpaperId?: number | null;
-  collectionId?: number | null;
-  clearCollection?: boolean;
-  displayMode?: string;
-  fitMode?: string;
-  playMode?: string;
-  playInterval?: number;
-  isEnabled?: boolean;
-  active?: boolean;
-}): Promise<MonitorConfig> {
+export async function upsertMonitorConfig(params: UpsertMonitorConfigReq): Promise<MonitorConfig> {
   return invoke(COMMANDS.UPSERT_MONITOR_CONFIG, params);
 }
 
 /** 删除显示器配置 */
-export async function deleteMonitorConfig(id: number): Promise<void> {
-  return invoke(COMMANDS.DELETE_MONITOR_CONFIG, { id });
+export async function deleteMonitorConfig(id: number, monitorId?: string): Promise<void> {
+  return invoke(COMMANDS.DELETE_MONITOR_CONFIG, { id, monitorId });
 }

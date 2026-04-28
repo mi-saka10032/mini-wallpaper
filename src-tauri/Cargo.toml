@@ -37,6 +37,7 @@ image = "0.25.10"
 uuid = { version = "1.23.0", features = ["v4"] }
 zip = "2"
 walkdir = "2"
+garde = { version = "0.22", features = ["derive"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

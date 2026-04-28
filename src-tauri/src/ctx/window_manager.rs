@@ -1,14 +1,14 @@
-//! 壁纸窗口管理服务
+//! 壁纸窗口管理器
 //!
 //! 负责创建、销毁、显示/隐藏壁纸 WebviewWindow。
 //! 每个物理显示器对应一个壁纸窗口，通过 URL 参数传递 monitorId。
 //! Windows 上创建后会调用 desktop_embedder 嵌入桌面层级。
+//!
+//! 构造时注入 `AppHandle`，所有方法不再需要外部传递 app 参数。
 
-use log::{error, info, warn};
+use log::info;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 use crate::platform::windows::desktop_embedder;
@@ -20,23 +20,21 @@ pub struct WallpaperChangedPayload {
     pub wallpaper_id: i32,
 }
 
-/// 壁纸窗口管理器 managed state
-pub type WallpaperWindowManagerState = Arc<Mutex<WallpaperWindowManager>>;
-
-/// 创建壁纸窗口管理器
-pub fn create_wallpaper_window_manager() -> WallpaperWindowManagerState {
-    Arc::new(Mutex::new(WallpaperWindowManager::new()))
-}
-
 /// 壁纸窗口管理器
 pub struct WallpaperWindowManager {
+    /// Tauri 应用句柄（构造时注入）
+    app_handle: AppHandle,
     /// monitor_id -> window_label 映射
     windows: HashMap<String, String>,
 }
 
 impl WallpaperWindowManager {
-    pub fn new() -> Self {
+    /// 构造 WallpaperWindowManager
+    ///
+    /// 注入 `AppHandle`，后续所有窗口操作均通过内部持有的句柄完成。
+    pub fn new(app_handle: AppHandle) -> Self {
         Self {
+            app_handle,
             windows: HashMap::new(),
         }
     }
@@ -48,7 +46,6 @@ impl WallpaperWindowManager {
     /// - Windows 上创建后自动嵌入桌面层级
     pub fn create_window(
         &mut self,
-        app: &AppHandle,
         monitor_id: &str,
         x: i32,
         y: i32,
@@ -60,7 +57,7 @@ impl WallpaperWindowManager {
 
         // 如果已经存在，先销毁旧的
         if self.windows.contains_key(monitor_id) {
-            self.destroy_window(app, monitor_id);
+            self.destroy_window(monitor_id);
         }
 
         let url = match extra_query {
@@ -68,7 +65,7 @@ impl WallpaperWindowManager {
             _ => format!("/wallpaper?monitorId={}", monitor_id),
         };
 
-        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        let window = WebviewWindowBuilder::new(&self.app_handle, &label, WebviewUrl::App(url.into()))
             .title("Wallpaper")
             .decorations(false)
             .skip_taskbar(true)
@@ -93,9 +90,7 @@ impl WallpaperWindowManager {
                     width as i32,
                     height as i32,
                 ) {
-                    // anyhow::Error 使用 {:#} 输出完整错误链
-                    error!("桌面嵌入失败: {:#}", e);
-                    // 嵌入失败不阻止窗口创建，壁纸仍然可以显示为普通窗口
+                    log::error!("桌面嵌入失败: {:#}", e);
                 }
             }
         }
@@ -113,10 +108,9 @@ impl WallpaperWindowManager {
     }
 
     /// 销毁指定显示器的壁纸窗口
-    pub fn destroy_window(&mut self, app: &AppHandle, monitor_id: &str) {
+    pub fn destroy_window(&mut self, monitor_id: &str) {
         if let Some(label) = self.windows.remove(monitor_id) {
-            if let Some(window) = app.get_webview_window(&label) {
-                // Windows：先从桌面解除嵌入
+            if let Some(window) = self.app_handle.get_webview_window(&label) {
                 #[cfg(target_os = "windows")]
                 {
                     if let Ok(hwnd) = window.hwnd() {
@@ -130,26 +124,26 @@ impl WallpaperWindowManager {
     }
 
     /// 销毁所有壁纸窗口
-    pub fn destroy_all(&mut self, app: &AppHandle) {
+    pub fn destroy_all(&mut self) {
         let monitor_ids: Vec<String> = self.windows.keys().cloned().collect();
         for monitor_id in monitor_ids {
-            self.destroy_window(app, &monitor_id);
+            self.destroy_window(&monitor_id);
         }
     }
 
     /// 隐藏所有壁纸窗口（全屏暂停时使用）
-    pub fn hide_all(&self, app: &AppHandle) {
+    pub fn hide_all(&self) {
         for label in self.windows.values() {
-            if let Some(window) = app.get_webview_window(label) {
+            if let Some(window) = self.app_handle.get_webview_window(label) {
                 let _ = window.hide();
             }
         }
     }
 
     /// 显示所有壁纸窗口（恢复时使用）
-    pub fn show_all(&self, app: &AppHandle) {
+    pub fn show_all(&self) {
         for label in self.windows.values() {
-            if let Some(window) = app.get_webview_window(label) {
+            if let Some(window) = self.app_handle.get_webview_window(label) {
                 let _ = window.show();
             }
         }
@@ -161,12 +155,11 @@ impl WallpaperWindowManager {
     /// 确保事件仅发送给壁纸窗口，不会波及 main 等其他窗口。
     pub fn broadcast<S: serde::Serialize + Clone>(
         &self,
-        app: &AppHandle,
         event: &str,
         payload: &S,
     ) {
         for (monitor_id, label) in &self.windows {
-            if let Err(e) = app.emit_to(label, event, payload.clone()) {
+            if let Err(e) = self.app_handle.emit_to(label, event, payload.clone()) {
                 log::warn!(
                     "[WallpaperWindowManager] 广播事件 '{}' 到 '{}' 失败: {}",
                     event, monitor_id, e
@@ -179,10 +172,8 @@ impl WallpaperWindowManager {
     ///
     /// 通过 HashMap 精确获取 monitor_id 对应的窗口 label，
     /// 使用 emit_to 向该窗口单独发送 wallpaper-changed 事件。
-    /// 相比全局广播，这种方式实现了逻辑解耦，也更适合窗口独立设置壁纸的场景。
     pub fn update_window(
         &self,
-        app: &AppHandle,
         monitor_id: &str,
         wallpaper_id: i32,
     ) -> Result<(), String> {
@@ -192,7 +183,7 @@ impl WallpaperWindowManager {
             .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
 
         // 确认窗口实例仍然存在
-        let _window = app.get_webview_window(label).ok_or_else(|| {
+        let _window = self.app_handle.get_webview_window(label).ok_or_else(|| {
             format!(
                 "窗口实例已丢失: label='{}', monitor_id='{}'",
                 label, monitor_id
@@ -204,7 +195,8 @@ impl WallpaperWindowManager {
             wallpaper_id,
         };
 
-        app.emit_to(label, "wallpaper-changed", &payload)
+        self.app_handle
+            .emit_to(label, "wallpaper-changed", &payload)
             .map_err(|e| format!("发送事件失败: {}", e))?;
 
         info!(

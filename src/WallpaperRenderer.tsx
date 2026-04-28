@@ -140,6 +140,28 @@ const WallpaperRenderer: React.FC = () => {
     return () => { unlisten.then((fn) => fn()); };
   }, [monitorId, loadFromConfig]);
 
+  // 监听 fitMode 变更事件（直接更新 objectFit 样式，无需重新加载壁纸）
+  useEffect(() => {
+    if (!monitorId) return;
+    const unlisten = listen(EVENTS.FIT_MODE_CHANGED, (payload) => {
+      if (payload.monitor_id === monitorId) {
+        setFitMode(payload.fit_mode);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [monitorId]);
+
+  // 监听 displayMode 变更事件（切换渲染模式：independent / mirror / extend）
+  useEffect(() => {
+    if (!monitorId) return;
+    const unlisten = listen(EVENTS.DISPLAY_MODE_CHANGED, (payload) => {
+      if (payload.monitor_id === monitorId) {
+        setDisplayMode(payload.display_mode);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [monitorId]);
+
   // extend 模式：解析视口参数
   useEffect(() => {
     if (displayMode !== "extend") {

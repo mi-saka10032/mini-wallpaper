@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use tauri::State;
+use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
 use crate::dto::collection_dto::{
@@ -8,7 +11,9 @@ use crate::dto::collection_dto::{
 };
 use crate::dto::Validated;
 use crate::entities::{collection, wallpaper};
-use crate::services::collection_service;
+use crate::runtime::carousel::carousel_key;
+use crate::runtime::Scheduler;
+use crate::services::{collection_service, monitor_config_service};
 
 /// 获取所有收藏夹
 #[tauri::command]
@@ -45,15 +50,35 @@ pub async fn rename_collection(
 }
 
 /// 删除收藏夹
+///
+/// 删除成功后停止所有引用该收藏夹的轮播定时器，保持 service 层纯数据操作
 #[tauri::command]
 pub async fn delete_collection(
     ctx: State<'_, AppContext>,
+    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<DeleteCollectionRequest>,
 ) -> Result<(), String> {
     let req = req.into_inner();
+
+    // 1. 预先查出引用该收藏夹的 monitor_id 列表（内存快照，后续删除不影响）
+    let monitor_ids = monitor_config_service::get_monitor_ids_by_collection_id(&ctx.db, req.id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 2. 执行数据层删除（清理关联记录 + 置空 monitor_config.collection_id + 删除收藏夹）
     collection_service::delete(&ctx.db, req.id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // 3. 删除成功后，停止引用该收藏夹的轮播定时器
+    {
+        let mut sched = scheduler.lock().await;
+        for mid in &monitor_ids {
+            sched.stop(&carousel_key(mid));
+        }
+    }
+
+    Ok(())
 }
 
 /// 获取收藏夹内的壁纸列表

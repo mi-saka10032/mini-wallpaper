@@ -2,7 +2,15 @@ use garde::Validate;
 use serde::Deserialize;
 
 /// 已知的 setting key 白名单
-const VALID_KEYS: &[&str] = &["pause_on_fullscreen", "global_volume"];
+const VALID_KEYS: &[&str] = &[
+    "theme",
+    "language",
+    "close_to_tray",
+    "pause_on_fullscreen",
+    "global_volume",
+    "shortcut_next_wallpaper",
+    "shortcut_prev_wallpaper",
+];
 
 /// 设置键值对请求
 #[derive(Debug, Deserialize, Validate)]
@@ -42,9 +50,9 @@ impl SetSettingRequest {
     /// 跨字段校验：按 key 校验 value 的格式
     pub fn validate_value_format(&self) -> Result<(), String> {
         match self.key.as_str() {
-            "pause_on_fullscreen" => {
+            "pause_on_fullscreen" | "close_to_tray" => {
                 if self.value != "true" && self.value != "false" {
-                    return Err("pause_on_fullscreen 的值仅支持 true/false".to_string());
+                    return Err(format!("{} 的值仅支持 true/false", self.key));
                 }
             }
             "global_volume" => match self.value.parse::<u32>() {
@@ -53,6 +61,7 @@ impl SetSettingRequest {
                     return Err("global_volume 的值必须为 0~100 的整数".to_string());
                 }
             },
+            // theme, language, shortcut_* 等仅需非空校验（已由 garde 保证）
             _ => {}
         }
         Ok(())

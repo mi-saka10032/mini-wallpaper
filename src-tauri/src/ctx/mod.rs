@@ -40,6 +40,9 @@ pub struct AppContext {
 
     /// 壁纸窗口管理器（物理显示器 ↔ 壁纸窗口的映射管理）
     pub window_manager: Arc<Mutex<WallpaperWindowManager>>,
+
+    /// 备份操作互斥锁（防止导入/导出并发执行导致数据损坏）
+    pub backup_lock: Mutex<()>,
 }
 
 impl AppContext {
@@ -56,6 +59,7 @@ impl AppContext {
             window_manager,
             app_handle,
             db,
+            backup_lock: Mutex::new(()),
         })
     }
 }

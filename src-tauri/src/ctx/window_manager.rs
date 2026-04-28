@@ -20,6 +20,20 @@ pub struct WallpaperChangedPayload {
     pub wallpaper_id: i32,
 }
 
+/// fitMode 变更事件 payload（发送给指定壁纸窗口）
+#[derive(Clone, serde::Serialize)]
+pub struct FitModeChangedPayload {
+    pub monitor_id: String,
+    pub fit_mode: String,
+}
+
+/// displayMode 变更事件 payload（发送给指定壁纸窗口）
+#[derive(Clone, serde::Serialize)]
+pub struct DisplayModeChangedPayload {
+    pub monitor_id: String,
+    pub display_mode: String,
+}
+
 /// 壁纸窗口管理器
 pub struct WallpaperWindowManager {
     /// Tauri 应用句柄（构造时注入）
@@ -202,6 +216,80 @@ impl WallpaperWindowManager {
         info!(
             "壁纸更新事件已发送: monitor='{}', wallpaper_id={}, target='{}'",
             monitor_id, wallpaper_id, label
+        );
+
+        Ok(())
+    }
+
+    /// 通知指定显示器的壁纸窗口 fitMode 变更
+    ///
+    /// 壁纸窗口收到后直接更新 objectFit 样式，无需重新加载壁纸数据。
+    pub fn notify_fit_mode_changed(
+        &self,
+        monitor_id: &str,
+        fit_mode: &str,
+    ) -> Result<(), String> {
+        let label = self
+            .windows
+            .get(monitor_id)
+            .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
+
+        let _window = self.app_handle.get_webview_window(label).ok_or_else(|| {
+            format!(
+                "窗口实例已丢失: label='{}', monitor_id='{}'",
+                label, monitor_id
+            )
+        })?;
+
+        let payload = FitModeChangedPayload {
+            monitor_id: monitor_id.to_string(),
+            fit_mode: fit_mode.to_string(),
+        };
+
+        self.app_handle
+            .emit_to(label, "fit-mode-changed", &payload)
+            .map_err(|e| format!("发送 fit-mode-changed 事件失败: {}", e))?;
+
+        info!(
+            "fit-mode-changed 事件已发送: monitor='{}', fit_mode='{}', target='{}'",
+            monitor_id, fit_mode, label
+        );
+
+        Ok(())
+    }
+
+    /// 通知指定显示器的壁纸窗口 displayMode 变更
+    ///
+    /// 壁纸窗口收到后切换渲染模式（independent / mirror / extend）。
+    pub fn notify_display_mode_changed(
+        &self,
+        monitor_id: &str,
+        display_mode: &str,
+    ) -> Result<(), String> {
+        let label = self
+            .windows
+            .get(monitor_id)
+            .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
+
+        let _window = self.app_handle.get_webview_window(label).ok_or_else(|| {
+            format!(
+                "窗口实例已丢失: label='{}', monitor_id='{}'",
+                label, monitor_id
+            )
+        })?;
+
+        let payload = DisplayModeChangedPayload {
+            monitor_id: monitor_id.to_string(),
+            display_mode: display_mode.to_string(),
+        };
+
+        self.app_handle
+            .emit_to(label, "display-mode-changed", &payload)
+            .map_err(|e| format!("发送 display-mode-changed 事件失败: {}", e))?;
+
+        info!(
+            "display-mode-changed 事件已发送: monitor='{}', display_mode='{}', target='{}'",
+            monitor_id, display_mode, label
         );
 
         Ok(())

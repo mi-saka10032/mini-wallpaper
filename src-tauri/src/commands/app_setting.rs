@@ -13,9 +13,14 @@ use crate::dto::Validated;
 use crate::services::app_setting_service;
 
 /// 已知的 setting key 常量（与前端 SETTING_KEYS 保持一致）
-mod keys {
+pub(crate) mod keys {
+    pub const THEME: &str = "theme";
+    pub const LANGUAGE: &str = "language";
+    pub const CLOSE_TO_TRAY: &str = "close_to_tray";
     pub const PAUSE_ON_FULLSCREEN: &str = "pause_on_fullscreen";
     pub const GLOBAL_VOLUME: &str = "global_volume";
+    pub const SHORTCUT_NEXT_WALLPAPER: &str = "shortcut_next_wallpaper";
+    pub const SHORTCUT_PREV_WALLPAPER: &str = "shortcut_prev_wallpaper";
 }
 
 /// 获取所有设置（返回 key-value 对象）

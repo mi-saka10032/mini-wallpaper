@@ -21,6 +21,9 @@ pub async fn export_backup(
     ctx: State<'_, AppContext>,
     req: Validated<ExportBackupRequest>,
 ) -> Result<String, String> {
+    let _guard = ctx.backup_lock.try_lock()
+        .map_err(|_| "已有备份任务正在执行，请等待完成后再试".to_string())?;
+
     let req = req.into_inner();
     let app_data_dir = ctx.app_handle
         .path()
@@ -54,6 +57,9 @@ pub async fn import_backup(
     ctx: State<'_, AppContext>,
     req: Validated<ImportBackupRequest>,
 ) -> Result<u64, String> {
+    let _guard = ctx.backup_lock.try_lock()
+        .map_err(|_| "已有备份任务正在执行，请等待完成后再试".to_string())?;
+
     let req = req.into_inner();
     let app_data_dir = ctx.app_handle
         .path()

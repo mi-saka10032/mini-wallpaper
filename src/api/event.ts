@@ -11,6 +11,10 @@ export const EVENTS = {
   VIDEO_SYNC: "video-sync",
   /** 全局音量变更事件（后端 setting effect 广播给所有壁纸窗口） */
   VOLUME_CHANGED: "volume-changed",
+  /** fitMode 变更事件（后端发送给指定壁纸窗口） */
+  FIT_MODE_CHANGED: "fit-mode-changed",
+  /** displayMode 变更事件（后端发送给指定壁纸窗口） */
+  DISPLAY_MODE_CHANGED: "display-mode-changed",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -41,6 +45,18 @@ export interface VolumeChangedPayload {
   volume: number;
 }
 
+/** fitMode 变更事件 payload */
+export interface FitModeChangedPayload {
+  monitor_id: string;
+  fit_mode: string;
+}
+
+/** displayMode 变更事件 payload */
+export interface DisplayModeChangedPayload {
+  monitor_id: string;
+  display_mode: string;
+}
+
 /** 视频同步事件 payload（extend 模式跨窗口帧同步） */
 export interface VideoSyncPayload {
   current_time: number;
@@ -54,6 +70,8 @@ export interface EventMap {
   [EVENTS.FULLSCREEN_CHANGED]: FullscreenChangedPayload;
   [EVENTS.VIDEO_SYNC]: VideoSyncPayload;
   [EVENTS.VOLUME_CHANGED]: VolumeChangedPayload;
+  [EVENTS.FIT_MODE_CHANGED]: FitModeChangedPayload;
+  [EVENTS.DISPLAY_MODE_CHANGED]: DisplayModeChangedPayload;
 }
 
 /**

@@ -44,6 +44,9 @@ pub async fn get_monitor_config(
 /// upsert 后自动管理定时器：
 /// - 满足轮播条件 → 通过 Scheduler 启动/重启定时器
 /// - 不满足 → 通过 Scheduler 停止定时器
+///
+/// 同时检测 fitMode / displayMode 变更，向壁纸窗口发送 config-changed 事件，
+/// 使样式修改即时生效，无需重新加载壁纸。
 #[tauri::command]
 pub async fn upsert_monitor_config(
     ctx: State<'_, AppContext>,
@@ -54,6 +57,10 @@ pub async fn upsert_monitor_config(
 
     // 跨字段校验
     req.validate_cross_fields()?;
+
+    // 提取样式变更字段（在 req 被消费前克隆）
+    let fit_mode_changed = req.fit_mode.clone();
+    let display_mode_changed = req.display_mode.clone();
 
     let config = monitor_config_service::upsert(
         &ctx.db,
@@ -73,6 +80,19 @@ pub async fn upsert_monitor_config(
 
     // ===== 定时器管理 =====
     manage_timer_for_config(&ctx, &scheduler, &config).await;
+
+    // ===== 样式变更通知壁纸窗口 =====
+    let wm = ctx.window_manager.lock().await;
+    if let Some(ref fit_mode) = fit_mode_changed {
+        if let Err(e) = wm.notify_fit_mode_changed(&config.monitor_id, fit_mode) {
+            log::warn!("[upsert] 发送 fit-mode-changed 事件失败: {}", e);
+        }
+    }
+    if let Some(ref display_mode) = display_mode_changed {
+        if let Err(e) = wm.notify_display_mode_changed(&config.monitor_id, display_mode) {
+            log::warn!("[upsert] 发送 display-mode-changed 事件失败: {}", e);
+        }
+    }
 
     Ok(config)
 }

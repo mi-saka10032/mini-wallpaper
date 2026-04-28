@@ -93,6 +93,13 @@ export default {
     sequential: "Sequential",
     random: "Random",
     interval: "Interval",
+    displayMode: "Display Mode",
+    displayIndependent: "Independent",
+    displayMirror: "Mirror",
+    displayExtend: "Extend",
+    displayIndependentDesc: "Each monitor has its own wallpaper",
+    displayMirrorDesc: "All monitors show the same wallpaper",
+    displayExtendDesc: "One wallpaper spans across all monitors",
   },
 
   // PreviewDialog

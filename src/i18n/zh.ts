@@ -93,6 +93,13 @@ export default {
     sequential: "顺序播放",
     random: "随机播放",
     interval: "切换间隔",
+    displayMode: "显示模式",
+    displayIndependent: "独立显示",
+    displayMirror: "镜像显示",
+    displayExtend: "拓展显示",
+    displayIndependentDesc: "每个显示器独立设置壁纸",
+    displayMirrorDesc: "所有显示器显示相同壁纸",
+    displayExtendDesc: "一张壁纸横跨所有显示器",
   },
 
   // PreviewDialog

@@ -10,6 +10,7 @@ import {
   FolderOpen,
   RefreshCw,
   AlertTriangle,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -178,6 +179,14 @@ const MonitorSettingsPanel: React.FC = () => {
     async (fitMode: string) => {
       if (!selectedMonitorId) return;
       await upsert({ monitorId: selectedMonitorId, fitMode });
+    },
+    [upsert, selectedMonitorId],
+  );
+
+  const handleDisplayModeChange = useCallback(
+    async (displayMode: string) => {
+      if (!selectedMonitorId) return;
+      await upsert({ monitorId: selectedMonitorId, displayMode });
     },
     [upsert, selectedMonitorId],
   );
@@ -454,6 +463,48 @@ const MonitorSettingsPanel: React.FC = () => {
                     )}
                   </div>
                 )}
+              </div>
+
+              <Separator />
+
+              {/* ===== 显示模式 ===== */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Layers className="size-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">{t("monitor.displayMode")}</Label>
+                </div>
+                <Select
+                  value={selectedConfig?.display_mode ?? "independent"}
+                  onValueChange={handleDisplayModeChange}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="independent">
+                      <div className="flex items-center gap-2">
+                        <span>{t("monitor.displayIndependent")}</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="mirror">
+                      <div className="flex items-center gap-2">
+                        <span>{t("monitor.displayMirror")}</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="extend">
+                      <div className="flex items-center gap-2">
+                        <span>{t("monitor.displayExtend")}</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {selectedConfig?.display_mode === "mirror"
+                    ? t("monitor.displayMirrorDesc")
+                    : selectedConfig?.display_mode === "extend"
+                      ? t("monitor.displayExtendDesc")
+                      : t("monitor.displayIndependentDesc")}
+                </p>
               </div>
 
               <Separator />

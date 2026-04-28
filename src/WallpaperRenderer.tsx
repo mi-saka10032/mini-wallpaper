@@ -324,6 +324,7 @@ const WallpaperRenderer: React.FC = () => {
         className="h-screen w-screen overflow-hidden bg-black"
         style={{ position: "relative", pointerEvents: "none", userSelect: "none" }}
       >
+        <div style={extendStyle}>
         {wallpaper.type === "video" ? (
           <video
             ref={videoRef}
@@ -332,16 +333,27 @@ const WallpaperRenderer: React.FC = () => {
             loop
             muted={volume === 0}
             playsInline
-            style={extendStyle}
+            style={{
+              display: 'block',
+              width: '100%',
+              height: '100%',
+              objectFit: 'fill',
+            }}
           />
         ) : (
           <img
             src={src}
             alt=""
             draggable={false}
-            style={extendStyle}
+            style={{
+              display: 'block',
+              width: '100%',
+              height: '100%',
+              objectFit: 'fill',
+            }}
           />
         )}
+        </div>
       </div>
     );
   }
@@ -377,4 +389,3 @@ const WallpaperRenderer: React.FC = () => {
 };
 
 export default WallpaperRenderer;
-```

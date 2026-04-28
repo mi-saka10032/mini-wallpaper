@@ -4,15 +4,15 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::runtime::carousel::{
-    carousel_key, collection_has_enough_wallpapers, should_start_timer, CarouselTask,
-};
-use crate::runtime::Scheduler;
 use crate::dto::monitor_config_dto::{
     DeleteMonitorConfigRequest, GetMonitorConfigRequest, UpsertMonitorConfigRequest,
 };
 use crate::dto::Validated;
 use crate::entities::monitor_config;
+use crate::runtime::carousel::{
+    carousel_key, collection_has_enough_wallpapers, should_start_timer, CarouselTask,
+};
+use crate::runtime::Scheduler;
 use crate::services::monitor_config_service;
 
 use log::info;
@@ -53,30 +53,16 @@ pub async fn upsert_monitor_config(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<UpsertMonitorConfigRequest>,
 ) -> Result<monitor_config::Model, String> {
-    let req = req.into_inner();
-
-    // 跨字段校验
-    req.validate_cross_fields()?;
+    let req: UpsertMonitorConfigRequest = req.into_inner();
 
     // 提取样式变更字段（在 req 被消费前克隆）
     let fit_mode_changed = req.fit_mode.clone();
     let display_mode_changed = req.display_mode.clone();
+    let wallpaper_changed = req.wallpaper_id.clone();
 
-    let config = monitor_config_service::upsert(
-        &ctx.db,
-        &req.monitor_id,
-        req.wallpaper_id,
-        req.collection_id,
-        req.clear_collection,
-        req.display_mode.as_deref(),
-        req.fit_mode.as_deref(),
-        req.play_mode.as_deref(),
-        req.play_interval,
-        req.is_enabled,
-        req.active,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let config = monitor_config_service::upsert(&ctx.db, &req)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // ===== 定时器管理 =====
     manage_timer_for_config(&ctx, &scheduler, &config).await;
@@ -91,6 +77,11 @@ pub async fn upsert_monitor_config(
     if let Some(ref display_mode) = display_mode_changed {
         if let Err(e) = wm.notify_display_mode_changed(&config.monitor_id, display_mode) {
             log::warn!("[upsert] 发送 display-mode-changed 事件失败: {}", e);
+        }
+    }
+    if let Some(wallpaper_id) = wallpaper_changed {
+        if let Err(e) = wm.update_window(&config.monitor_id, wallpaper_id) {
+            log::warn!("[upsert] 发送 wallpaper-changed 事件失败: {}", e);
         }
     }
 
@@ -182,11 +173,7 @@ pub async fn start_timers(
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    log::warn!(
-                        "[start_timers] 检查收藏夹失败 {}: {}",
-                        config.monitor_id,
-                        e
-                    );
+                    log::warn!("[start_timers] 检查收藏夹失败 {}: {}", config.monitor_id, e);
                 }
             }
         }

@@ -38,7 +38,7 @@ fn validate_setting_key(value: &String, _ctx: &()) -> garde::Result {
     Ok(())
 }
 
-/// 校验 value 格式（此处仅做非空校验，跨字段校验在 Validated 反序列化后由 validate_cross_fields 处理）
+/// 校验 value 格式
 fn validate_setting_value_by_key(value: &String, _ctx: &()) -> garde::Result {
     if value.is_empty() {
         return Err(garde::Error::new("value 不能为空"));

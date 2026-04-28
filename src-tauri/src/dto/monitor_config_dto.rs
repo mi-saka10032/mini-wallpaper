@@ -44,16 +44,6 @@ pub struct UpsertMonitorConfigRequest {
     pub active: Option<bool>,
 }
 
-impl UpsertMonitorConfigRequest {
-    /// 跨字段校验：wallpaper_id 和 collection_id 互斥
-    pub fn validate_cross_fields(&self) -> Result<(), String> {
-        if self.wallpaper_id.is_some() && self.collection_id.is_some() {
-            return Err("wallpaper_id 和 collection_id 不能同时设置".to_string());
-        }
-        Ok(())
-    }
-}
-
 /// 删除显示器配置请求
 #[derive(Debug, Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]

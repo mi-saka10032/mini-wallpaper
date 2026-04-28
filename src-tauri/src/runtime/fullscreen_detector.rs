@@ -82,7 +82,7 @@ fn check_fullscreen() -> bool {
 
     unsafe {
         let fg_hwnd = GetForegroundWindow();
-        if fg_hwnd == 0 || fg_hwnd == GetDesktopWindow() {
+        if fg_hwnd == std::ptr::null_mut() || fg_hwnd == GetDesktopWindow() {
             return false;
         }
 
@@ -105,7 +105,7 @@ fn check_fullscreen() -> bool {
 
         // 获取窗口所在显示器的信息
         let monitor = MonitorFromWindow(fg_hwnd, MONITOR_DEFAULTTONEAREST);
-        if monitor == 0 {
+        if monitor == std::ptr::null_mut() {
             return false;
         }
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use crate::entities::monitor_config;
+use crate::{dto::monitor_config_dto::UpsertMonitorConfigRequest, entities::monitor_config};
 
 /// 获取所有显示器配置
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<monitor_config::Model>> {
@@ -31,51 +31,42 @@ pub async fn get_by_monitor_id(
 /// active: 显示器是否当前物理可用
 pub async fn upsert(
     db: &DatabaseConnection,
-    monitor_id: &str,
-    wallpaper_id: Option<i32>,
-    collection_id: Option<i32>,
-    clear_collection: Option<bool>,
-    display_mode: Option<&str>,
-    fit_mode: Option<&str>,
-    play_mode: Option<&str>,
-    play_interval: Option<i32>,
-    is_enabled: Option<bool>,
-    active: Option<bool>,
+    req: &UpsertMonitorConfigRequest
 ) -> Result<monitor_config::Model> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let existing = get_by_monitor_id(db, monitor_id).await?;
+    let existing = get_by_monitor_id(db, &req.monitor_id).await?;
 
     if let Some(existing) = existing {
         // Update
         let mut active_model: monitor_config::ActiveModel = existing.into();
 
-        if let Some(wid) = wallpaper_id {
+        if let Some(wid) = req.wallpaper_id {
             active_model.wallpaper_id = Set(Some(wid));
         }
-        if let Some(cid) = collection_id {
+        if let Some(cid) = req.collection_id {
             active_model.collection_id = Set(Some(cid));
         }
         // 显式清空 collection_id（从收藏夹模式切回单张壁纸时）
-        if clear_collection.unwrap_or(false) {
+        if req.clear_collection.unwrap_or(false) {
             active_model.collection_id = Set(None);
         }
-        if let Some(dm) = display_mode {
+        if let Some(dm) = &req.display_mode {
             active_model.display_mode = Set(dm.to_string());
         }
-        if let Some(fm) = fit_mode {
+        if let Some(fm) = &req.fit_mode {
             active_model.fit_mode = Set(fm.to_string());
         }
-        if let Some(pm) = play_mode {
+        if let Some(pm) = &req.play_mode {
             active_model.play_mode = Set(pm.to_string());
         }
-        if let Some(pi) = play_interval {
+        if let Some(pi) = req.play_interval {
             active_model.play_interval = Set(pi);
         }
-        if let Some(ie) = is_enabled {
+        if let Some(ie) = req.is_enabled {
             active_model.is_enabled = Set(ie);
         }
-        if let Some(a) = active {
+        if let Some(a) = req.active {
             active_model.active = Set(a);
         }
         active_model.updated_at = Set(now);
@@ -88,15 +79,15 @@ pub async fn upsert(
     } else {
         // Insert
         let active_model = monitor_config::ActiveModel {
-            monitor_id: Set(monitor_id.to_string()),
-            display_mode: Set(display_mode.unwrap_or("independent").to_string()),
-            wallpaper_id: Set(wallpaper_id),
-            collection_id: Set(collection_id),
-            fit_mode: Set(fit_mode.unwrap_or("cover").to_string()),
-            play_mode: Set(play_mode.unwrap_or("sequential").to_string()),
-            play_interval: Set(play_interval.unwrap_or(300)),
-            is_enabled: Set(is_enabled.unwrap_or(false)),
-            active: Set(active.unwrap_or(false)),
+            monitor_id: Set(req.monitor_id.to_string()),
+            display_mode: Set(req.display_mode.clone().unwrap_or("independent".to_string())),
+            wallpaper_id: Set(req.wallpaper_id),
+            collection_id: Set(req.collection_id),
+            fit_mode: Set(req.fit_mode.clone().unwrap_or("cover".to_string())),
+            play_mode: Set(req.play_mode.clone().unwrap_or("sequential".to_string())),
+            play_interval: Set(req.play_interval.unwrap_or(300)),
+            is_enabled: Set(req.is_enabled.unwrap_or(false)),
+            active: Set(req.active.unwrap_or(false)),
             updated_at: Set(now),
             ..Default::default()
         };

@@ -261,6 +261,8 @@ impl WallpaperWindowManager {
     /// 通知指定显示器的壁纸窗口 displayMode 变更
     ///
     /// 壁纸窗口收到后切换渲染模式（independent / mirror / extend）。
+    /// extend 模式下前端通过 availableMonitors() API 自行计算裁剪区域，
+    /// 无需后端传递视口参数。
     pub fn notify_display_mode_changed(
         &self,
         monitor_id: &str,

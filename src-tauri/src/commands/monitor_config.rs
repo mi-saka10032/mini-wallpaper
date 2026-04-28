@@ -13,7 +13,7 @@ use crate::runtime::carousel::{
     carousel_key, collection_has_enough_wallpapers, should_start_timer, CarouselTask,
 };
 use crate::runtime::Scheduler;
-use crate::services::monitor_config_service;
+use crate::services::{app_setting_service, monitor_config_service};
 
 use log::info;
 
@@ -57,7 +57,6 @@ pub async fn upsert_monitor_config(
 
     // 提取变更字段（在 req 被消费前克隆）
     let fit_mode_changed = req.fit_mode.clone();
-    let display_mode_changed = req.display_mode.clone();
     let wallpaper_changed = req.wallpaper_id;
     // 需要重启定时器的场景：play_interval 变更（需重建 interval）、collection_id 变更（切换收藏夹）
     let need_restart = req.play_interval.is_some() || req.collection_id.is_some();
@@ -71,14 +70,39 @@ pub async fn upsert_monitor_config(
     manage_timer_for_config(&ctx, &scheduler, &config, need_restart).await;
 
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
-    notify_window_changes(
-        &ctx,
-        &config.monitor_id,
-        fit_mode_changed.as_deref(),
-        display_mode_changed.as_deref(),
-        wallpaper_changed,
-    )
-    .await;
+    // 读取全局 display_mode，决定是否需要广播到所有窗口
+    let display_mode = app_setting_service::get(&ctx.db, "display_mode")
+        .await
+        .unwrap_or(Some("independent".to_string()))
+        .unwrap_or_else(|| "independent".to_string());
+
+    let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
+
+    if is_sync_mode {
+        // 同步模式：通知所有壁纸窗口
+        let wm = ctx.window_manager.lock().await;
+        let all_ids = wm.get_active_window_ids();
+        for mid in &all_ids {
+            if let Some(fit_mode) = fit_mode_changed.as_deref() {
+                if let Err(e) = wm.notify_fit_mode_changed(mid, fit_mode) {
+                    log::warn!("[upsert] 发送 fit-mode-changed 事件失败 {}: {}", mid, e);
+                }
+            }
+            if let Some(wid) = wallpaper_changed {
+                if let Err(e) = wm.update_window(mid, wid) {
+                    log::warn!("[upsert] 壁纸窗口更新失败 {}: {}", mid, e);
+                }
+            }
+        }
+    } else {
+        notify_window_changes(
+            &ctx,
+            &config.monitor_id,
+            fit_mode_changed.as_deref(),
+            wallpaper_changed,
+        )
+        .await;
+    }
 
     Ok(config)
 }
@@ -87,17 +111,15 @@ pub async fn upsert_monitor_config(
 ///
 /// 根据传入的 Option 字段，按需向对应 monitor_id 的壁纸窗口发送事件：
 /// - `fit_mode`   → fit-mode-changed
-/// - `display_mode` → display-mode-changed
 /// - `wallpaper_id` → wallpaper-changed（更新壁纸图片）
 async fn notify_window_changes(
     ctx: &AppContext,
     monitor_id: &str,
     fit_mode: Option<&str>,
-    display_mode: Option<&str>,
     wallpaper_id: Option<i32>,
 ) {
-    // 三个字段都为 None 时无需获取锁
-    if fit_mode.is_none() && display_mode.is_none() && wallpaper_id.is_none() {
+    // 两个字段都为 None 时无需获取锁
+    if fit_mode.is_none() && wallpaper_id.is_none() {
         return;
     }
 
@@ -106,11 +128,6 @@ async fn notify_window_changes(
     if let Some(fit_mode) = fit_mode {
         if let Err(e) = wm.notify_fit_mode_changed(monitor_id, fit_mode) {
             log::warn!("[upsert] 发送 fit-mode-changed 事件失败: {}", e);
-        }
-    }
-    if let Some(display_mode) = display_mode {
-        if let Err(e) = wm.notify_display_mode_changed(monitor_id, display_mode) {
-            log::warn!("[upsert] 发送 display-mode-changed 事件失败: {}", e);
         }
     }
     if let Some(wallpaper_id) = wallpaper_id {
@@ -210,10 +227,16 @@ pub async fn delete_monitor_config(
 
     monitor_config_service::delete(&ctx.db, req.id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 /// 启动所有满足轮播条件的定时器（应用启动时由前端调用）
+///
+/// display_mode 感知：
+/// - independent: 为每个满足条件的 monitor 启动独立定时器
+/// - mirror/extend: 仅为第一个满足条件的 active monitor 启动定时器（主定时器）
 #[tauri::command]
 pub async fn start_timers(
     ctx: State<'_, AppContext>,
@@ -223,12 +246,24 @@ pub async fn start_timers(
         .await
         .map_err(|e| e.to_string())?;
 
+    // 读取全局 display_mode
+    let display_mode = app_setting_service::get(&ctx.db, "display_mode")
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "independent".to_string());
+
+    let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
+
     let mut sched = scheduler.lock().await;
+    let mut primary_started = false;
 
     for config in &configs {
         if should_start_timer(config) {
-            // should_start_timer 仅检查 active && is_enabled，
-            // 还需确认 collection_id 存在才能启动轮播
+            // mirror/extend 模式下，只启动第一个满足条件的定时器
+            if is_sync_mode && primary_started {
+                continue;
+            }
+
             if let Some(cid) = config.collection_id {
                 match collection_has_enough_wallpapers(&ctx.db, cid).await {
                     Ok(true) => {
@@ -240,7 +275,11 @@ pub async fn start_timers(
                                 monitor_id: config.monitor_id.clone(),
                             },
                         );
-                        info!("[start_timers] 启动定时器: {}", config.monitor_id);
+                        info!("[start_timers] 启动定时器: {} (display_mode={})", config.monitor_id, display_mode);
+
+                        if is_sync_mode {
+                            primary_started = true;
+                        }
                     }
                     Ok(false) => {}
                     Err(e) => {

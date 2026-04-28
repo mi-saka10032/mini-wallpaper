@@ -8,6 +8,7 @@ export const SETTING_KEYS = {
   CLOSE_TO_TRAY: "close_to_tray",
   PAUSE_ON_FULLSCREEN: "pause_on_fullscreen",
   GLOBAL_VOLUME: "global_volume",
+  DISPLAY_MODE: "display_mode",
   SHORTCUT_NEXT: "shortcut_next_wallpaper",
   SHORTCUT_PREV: "shortcut_prev_wallpaper",
 } as const;
@@ -21,7 +22,7 @@ interface SettingState {
   fetchSettings: () => Promise<void>;
 
   /** 更新单个设置（DB + store 同步） */
-  updateSetting: (key: string, value: string) => Promise<void>;
+  updateSetting: (key: string, value: string, monitorId?: string) => Promise<void>;
 
   /** 便捷 getter：获取某个 key 的值（带默认值） */
   get: (key: string, defaultValue?: string) => string;
@@ -43,9 +44,9 @@ export const useSettingStore = create<SettingState>((set, get) => ({
     }
   },
 
-  updateSetting: async (key: string, value: string) => {
+  updateSetting: async (key: string, value: string, monitorId?: string) => {
     try {
-      await setSetting(key, value);
+      await setSetting(key, value, monitorId);
       set((state) => ({
         settings: { ...state.settings, [key]: value },
       }));

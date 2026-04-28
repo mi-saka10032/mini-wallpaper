@@ -28,6 +28,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
+import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
@@ -57,6 +58,10 @@ const MonitorSettingsPanel: React.FC = () => {
   const fetchCollections = useCollectionStore((s) => s.fetchCollections);
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
 
+  // 全局 display_mode（从 app_setting 读取）
+  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
+  const updateSetting = useSettingStore((s) => s.updateSetting);
+
   // 只使用 active 的 config 作为显示器列表
   const activeConfigs = useMemo(
     () => configs.filter((c) => c.active),
@@ -84,7 +89,7 @@ const MonitorSettingsPanel: React.FC = () => {
    * 是否处于同步模式（mirror / extend）
    * 在此模式下，所有设置修改都同步到全部 active 显示器
    */
-  const isSyncMode = selectedConfig?.display_mode === "mirror" || selectedConfig?.display_mode === "extend";
+  const isSyncMode = displayMode === "mirror" || displayMode === "extend";
 
   // 获取壁纸缩略图
   const getWallpaperThumb = useCallback(
@@ -203,18 +208,20 @@ const MonitorSettingsPanel: React.FC = () => {
   );
 
   const handleDisplayModeChange = useCallback(
-    async (displayMode: string) => {
+    async (newDisplayMode: string) => {
       if (!selectedMonitorId) return;
 
-      // 先更新当前选中显示器的 display_mode
-      await upsert({ monitorId: selectedMonitorId, displayMode });
+      // 通过 app_setting 更新 display_mode（Rust 端副作用会自动处理同步配置 + 壁纸窗口通知 + 定时器管理）
+      await updateSetting(SETTING_KEYS.DISPLAY_MODE, newDisplayMode, selectedMonitorId);
 
-      // 如果切换到 mirror/extend，将当前选中显示器的完整配置同步到所有其他显示器
-      if (displayMode === "mirror" || displayMode === "extend") {
-        await syncConfigToAll(selectedMonitorId);
+      // 如果切换到 mirror/extend，前端也需要刷新 configs 以反映同步后的状态
+      if (newDisplayMode === "mirror" || newDisplayMode === "extend") {
+        // Rust 副作用已同步 DB，前端重新拉取最新 configs
+        const fetchConfigs = useMonitorConfigStore.getState().fetchConfigs;
+        await fetchConfigs();
       }
     },
-    [upsert, syncConfigToAll, selectedMonitorId],
+    [updateSetting, selectedMonitorId],
   );
 
   const handlePlayModeChange = useCallback(
@@ -417,7 +424,7 @@ const MonitorSettingsPanel: React.FC = () => {
                   <Label className="text-sm font-medium">{t("monitor.displayMode")}</Label>
                 </div>
                 <Select
-                  value={selectedConfig?.display_mode ?? "independent"}
+                  value={displayMode}
                   onValueChange={handleDisplayModeChange}
                 >
                   <SelectTrigger className="w-full">
@@ -442,9 +449,9 @@ const MonitorSettingsPanel: React.FC = () => {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  {selectedConfig?.display_mode === "mirror"
+                  {displayMode === "mirror"
                     ? t("monitor.displayMirrorDesc")
-                    : selectedConfig?.display_mode === "extend"
+                    : displayMode === "extend"
                       ? t("monitor.displayExtendDesc")
                       : t("monitor.displayIndependentDesc")}
                 </p>
@@ -455,7 +462,7 @@ const MonitorSettingsPanel: React.FC = () => {
                     <Link className="size-3.5 shrink-0 text-primary" />
                     <span className="text-xs text-primary">
                       {t("monitor.displaySyncHint", {
-                        mode: selectedConfig?.display_mode === "mirror"
+                        mode: displayMode === "mirror"
                           ? t("monitor.displayMirror")
                           : t("monitor.displayExtend"),
                       })}

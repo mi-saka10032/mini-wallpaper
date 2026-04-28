@@ -51,9 +51,6 @@ pub async fn upsert(
         if req.clear_collection.unwrap_or(false) {
             active_model.collection_id = Set(None);
         }
-        if let Some(dm) = &req.display_mode {
-            active_model.display_mode = Set(dm.to_string());
-        }
         if let Some(fm) = &req.fit_mode {
             active_model.fit_mode = Set(fm.to_string());
         }
@@ -80,7 +77,6 @@ pub async fn upsert(
         // Insert
         let active_model = monitor_config::ActiveModel {
             monitor_id: Set(req.monitor_id.to_string()),
-            display_mode: Set(req.display_mode.clone().unwrap_or("independent".to_string())),
             wallpaper_id: Set(req.wallpaper_id),
             collection_id: Set(req.collection_id),
             fit_mode: Set(req.fit_mode.clone().unwrap_or("cover".to_string())),
@@ -158,4 +154,34 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
         .await
         .context("Failed to delete monitor config")?;
     Ok(())
+}
+
+/// 将 source config 的配置（除 id/monitor_id/active 外）同步到目标 monitor
+///
+/// 用于 mirror/extend 模式下，以基准显示器的配置覆盖从属显示器。
+pub async fn sync_config_from(
+    db: &DatabaseConnection,
+    target_monitor_id: &str,
+    source: &monitor_config::Model,
+) -> Result<monitor_config::Model> {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let existing = get_by_monitor_id(db, target_monitor_id)
+        .await?
+        .context("Target monitor config not found")?;
+
+    let mut active_model: monitor_config::ActiveModel = existing.into();
+    active_model.wallpaper_id = Set(source.wallpaper_id);
+    active_model.collection_id = Set(source.collection_id);
+    active_model.fit_mode = Set(source.fit_mode.clone());
+    active_model.play_mode = Set(source.play_mode.clone());
+    active_model.play_interval = Set(source.play_interval);
+    active_model.is_enabled = Set(source.is_enabled);
+    active_model.updated_at = Set(now);
+
+    let model = active_model
+        .update(db)
+        .await
+        .context("Failed to sync monitor config")?;
+    Ok(model)
 }

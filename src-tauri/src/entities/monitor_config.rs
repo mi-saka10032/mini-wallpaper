@@ -8,8 +8,6 @@ pub struct Model {
     pub id: i32,
     /// 显示器标识（系统 monitor id）
     pub monitor_id: String,
-    /// 显示模式：independent / mirror / extend
-    pub display_mode: String,
     /// 固定壁纸 ID（与 collection_id 二选一）
     pub wallpaper_id: Option<i32>,
     /// 关联收藏夹 ID（轮播该收藏夹内壁纸，与 wallpaper_id 二选一）

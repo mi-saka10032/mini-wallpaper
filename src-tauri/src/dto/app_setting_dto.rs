@@ -8,9 +8,13 @@ const VALID_KEYS: &[&str] = &[
     "close_to_tray",
     "pause_on_fullscreen",
     "global_volume",
+    "display_mode",
     "shortcut_next_wallpaper",
     "shortcut_prev_wallpaper",
 ];
+
+/// 允许的 display_mode 枚举值
+const VALID_DISPLAY_MODES: &[&str] = &["independent", "mirror", "extend"];
 
 /// 设置键值对请求
 #[derive(Debug, Deserialize, Validate)]
@@ -61,6 +65,14 @@ impl SetSettingRequest {
                     return Err("global_volume 的值必须为 0~100 的整数".to_string());
                 }
             },
+            "display_mode" => {
+                if !VALID_DISPLAY_MODES.contains(&self.value.as_str()) {
+                    return Err(format!(
+                        "display_mode 仅支持 {}",
+                        VALID_DISPLAY_MODES.join("/")
+                    ));
+                }
+            }
             // theme, language, shortcut_* 等仅需非空校验（已由 garde 保证）
             _ => {}
         }

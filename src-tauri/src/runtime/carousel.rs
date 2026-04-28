@@ -9,7 +9,7 @@
 //! `CarouselTask` 自身持有 `AppHandle` + 纯业务参数 `monitor_id`，
 //! 在 `spawn` 内部通过句柄按需获取 db / window_manager 等共享资源。
 
-use log::{error, warn};
+use log::{error, info, warn};
 use sea_orm::DatabaseConnection;
 use tauri::{Emitter, Manager};
 use tokio::task::JoinHandle;
@@ -18,7 +18,7 @@ use tokio::time::{interval, Duration};
 use super::scheduler::TaskSpawner;
 use crate::ctx::AppContext;
 use crate::entities::monitor_config;
-use crate::services::{collection_service, monitor_config_service};
+use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 /// 轮播定时器在 Scheduler 中的 key 前缀
 pub const CAROUSEL_TIMER_PREFIX: &str = "carousel:";
@@ -102,6 +102,16 @@ impl TaskSpawner for CarouselTask {
                 let current_wid = current_config.wallpaper_id;
                 let play_mode = current_config.play_mode;
 
+                // 读取全局 display_mode 设置
+                let display_mode = match app_setting_service::get(&db, "display_mode").await {
+                    Ok(Some(dm)) => dm,
+                    Ok(None) => "independent".to_string(),
+                    Err(e) => {
+                        warn!("[Carousel] Failed to get display_mode: {}", e);
+                        "independent".to_string()
+                    }
+                };
+
                 // 通过 collection_service 获取下一张壁纸
                 match collection_service::next_wallpaper_id(
                     &db,
@@ -112,31 +122,80 @@ impl TaskSpawner for CarouselTask {
                 .await
                 {
                     Ok(Some(new_wid)) => {
-                        // 通过 monitor_config_service 更新 wallpaper_id
-                        if let Err(e) =
-                            monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await
-                        {
-                            error!(
-                                "[Carousel] Failed to update wallpaper_id for {}: {}",
-                                mid, e
-                            );
-                            continue;
-                        }
+                        // 判断是否为 mirror/extend 模式，需要同步更新所有窗口
+                        let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
 
-                        // 1. 通知指定壁纸窗口更新壁纸（精确定向发送）
-                        let wm_guard = window_manager.lock().await;
-                        if let Err(e) = wm_guard.update_window(&mid, new_wid) {
-                            warn!("[Carousel] 壁纸窗口更新失败: {}", e);
-                        }
-                        drop(wm_guard);
+                        if is_sync_mode {
+                            // mirror/extend 模式：遍历所有 active monitor，同步更新 wallpaper_id 和壁纸窗口
+                            let all_configs = match monitor_config_service::get_all(&db).await {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    error!("[Carousel] Failed to get all configs: {}", e);
+                                    continue;
+                                }
+                            };
 
-                        // 2. 通知主窗口更新缩略图（全局广播）
-                        let payload = ThumbnailChangedPayload {
-                            monitor_id: mid.clone(),
-                            wallpaper_id: new_wid,
-                        };
-                        if let Err(e) = app.emit("thumbnail-changed", &payload) {
-                            error!("[Carousel] Failed to emit thumbnail-changed: {}", e);
+                            for config in &all_configs {
+                                if !config.active {
+                                    continue;
+                                }
+                                // 更新每个 active monitor 的 wallpaper_id
+                                if let Err(e) = monitor_config_service::update_wallpaper_id(
+                                    &db,
+                                    &config.monitor_id,
+                                    new_wid,
+                                ).await {
+                                    error!(
+                                        "[Carousel] Failed to update wallpaper_id for {}: {}",
+                                        config.monitor_id, e
+                                    );
+                                }
+
+                                // 通知每个壁纸窗口更新
+                                let wm_guard = window_manager.lock().await;
+                                if let Err(e) = wm_guard.update_window(&config.monitor_id, new_wid) {
+                                    warn!("[Carousel] 壁纸窗口更新失败 {}: {}", config.monitor_id, e);
+                                }
+                                drop(wm_guard);
+
+                                // 通知主窗口更新缩略图
+                                let payload = ThumbnailChangedPayload {
+                                    monitor_id: config.monitor_id.clone(),
+                                    wallpaper_id: new_wid,
+                                };
+                                if let Err(e) = app.emit("thumbnail-changed", &payload) {
+                                    error!("[Carousel] Failed to emit thumbnail-changed for {}: {}", config.monitor_id, e);
+                                }
+                            }
+
+                            info!("[Carousel] {} 模式同步更新所有窗口: wallpaper_id={}", display_mode, new_wid);
+                        } else {
+                            // independent 模式：仅更新当前 monitor
+                            if let Err(e) =
+                                monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await
+                            {
+                                error!(
+                                    "[Carousel] Failed to update wallpaper_id for {}: {}",
+                                    mid, e
+                                );
+                                continue;
+                            }
+
+                            // 1. 通知指定壁纸窗口更新壁纸（精确定向发送）
+                            let wm_guard = window_manager.lock().await;
+                            if let Err(e) = wm_guard.update_window(&mid, new_wid) {
+                                warn!("[Carousel] 壁纸窗口更新失败: {}", e);
+                            }
+                            drop(wm_guard);
+
+                            // 2. 通知主窗口更新缩略图（全局广播）
+                            let payload = ThumbnailChangedPayload {
+                                monitor_id: mid.clone(),
+                                wallpaper_id: new_wid,
+                            };
+                            if let Err(e) = app.emit("thumbnail-changed", &payload) {
+                                error!("[Carousel] Failed to emit thumbnail-changed: {}", e);
+                            }
                         }
                     }
                     Ok(None) => {

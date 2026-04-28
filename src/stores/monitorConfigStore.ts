@@ -14,6 +14,7 @@ import {
   destroyWallpaperWindow,
   getActiveWallpaperWindows,
 } from "@/api/wallpaperWindow";
+import { getSetting } from "@/api/appSetting";
 
 interface MonitorConfigState {
   configs: MonitorConfig[];
@@ -28,7 +29,6 @@ interface MonitorConfigState {
     wallpaperId?: number | null;
     collectionId?: number | null;
     clearCollection?: boolean;
-    displayMode?: string;
     fitMode?: string;
     playMode?: string;
     playInterval?: number;
@@ -56,10 +56,10 @@ const _activeWallpaperWindows = new Set<string>();
 
 /**
  * 为 active 且有 wallpaper_id 的显示器创建壁纸窗口
- * 支持三种 display_mode:
+ * display_mode 从全局 app_setting 读取：
  * - independent: 每个显示器独立壁纸
  * - mirror: 所有显示器使用同一壁纸（数据由 Rust 保证一致，窗口正常创建）
- * - extend: 一张壁纸横跨所有显示器，每个窗口渲染对应区域
+ * - extend: 一张壁纸横跨所有显示器，每个窗口通过 availableMonitors() 自行计算裁剪区域
  */
 async function syncWallpaperWindows(
   configs: MonitorConfig[],
@@ -79,25 +79,6 @@ async function syncWallpaperWindows(
     monitors.map((m) => [m.name ?? `monitor_${monitors.indexOf(m)}`, m]),
   );
 
-  // extend 模式需要计算所有显示器总宽度
-  const extendConfigs = configs.filter(
-    (c) => c.active && c.wallpaper_id && c.display_mode === "extend",
-  );
-  let extendTotalWidth = 0;
-  const extendOffsets = new Map<string, number>();
-  if (extendConfigs.length > 0) {
-    // 按 x 位置排序，计算每个显示器在总宽度中的偏移
-    const sorted = extendConfigs
-      .map((c) => ({ config: c, monitor: monitorMap.get(c.monitor_id) }))
-      .filter((item) => item.monitor != null)
-      .sort((a, b) => a.monitor!.position.x - b.monitor!.position.x);
-
-    for (const item of sorted) {
-      extendOffsets.set(item.config.monitor_id, extendTotalWidth);
-      extendTotalWidth += item.monitor!.size.width;
-    }
-  }
-
   const activeIds = new Set<string>();
 
   for (const config of configs) {
@@ -115,23 +96,15 @@ async function syncWallpaperWindows(
       const pos = monitor.position;
       const size = monitor.size;
 
-      // extend 模式：附带视口偏移参数
-      let extraQuery: string | undefined;
-      if (config.display_mode === "extend" && extendTotalWidth > 0) {
-        const offsetX = extendOffsets.get(config.monitor_id) ?? 0;
-        extraQuery = `extendOffsetX=${offsetX}&extendTotalWidth=${extendTotalWidth}&extendMyWidth=${size.width}`;
-      }
-
       await createWallpaperWindow(
         config.monitor_id,
         pos.x,
         pos.y,
         size.width,
         size.height,
-        extraQuery,
       );
       _activeWallpaperWindows.add(config.monitor_id);
-      console.log(`[syncWallpaperWindows] Created window for ${config.monitor_id} (${config.display_mode})`);
+      console.log(`[syncWallpaperWindows] Created window for ${config.monitor_id}`);
     } catch (e) {
       console.error(`[syncWallpaperWindows] Failed to create window for ${config.monitor_id}:`, e);
     }
@@ -298,7 +271,6 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
         wallpaperId: source.wallpaper_id,
         collectionId: source.collection_id,
         clearCollection: !source.collection_id,
-        displayMode: source.display_mode,
         fitMode: source.fit_mode,
         playMode: source.play_mode,
         playInterval: source.play_interval,

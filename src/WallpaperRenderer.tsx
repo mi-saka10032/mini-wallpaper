@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { availableMonitors } from "@tauri-apps/api/window";
 import { invoke } from "@/api/invoke";
 import { listen, EVENTS } from "@/api/event";
 import { COMMANDS, type Wallpaper, type MonitorConfig } from "@/api/config";
@@ -32,8 +33,11 @@ const WallpaperRenderer: React.FC = () => {
   const [displayMode, setDisplayMode] = useState<string>("independent");
   const [extendViewport, setExtendViewport] = useState<{
     offsetX: number;
+    offsetY: number;
     totalWidth: number;
+    totalHeight: number;
     myWidth: number;
+    myHeight: number;
   } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -103,7 +107,7 @@ const WallpaperRenderer: React.FC = () => {
   // 根据 config 获取壁纸并更新状态
   const loadFromConfig = useCallback(async (config: MonitorConfig) => {
     setFitMode(config.fit_mode || "cover");
-    setDisplayMode(config.display_mode || "independent");
+    // display_mode 不再从 config 读取，由全局 app_setting 控制
 
     if (!config.wallpaper_id) {
       setWallpaper(null);
@@ -119,9 +123,66 @@ const WallpaperRenderer: React.FC = () => {
     }
   }, []);
 
+  /**
+   * 通过 Tauri availableMonitors() API 计算 extend 模式下的视口参数
+   * 每个窗口根据自己的 monitorId 确定在虚拟画布中的裁剪区域
+   */
+  const computeExtendViewport = useCallback(async () => {
+    if (!monitorId) return;
+
+    try {
+      const monitors = await availableMonitors();
+      if (monitors.length === 0) return;
+
+      // 计算虚拟画布的 bounding box（所有显示器组成的最小矩形）
+      let minX = Infinity, minY = Infinity;
+      let maxX = -Infinity, maxY = -Infinity;
+
+      for (const m of monitors) {
+        const x = m.position.x;
+        const y = m.position.y;
+        const w = m.size.width;
+        const h = m.size.height;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + w);
+        maxY = Math.max(maxY, y + h);
+      }
+
+      const totalWidth = maxX - minX;
+      const totalHeight = maxY - minY;
+
+      // 找到当前窗口所属的显示器
+      const currentMonitor = monitors.find(
+        (m) => (m.name ?? `monitor_${monitors.indexOf(m)}`) === monitorId
+      );
+
+      if (!currentMonitor) {
+        console.warn("[WallpaperRenderer] Monitor not found for extend:", monitorId);
+        return;
+      }
+
+      // 当前显示器相对于虚拟画布左上角的偏移量
+      const offsetX = currentMonitor.position.x - minX;
+      const offsetY = currentMonitor.position.y - minY;
+      const myWidth = currentMonitor.size.width;
+      const myHeight = currentMonitor.size.height;
+
+      setExtendViewport({ offsetX, offsetY, totalWidth, totalHeight, myWidth, myHeight });
+    } catch (e) {
+      console.error("[WallpaperRenderer] Failed to compute extend viewport:", e);
+    }
+  }, [monitorId]);
+
   // 初始化
   useEffect(() => {
     if (!monitorId) return;
+
+    // 从 app_setting 读取全局 display_mode
+    invoke(COMMANDS.GET_SETTING, { key: "display_mode" }, { silent: true }).then((val) => {
+      if (val) setDisplayMode(val);
+    }).catch(() => {});
+
     invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
       if (config) loadFromConfig(config);
     });
@@ -157,24 +218,26 @@ const WallpaperRenderer: React.FC = () => {
     const unlisten = listen(EVENTS.DISPLAY_MODE_CHANGED, (payload) => {
       if (payload.monitor_id === monitorId) {
         setDisplayMode(payload.display_mode);
+
+        // extend 模式下，通过 availableMonitors() 自行计算视口
+        if (payload.display_mode === "extend") {
+          computeExtendViewport();
+        } else {
+          setExtendViewport(null);
+        }
       }
     });
     return () => { unlisten.then((fn) => fn()); };
-  }, [monitorId]);
+  }, [monitorId, computeExtendViewport]);
 
-  // extend 模式：解析视口参数
+  // extend 模式初始化：首次加载时如果已是 extend 模式，计算视口
   useEffect(() => {
-    if (displayMode !== "extend") {
+    if (displayMode === "extend") {
+      computeExtendViewport();
+    } else {
       setExtendViewport(null);
-      return;
     }
-    const offsetX = parseFloat(searchParams.get("extendOffsetX") ?? "0");
-    const totalWidth = parseFloat(searchParams.get("extendTotalWidth") ?? "1");
-    const myWidth = parseFloat(searchParams.get("extendMyWidth") ?? "1");
-    if (totalWidth > 0 && myWidth > 0) {
-      setExtendViewport({ offsetX, totalWidth, myWidth });
-    }
-  }, [displayMode, searchParams]);
+  }, [displayMode, computeExtendViewport]);
 
   // ===== 视频同步逻辑（extend + video）=====
   const isMaster = displayMode === "extend" && extendViewport?.offsetX === 0;
@@ -225,15 +288,19 @@ const WallpaperRenderer: React.FC = () => {
 
   // extend 模式：裁剪渲染
   if (displayMode === "extend" && extendViewport) {
-    const { offsetX, totalWidth, myWidth } = extendViewport;
-    const scale = totalWidth / myWidth;
+    const { offsetX, offsetY, totalWidth, totalHeight, myWidth, myHeight } = extendViewport;
+    const scaleX = totalWidth / myWidth;
+    const scaleY = totalHeight / myHeight;
+    // 使用较大的缩放比例确保图片覆盖整个虚拟画布
+    const scale = Math.max(scaleX, scaleY);
     const translateX = -(offsetX / myWidth) * 100;
+    const translateY = -(offsetY / myHeight) * 100;
 
     const extendStyle: React.CSSProperties = {
-      width: `${scale * 100}%`,
-      height: "100%",
+      width: `${scaleX * 100}%`,
+      height: `${scaleY * 100}%`,
       objectFit: "cover" as const,
-      transform: `translateX(${translateX}%)`,
+      transform: `translate(${translateX}%, ${translateY}%)`,
     };
 
     return (
@@ -294,3 +361,4 @@ const WallpaperRenderer: React.FC = () => {
 };
 
 export default WallpaperRenderer;
+```

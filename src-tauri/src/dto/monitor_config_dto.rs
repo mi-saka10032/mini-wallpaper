@@ -1,8 +1,6 @@
 use garde::Validate;
 use serde::Deserialize;
 
-/// 允许的 display_mode 枚举值
-const VALID_DISPLAY_MODES: &[&str] = &["independent", "mirror", "extend"];
 /// 允许的 fit_mode 枚举值
 const VALID_FIT_MODES: &[&str] = &["cover", "contain", "fill", "stretch", "center"];
 /// 允许的 play_mode 枚举值
@@ -24,9 +22,6 @@ pub struct UpsertMonitorConfigRequest {
     /// 是否显式清空 collection_id
     #[garde(skip)]
     pub clear_collection: Option<bool>,
-    /// 显示模式：independent / mirror / extend
-    #[garde(custom(validate_display_mode))]
-    pub display_mode: Option<String>,
     /// 壁纸适配模式：cover / contain / fill / stretch / center
     #[garde(custom(validate_fit_mode))]
     pub fit_mode: Option<String>,
@@ -66,19 +61,6 @@ pub struct GetMonitorConfigRequest {
 }
 
 // ==================== 自定义校验函数 ====================
-
-/// 校验 display_mode 枚举白名单
-fn validate_display_mode(value: &Option<String>, _ctx: &()) -> garde::Result {
-    if let Some(v) = value {
-        if !VALID_DISPLAY_MODES.contains(&v.as_str()) {
-            return Err(garde::Error::new(format!(
-                "display_mode 仅支持 {}",
-                VALID_DISPLAY_MODES.join("/")
-            )));
-        }
-    }
-    Ok(())
-}
 
 /// 校验 fit_mode 枚举白名单
 fn validate_fit_mode(value: &Option<String>, _ctx: &()) -> garde::Result {

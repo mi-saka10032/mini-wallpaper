@@ -76,7 +76,6 @@ export interface Collection {
 export interface MonitorConfig {
   id: number;
   monitor_id: string;
-  display_mode: string;
   wallpaper_id: number | null;
   collection_id: number | null;
   fit_mode: string;
@@ -150,7 +149,6 @@ export interface UpsertMonitorConfigReq {
   wallpaperId?: number | null;
   collectionId?: number | null;
   clearCollection?: boolean;
-  displayMode?: string;
   fitMode?: string;
   playMode?: string;
   playInterval?: number;
@@ -178,6 +176,12 @@ export interface GetSettingReq {
 export interface SetSettingReq {
   key: string;
   value: string;
+}
+
+/** 设置键值对完整参数（含可选 monitorId） */
+export interface SetSettingParams {
+  req: SetSettingReq;
+  monitorId?: string;
 }
 
 /** 切换壁纸请求 */
@@ -295,7 +299,7 @@ export interface CommandMap {
     result: string | null;
   };
   [COMMANDS.SET_SETTING]: {
-    params: { req: SetSettingReq };
+    params: { req: SetSettingReq; monitorId?: string };
     result: void;
   };
   [COMMANDS.SWITCH_WALLPAPER]: {

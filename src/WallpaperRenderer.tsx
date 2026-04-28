@@ -44,7 +44,7 @@ const WallpaperRenderer: React.FC = () => {
 
   // 初始化读取全局音量设置
   useEffect(() => {
-    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }).then((val) => {
+    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }, { silent: true }).then((val) => {
       const v = Number(val ?? "0");
       setVolume(Math.min(Math.max(v, 0), 100));
     }).catch(() => {});
@@ -111,7 +111,7 @@ const WallpaperRenderer: React.FC = () => {
     }
 
     try {
-      const all = await invoke(COMMANDS.GET_WALLPAPERS);
+      const all = await invoke(COMMANDS.GET_WALLPAPERS, { silent: true });
       const found = all.find((w) => w.id === config.wallpaper_id) ?? null;
       setWallpaper(found);
     } catch (e) {
@@ -122,7 +122,7 @@ const WallpaperRenderer: React.FC = () => {
   // 初始化
   useEffect(() => {
     if (!monitorId) return;
-    invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }).then((config) => {
+    invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
       if (config) loadFromConfig(config);
     });
   }, [monitorId, loadFromConfig]);
@@ -132,7 +132,7 @@ const WallpaperRenderer: React.FC = () => {
     if (!monitorId) return;
     const unlisten = listen(EVENTS.WALLPAPER_CHANGED, (payload) => {
       if (payload.monitor_id === monitorId) {
-        invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }).then((config) => {
+        invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
           if (config) loadFromConfig(config);
         });
       }

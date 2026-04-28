@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
+use log::{info, warn};
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -67,7 +68,7 @@ pub fn export_backup(
 
     zip.finish().context("Failed to finalize zip")?;
 
-    println!("[Backup] Exported to: {}", output_path.display());
+    info!("[Backup] Exported to: {}", output_path.display());
     Ok(())
 }
 
@@ -102,7 +103,7 @@ pub fn import_backup(
 
         // 安全检查：防止 zip slip 攻击
         if name.contains("..") {
-            eprintln!("[Backup] Skipping suspicious entry: {}", name);
+            warn!("[Backup] Skipping suspicious entry: {}", name);
             continue;
         }
 
@@ -126,7 +127,7 @@ pub fn import_backup(
         }
     }
 
-    println!("[Backup] Imported {} files from: {}", count, zip_path.display());
+    info!("[Backup] Imported {} files from: {}", count, zip_path.display());
     Ok(count)
 }
 

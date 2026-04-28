@@ -8,6 +8,7 @@ import MainContent from "@/components/layout/MainContent";
 import MonitorSettingsPanel from "@/components/settings/MonitorSettingsPanel";
 import GlobalSettingsDialog from "@/components/settings/GlobalSettingsPanel";
 import PreviewDialog from "@/components/wallpaper/PreviewDialog";
+import { Toaster } from "@/components/ui/toast";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useShortcuts } from "@/hooks/useShortcuts";
@@ -139,6 +140,9 @@ const App: React.FC = () => {
 
         {/* 全局设置 Dialog */}
         <GlobalSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+
+        {/* 全局 Toast 消息容器 (sonner) */}
+        <Toaster position="top-center" richColors closeButton duration={4000} />
 
         {/* 拖拽导入视觉反馈蒙层 */}
         {isDragOver && (

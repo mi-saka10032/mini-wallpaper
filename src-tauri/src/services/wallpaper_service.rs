@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use image::GenericImageView;
+use log::{info, warn};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -139,11 +140,11 @@ fn prepare_wallpaper_files(
         let thumb_path = thumbnails_dir.join(&thumb_name);
         match generate_static_thumbnail(&dest_path, &thumb_path) {
             Ok(()) => {
-                println!("[Thumbnail] Generated: {:?}", thumb_path);
+                info!("[Thumbnail] Generated: {:?}", thumb_path);
                 Some(thumb_path.to_string_lossy().to_string())
             }
             Err(e) => {
-                eprintln!("[WARN] Thumbnail generation failed for {}: {}", original_name, e);
+                warn!("[WARN] Thumbnail generation failed for {}: {}", original_name, e);
                 None
             }
         }
@@ -220,7 +221,7 @@ pub async fn import_single(
         .await
         .context("Failed to insert wallpaper into database")?;
 
-    println!("[Import] {} -> {}", source_path, model.file_path);
+    info!("[Import] {} -> {}", source_path, model.file_path);
 
     Ok(model)
 }
@@ -263,7 +264,7 @@ pub async fn import_batch(
         match result {
             Ok(model) => models.push(model),
             Err((path, e)) => {
-                eprintln!("[Import Error] {}: {}", path, e);
+                warn!("[Import Error] {}: {}", path, e);
                 errors.push(format!("{}: {}", path, e));
             }
         }
@@ -313,7 +314,7 @@ pub async fn save_video_thumbnail(
     active.thumb_path = Set(Some(thumb_path_str.clone()));
     active.update(db).await.context("Failed to update wallpaper thumb_path")?;
 
-    println!("[VideoThumbnail] Saved: {}", thumb_path_str);
+    info!("[VideoThumbnail] Saved: {}", thumb_path_str);
     Ok(thumb_path_str)
 }
 
@@ -335,7 +336,7 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
             .context("Failed to query wallpaper")?;
 
         let Some(model) = model else {
-            eprintln!("[Delete] Wallpaper not found: {}", id);
+            warn!("[Delete] Wallpaper not found: {}", id);
             continue;
         };
 
@@ -377,18 +378,18 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
     for (file_path, thumb_path) in &files_to_delete {
         if file_path.exists() {
             if let Err(e) = std::fs::remove_file(file_path) {
-                eprintln!("[Delete] Failed to remove file {:?}: {}", file_path, e);
+                warn!("[Delete] Failed to remove file {:?}: {}", file_path, e);
             }
         }
         if let Some(ref tp) = thumb_path {
             if tp.exists() {
                 if let Err(e) = std::fs::remove_file(tp) {
-                    eprintln!("[Delete] Failed to remove thumbnail {:?}: {}", tp, e);
+                    warn!("[Delete] Failed to remove thumbnail {:?}: {}", tp, e);
                 }
             }
         }
     }
 
-    println!("[Delete] {} wallpapers deleted", deleted_count);
+    info!("[Delete] {} wallpapers deleted", deleted_count);
     Ok(deleted_count)
 }

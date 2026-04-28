@@ -1,8 +1,9 @@
 use anyhow::Result;
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 use std::path::PathBuf;
 use tauri::Manager;
+use log::info;
 
 use crate::migration::Migrator;
 
@@ -23,18 +24,30 @@ pub(super) async fn init_db(app: &tauri::AppHandle) -> Result<DatabaseConnection
     let db_path = get_db_path(app)?;
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
-    let db = Database::connect(&db_url).await?;
+    // 通过环境变量 SQL_LOG=1 开启 SQL 语句日志，默认关闭
+    let sql_logging = std::env::var("SQL_LOG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let mut opt = ConnectOptions::new(&db_url);
+    opt.sqlx_logging(sql_logging);
+    if sql_logging {
+        opt.sqlx_logging_level(log::LevelFilter::Debug);
+    }
+
+    let db = Database::connect(opt).await?;
     let connect_elapsed = start.elapsed();
-    println!("[DB] Connected in {:.0?}", connect_elapsed);
+    info!("[DB] Connected in {:.0?}", connect_elapsed);
 
     Migrator::up(&db, None).await?;
     let migrate_elapsed = start.elapsed();
-    println!("[DB] Migrations completed in {:.0?}", migrate_elapsed);
+    info!("[DB] Migrations completed in {:.0?}", migrate_elapsed);
 
-    println!(
-        "[DB] SQLite initialized at: {} (total: {:.0?})",
+    info!(
+        "[DB] SQLite initialized at: {} (total: {:.0?}), sql_logging={}",
         db_path.display(),
-        start.elapsed()
+        start.elapsed(),
+        sql_logging
     );
     Ok(db)
 }

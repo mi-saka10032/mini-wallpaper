@@ -98,8 +98,10 @@ export default {
     displayMirror: "Mirror",
     displayExtend: "Extend",
     displayIndependentDesc: "Each monitor has its own wallpaper",
-    displayMirrorDesc: "All monitors show the same wallpaper",
-    displayExtendDesc: "One wallpaper spans across all monitors",
+    displayMirrorDesc: "All monitors show the same wallpaper. Settings sync to all monitors",
+    displayExtendDesc: "One wallpaper spans across all monitors. Settings sync to all monitors",
+    displaySyncHint: "In {{mode}} mode, changes apply to all monitors",
+    displaySyncedBadge: "Synced",
   },
 
   // PreviewDialog

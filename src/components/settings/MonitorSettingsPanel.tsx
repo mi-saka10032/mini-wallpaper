@@ -11,6 +11,7 @@ import {
   RefreshCw,
   AlertTriangle,
   Layers,
+  Link,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -49,6 +50,8 @@ const MonitorSettingsPanel: React.FC = () => {
   const configs = useMonitorConfigStore((s) => s.configs);
   const syncMonitors = useMonitorConfigStore((s) => s.syncMonitors);
   const upsert = useMonitorConfigStore((s) => s.upsert);
+  const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
+  const syncConfigToAll = useMonitorConfigStore((s) => s.syncConfigToAll);
   const loading = useMonitorConfigStore((s) => s.loading);
   const collections = useCollectionStore((s) => s.collections);
   const fetchCollections = useCollectionStore((s) => s.fetchCollections);
@@ -77,6 +80,12 @@ const MonitorSettingsPanel: React.FC = () => {
   const selectedConfig = activeConfigs[selectedIndex] ?? null;
   const selectedMonitorId = selectedConfig?.monitor_id ?? null;
 
+  /**
+   * 是否处于同步模式（mirror / extend）
+   * 在此模式下，所有设置修改都同步到全部 active 显示器
+   */
+  const isSyncMode = selectedConfig?.display_mode === "mirror" || selectedConfig?.display_mode === "extend";
+
   // 获取壁纸缩略图
   const getWallpaperThumb = useCallback(
     (wallpaperId: number | null): Wallpaper | null => {
@@ -87,8 +96,6 @@ const MonitorSettingsPanel: React.FC = () => {
   );
 
   // ===== 显示器可视化布局 =====
-  // 由于我们不再持有 TauriMonitor 的 position/size，
-  // 简化为等分横排布局
   const monitorLayout = useMemo(() => {
     if (activeConfigs.length === 0) return { items: [], containerWidth: 0, containerHeight: 0 };
 
@@ -126,6 +133,20 @@ const MonitorSettingsPanel: React.FC = () => {
     }
   }, [selectedConfig?.collection_id, selectedMonitorId]);
 
+  // ===== 通用 upsert 封装：同步模式下自动广播到所有显示器 =====
+  const upsertCurrent = useCallback(
+    async (params: Omit<Parameters<typeof upsert>[0], "monitorId">) => {
+      if (!selectedMonitorId) return;
+      if (isSyncMode) {
+        // 同步模式：先更新当前选中的，再广播到所有
+        await upsertAll(params);
+      } else {
+        await upsert({ ...params, monitorId: selectedMonitorId });
+      }
+    },
+    [upsert, upsertAll, selectedMonitorId, isSyncMode],
+  );
+
   const handleSourceChange = useCallback(
     async (source: "wallpaper" | "collection") => {
       if (!selectedMonitorId) return;
@@ -133,18 +154,18 @@ const MonitorSettingsPanel: React.FC = () => {
       setSourceType(source);
 
       if (source === "wallpaper" && selectedConfig?.collection_id) {
-        await upsert({ monitorId: selectedMonitorId, clearCollection: true });
+        await upsertCurrent({ clearCollection: true });
       }
     },
-    [upsert, selectedMonitorId, selectedConfig?.collection_id],
+    [upsertCurrent, selectedMonitorId, selectedConfig?.collection_id],
   );
 
   const handleWallpaperSelect = useCallback(
     async (wallpaperId: number) => {
       if (!selectedMonitorId) return;
-      await upsert({ monitorId: selectedMonitorId, wallpaperId });
+      await upsertCurrent({ wallpaperId });
     },
-    [upsert, selectedMonitorId],
+    [upsertCurrent, selectedMonitorId],
   );
 
   const handleCollectionSelect = useCallback(
@@ -162,8 +183,7 @@ const MonitorSettingsPanel: React.FC = () => {
         }
 
         const firstWallpaperId = wallpapersInCollection[0].id;
-        await upsert({
-          monitorId: selectedMonitorId,
+        await upsertCurrent({
           collectionId,
           wallpaperId: firstWallpaperId,
         });
@@ -172,48 +192,51 @@ const MonitorSettingsPanel: React.FC = () => {
         setCollectionWarning(t("monitor.collectionQueryFail"));
       }
     },
-    [upsert, selectedMonitorId],
+    [upsertCurrent, selectedMonitorId, t],
   );
 
   const handleFitModeChange = useCallback(
     async (fitMode: string) => {
-      if (!selectedMonitorId) return;
-      await upsert({ monitorId: selectedMonitorId, fitMode });
+      await upsertCurrent({ fitMode });
     },
-    [upsert, selectedMonitorId],
+    [upsertCurrent],
   );
 
   const handleDisplayModeChange = useCallback(
     async (displayMode: string) => {
       if (!selectedMonitorId) return;
+
+      // 先更新当前选中显示器的 display_mode
       await upsert({ monitorId: selectedMonitorId, displayMode });
+
+      // 如果切换到 mirror/extend，将当前选中显示器的完整配置同步到所有其他显示器
+      if (displayMode === "mirror" || displayMode === "extend") {
+        await syncConfigToAll(selectedMonitorId);
+      }
     },
-    [upsert, selectedMonitorId],
+    [upsert, syncConfigToAll, selectedMonitorId],
   );
 
   const handlePlayModeChange = useCallback(
     async (playMode: string) => {
-      if (!selectedMonitorId) return;
-      await upsert({ monitorId: selectedMonitorId, playMode });
+      await upsertCurrent({ playMode });
     },
-    [upsert, selectedMonitorId],
+    [upsertCurrent],
   );
 
   const handleIntervalChange = useCallback(
     async (value: number[]) => {
-      if (!selectedMonitorId) return;
       const seconds = INTERVAL_PRESETS[value[0]] ?? 300;
-      await upsert({ monitorId: selectedMonitorId, playInterval: seconds });
+      await upsertCurrent({ playInterval: seconds });
     },
-    [upsert, selectedMonitorId],
+    [upsertCurrent],
   );
 
   const handleEnabledChange = useCallback(
     async (enabled: boolean) => {
-      if (!selectedMonitorId) return;
-      await upsert({ monitorId: selectedMonitorId, isEnabled: enabled });
+      await upsertCurrent({ isEnabled: enabled });
     },
-    [upsert, selectedMonitorId],
+    [upsertCurrent],
   );
 
   // 间隔滑块值
@@ -268,14 +291,18 @@ const MonitorSettingsPanel: React.FC = () => {
                   const config = activeConfigs[item.index];
                   const wp = getWallpaperThumb(config?.wallpaper_id ?? null);
                   const isSelected = item.index === selectedIndex;
+                  // 同步模式下，非选中的显示器不可点击
+                  const isDisabled = isSyncMode && !isSelected;
 
                   return (
                     <button
                       key={item.monitorId}
                       type="button"
-                      onClick={() => setSelectedIndex(item.index)}
+                      disabled={isDisabled}
+                      onClick={() => !isDisabled && setSelectedIndex(item.index)}
                       className={cn(
                         "absolute flex flex-col items-center transition-all duration-200",
+                        isDisabled && "cursor-not-allowed opacity-50",
                       )}
                       style={{
                         left: item.x + 20,
@@ -289,7 +316,9 @@ const MonitorSettingsPanel: React.FC = () => {
                           "relative overflow-hidden rounded-lg border-2 bg-muted/80 transition-colors",
                           isSelected
                             ? "border-primary shadow-lg shadow-primary/20"
-                            : "border-border hover:border-muted-foreground/50",
+                            : isDisabled
+                              ? "border-border/50"
+                              : "border-border hover:border-muted-foreground/50",
                         )}
                         style={{
                           width: item.width,
@@ -325,6 +354,14 @@ const MonitorSettingsPanel: React.FC = () => {
                         >
                           {item.index + 1}
                         </div>
+
+                        {/* 同步模式下非选中显示器显示已同步徽章 */}
+                        {isSyncMode && !isSelected && (
+                          <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-full bg-primary/80 px-1.5 py-0.5 text-[8px] font-medium text-primary-foreground">
+                            <Link className="size-2.5" />
+                            {t("monitor.displaySyncedBadge")}
+                          </div>
+                        )}
                       </div>
 
                       {/* 底座 */}
@@ -367,6 +404,66 @@ const MonitorSettingsPanel: React.FC = () => {
                 </div>
               )}
             </div>
+          )}
+
+          {/* ===== 显示模式（独立一行，位于显示器可视化下方） ===== */}
+          {selectedConfig && activeConfigs.length > 0 && (
+            <>
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Layers className="size-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">{t("monitor.displayMode")}</Label>
+                </div>
+                <Select
+                  value={selectedConfig?.display_mode ?? "independent"}
+                  onValueChange={handleDisplayModeChange}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="independent">
+                      <div className="flex items-center gap-2">
+                        <span>{t("monitor.displayIndependent")}</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="mirror">
+                      <div className="flex items-center gap-2">
+                        <span>{t("monitor.displayMirror")}</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="extend">
+                      <div className="flex items-center gap-2">
+                        <span>{t("monitor.displayExtend")}</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {selectedConfig?.display_mode === "mirror"
+                    ? t("monitor.displayMirrorDesc")
+                    : selectedConfig?.display_mode === "extend"
+                      ? t("monitor.displayExtendDesc")
+                      : t("monitor.displayIndependentDesc")}
+                </p>
+
+                {/* 同步模式提示条 */}
+                {isSyncMode && (
+                  <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+                    <Link className="size-3.5 shrink-0 text-primary" />
+                    <span className="text-xs text-primary">
+                      {t("monitor.displaySyncHint", {
+                        mode: selectedConfig?.display_mode === "mirror"
+                          ? t("monitor.displayMirror")
+                          : t("monitor.displayExtend"),
+                      })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </>
           )}
 
           {selectedConfig && (
@@ -463,48 +560,6 @@ const MonitorSettingsPanel: React.FC = () => {
                     )}
                   </div>
                 )}
-              </div>
-
-              <Separator />
-
-              {/* ===== 显示模式 ===== */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Layers className="size-4 text-muted-foreground" />
-                  <Label className="text-sm font-medium">{t("monitor.displayMode")}</Label>
-                </div>
-                <Select
-                  value={selectedConfig?.display_mode ?? "independent"}
-                  onValueChange={handleDisplayModeChange}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="independent">
-                      <div className="flex items-center gap-2">
-                        <span>{t("monitor.displayIndependent")}</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="mirror">
-                      <div className="flex items-center gap-2">
-                        <span>{t("monitor.displayMirror")}</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="extend">
-                      <div className="flex items-center gap-2">
-                        <span>{t("monitor.displayExtend")}</span>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {selectedConfig?.display_mode === "mirror"
-                    ? t("monitor.displayMirrorDesc")
-                    : selectedConfig?.display_mode === "extend"
-                      ? t("monitor.displayExtendDesc")
-                      : t("monitor.displayIndependentDesc")}
-                </p>
               </div>
 
               <Separator />

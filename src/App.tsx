@@ -86,7 +86,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (activeId === 0) {
       setViewWallpapers(wallpapers);
-    } else {
+    } else if (activeId > 0) {
       getCollectionWallpapers(activeId)
         .then(setViewWallpapers)
         .catch((e) => console.error("[getCollectionWallpapers]", e));

@@ -35,6 +35,16 @@ interface MonitorConfigState {
     isEnabled?: boolean;
     active?: boolean;
   }) => Promise<MonitorConfig>;
+  /**
+   * 将指定 config 的全部设置（除 id/monitor_id 外）同步到所有其他 active 显示器
+   * 用于 mirror/extend 模式切换时，将当前选中显示器的配置复制到其他显示器
+   */
+  syncConfigToAll: (sourceMonitorId: string) => Promise<void>;
+  /**
+   * 批量 upsert：对所有 active 显示器执行相同的更新参数
+   * 用于 mirror/extend 模式下修改设置时同步到所有显示器
+   */
+  upsertAll: (params: Omit<Parameters<MonitorConfigState["upsert"]>[0], "monitorId">) => Promise<void>;
   remove: (id: number, monitorId?: string) => Promise<void>;
 }
 
@@ -268,6 +278,69 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       return { configs: [...state.configs, config] };
     });
     return config;
+  },
+
+  syncConfigToAll: async (sourceMonitorId) => {
+    const state = useMonitorConfigStore.getState();
+    const source = state.configs.find(
+      (c) => c.monitor_id === sourceMonitorId && c.active,
+    );
+    if (!source) return;
+
+    const others = state.configs.filter(
+      (c) => c.active && c.monitor_id !== sourceMonitorId,
+    );
+    if (others.length === 0) return;
+
+    const promises = others.map((c) =>
+      upsertMonitorConfig({
+        monitorId: c.monitor_id,
+        wallpaperId: source.wallpaper_id,
+        collectionId: source.collection_id,
+        clearCollection: !source.collection_id,
+        displayMode: source.display_mode,
+        fitMode: source.fit_mode,
+        playMode: source.play_mode,
+        playInterval: source.play_interval,
+        isEnabled: source.is_enabled,
+      }),
+    );
+
+    const results = await Promise.all(promises);
+
+    set((state) => {
+      const updated = [...state.configs];
+      for (const config of results) {
+        const idx = updated.findIndex((c) => c.monitor_id === config.monitor_id);
+        if (idx >= 0) {
+          updated[idx] = config;
+        }
+      }
+      return { configs: updated };
+    });
+  },
+
+  upsertAll: async (params) => {
+    const state = useMonitorConfigStore.getState();
+    const activeConfigs = state.configs.filter((c) => c.active);
+    if (activeConfigs.length === 0) return;
+
+    const promises = activeConfigs.map((c) =>
+      upsertMonitorConfig({ ...params, monitorId: c.monitor_id }),
+    );
+
+    const results = await Promise.all(promises);
+
+    set((state) => {
+      const updated = [...state.configs];
+      for (const config of results) {
+        const idx = updated.findIndex((c) => c.monitor_id === config.monitor_id);
+        if (idx >= 0) {
+          updated[idx] = config;
+        }
+      }
+      return { configs: updated };
+    });
   },
 
   remove: async (id, _monitorId) => {

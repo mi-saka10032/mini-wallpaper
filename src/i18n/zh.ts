@@ -98,8 +98,10 @@ export default {
     displayMirror: "镜像显示",
     displayExtend: "拓展显示",
     displayIndependentDesc: "每个显示器独立设置壁纸",
-    displayMirrorDesc: "所有显示器显示相同壁纸",
-    displayExtendDesc: "一张壁纸横跨所有显示器",
+    displayMirrorDesc: "所有显示器显示相同壁纸，设置将同步到所有显示器",
+    displayExtendDesc: "一张壁纸横跨所有显示器，设置将同步到所有显示器",
+    displaySyncHint: "当前为{{mode}}模式，修改将同步应用到所有显示器",
+    displaySyncedBadge: "已同步",
   },
 
   // PreviewDialog

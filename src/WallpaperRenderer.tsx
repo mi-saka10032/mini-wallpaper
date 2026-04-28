@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { availableMonitors } from "@tauri-apps/api/window";
+import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@/api/invoke";
 import { listen, EVENTS } from "@/api/event";
 import { COMMANDS, type Wallpaper, type MonitorConfig } from "@/api/config";
@@ -134,7 +134,12 @@ const WallpaperRenderer: React.FC = () => {
       const monitors = await availableMonitors();
       if (monitors.length === 0) return;
 
-      // 计算虚拟画布的 bounding box（所有显示器组成的最小矩形）
+      // 获取当前窗口的 scaleFactor，用于将物理像素转换为 CSS 逻辑像素
+      // availableMonitors() 返回的 size/position 均为物理像素，
+      // 而 CSS 中 width/left 等属性使用逻辑像素，两者在高 DPI 下不一致
+      const scaleFactor = await getCurrentWindow().scaleFactor();
+
+      // 计算虚拟画布的 bounding box（所有显示器组成的最小矩形，物理像素）
       let minX = Infinity, minY = Infinity;
       let maxX = -Infinity, maxY = -Infinity;
 
@@ -149,8 +154,9 @@ const WallpaperRenderer: React.FC = () => {
         maxY = Math.max(maxY, y + h);
       }
 
-      const totalWidth = maxX - minX;
-      const totalHeight = maxY - minY;
+      // 物理像素 → CSS 逻辑像素（除以 scaleFactor）
+      const totalWidth = (maxX - minX) / scaleFactor;
+      const totalHeight = (maxY - minY) / scaleFactor;
 
       // 找到当前窗口所属的显示器
       const currentMonitor = monitors.find(
@@ -162,11 +168,19 @@ const WallpaperRenderer: React.FC = () => {
         return;
       }
 
-      // 当前显示器相对于虚拟画布左上角的偏移量
-      const offsetX = currentMonitor.position.x - minX;
-      const offsetY = currentMonitor.position.y - minY;
-      const myWidth = currentMonitor.size.width;
-      const myHeight = currentMonitor.size.height;
+      // 当前显示器相对于虚拟画布左上角的偏移量（物理像素 → 逻辑像素）
+      const offsetX = (currentMonitor.position.x - minX) / scaleFactor;
+      const offsetY = (currentMonitor.position.y - minY) / scaleFactor;
+      const myWidth = currentMonitor.size.width / scaleFactor;
+      const myHeight = currentMonitor.size.height / scaleFactor;
+
+      console.log("[WallpaperRenderer] extend viewport computed:", {
+        scaleFactor,
+        totalWidth, totalHeight,
+        offsetX, offsetY,
+        myWidth, myHeight,
+        rawPhysical: { totalW: maxX - minX, totalH: maxY - minY },
+      });
 
       setExtendViewport({ offsetX, offsetY, totalWidth, totalHeight, myWidth, myHeight });
     } catch (e) {
@@ -293,15 +307,16 @@ const WallpaperRenderer: React.FC = () => {
   if (displayMode === "extend" && extendViewport) {
     const { offsetX, offsetY, totalWidth, totalHeight, myWidth, myHeight } = extendViewport;
 
-    // 图片/视频的实际渲染尺寸 = 虚拟画布大小
+    // 图片/视频的实际渲染尺寸 = 虚拟画布大小（逻辑像素）
     // 偏移量 = 当前显示器在画布中的位置（取负值，向左上方移动）
+    // objectFit: "fill" 强制拉伸到指定宽高，不保持宽高比
     const extendStyle: React.CSSProperties = {
       position: "absolute",
       left: `-${offsetX}px`,
       top: `-${offsetY}px`,
       width: `${totalWidth}px`,
       height: `${totalHeight}px`,
-      objectFit: "cover" as const,
+      objectFit: "fill" as const,
     };
 
     return (

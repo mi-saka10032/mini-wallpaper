@@ -58,3 +58,12 @@ pub async fn show_wallpaper_windows(
     mgr.show_all();
     Ok(())
 }
+
+/// 获取当前已创建壁纸窗口的 monitor_id 列表
+#[tauri::command]
+pub async fn get_active_wallpaper_windows(
+    ctx: State<'_, AppContext>,
+) -> Result<Vec<String>, String> {
+    let mgr = ctx.window_manager.lock().await;
+    Ok(mgr.get_active_window_ids())
+}

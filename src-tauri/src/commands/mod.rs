@@ -50,6 +50,7 @@ macro_rules! all_handlers {
             $crate::commands::wallpaper_window::destroy_all_wallpaper_windows,
             $crate::commands::wallpaper_window::hide_wallpaper_windows,
             $crate::commands::wallpaper_window::show_wallpaper_windows,
+            $crate::commands::wallpaper_window::get_active_wallpaper_windows,
         ]
     };
 }

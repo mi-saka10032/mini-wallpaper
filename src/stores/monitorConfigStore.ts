@@ -12,6 +12,7 @@ import { COMMANDS } from "@/api/config";
 import {
   createWallpaperWindow,
   destroyWallpaperWindow,
+  getActiveWallpaperWindows,
 } from "@/api/wallpaperWindow";
 
 interface MonitorConfigState {
@@ -54,6 +55,16 @@ async function syncWallpaperWindows(
   configs: MonitorConfig[],
   monitors: Monitor[],
 ) {
+  // 先从 Rust 端查询已有壁纸窗口，恢复前端跟踪集合（解决页面刷新后状态丢失问题）
+  try {
+    const existingWindows = await getActiveWallpaperWindows();
+    for (const mid of existingWindows) {
+      _activeWallpaperWindows.add(mid);
+    }
+  } catch (e) {
+    console.warn("[syncWallpaperWindows] Failed to query existing windows:", e);
+  }
+
   const monitorMap = new Map(
     monitors.map((m) => [m.name ?? `monitor_${monitors.indexOf(m)}`, m]),
   );

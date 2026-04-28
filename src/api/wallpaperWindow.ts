@@ -32,3 +32,8 @@ export async function hideWallpaperWindows(): Promise<void> {
 export async function showWallpaperWindows(): Promise<void> {
   return invoke(COMMANDS.SHOW_WALLPAPER_WINDOWS);
 }
+
+/** 获取当前已创建壁纸窗口的 monitor_id 列表 */
+export async function getActiveWallpaperWindows(): Promise<string[]> {
+  return invoke(COMMANDS.GET_ACTIVE_WALLPAPER_WINDOWS);
+}

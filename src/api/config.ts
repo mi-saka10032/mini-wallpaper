@@ -40,6 +40,7 @@ export const COMMANDS = {
   DESTROY_ALL_WALLPAPER_WINDOWS: "destroy_all_wallpaper_windows",
   HIDE_WALLPAPER_WINDOWS: "hide_wallpaper_windows",
   SHOW_WALLPAPER_WINDOWS: "show_wallpaper_windows",
+  GET_ACTIVE_WALLPAPER_WINDOWS: "get_active_wallpaper_windows",
 } as const;
 
 // ==================== 实体模型 ====================
@@ -336,5 +337,9 @@ export interface CommandMap {
   [COMMANDS.SHOW_WALLPAPER_WINDOWS]: {
     params: Record<string, never>;
     result: void;
+  };
+  [COMMANDS.GET_ACTIVE_WALLPAPER_WINDOWS]: {
+    params: Record<string, never>;
+    result: string[];
   };
 }

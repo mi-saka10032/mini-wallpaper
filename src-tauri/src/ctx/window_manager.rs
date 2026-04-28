@@ -304,6 +304,11 @@ impl WallpaperWindowManager {
     pub fn has_window(&self, monitor_id: &str) -> bool {
         self.windows.contains_key(monitor_id)
     }
+
+    /// 获取当前所有已创建壁纸窗口的 monitor_id 列表
+    pub fn get_active_window_ids(&self) -> Vec<String> {
+        self.windows.keys().cloned().collect()
+    }
 }
 
 /// 清理 monitor_id 使其适合做 Tauri window label

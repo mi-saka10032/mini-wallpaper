@@ -76,7 +76,6 @@ impl TaskSpawner for CarouselTask {
                 }
             };
 
-            let play_mode = config.play_mode.clone();
             let seconds = config.play_interval.max(5) as u64; // 最小 5 秒
 
             let mut tick = interval(Duration::from_secs(seconds));
@@ -86,19 +85,22 @@ impl TaskSpawner for CarouselTask {
             loop {
                 tick.tick().await;
 
-                // 获取当前 config 最新的 wallpaper_id
-                let current_wid = match monitor_config_service::get_by_monitor_id(&db, &mid).await
-                {
-                    Ok(Some(c)) => c.wallpaper_id,
-                    Ok(None) => {
-                        warn!("[Carousel] Config not found for {}, stopping", mid);
-                        break;
-                    }
-                    Err(e) => {
-                        error!("[Carousel] Failed to get config for {}: {}", mid, e);
-                        continue;
-                    }
-                };
+                // 每次 tick 动态拉取最新 config，获取 play_mode 和 wallpaper_id
+                let current_config =
+                    match monitor_config_service::get_by_monitor_id(&db, &mid).await {
+                        Ok(Some(c)) => c,
+                        Ok(None) => {
+                            warn!("[Carousel] Config not found for {}, stopping", mid);
+                            break;
+                        }
+                        Err(e) => {
+                            error!("[Carousel] Failed to get config for {}: {}", mid, e);
+                            continue;
+                        }
+                    };
+
+                let current_wid = current_config.wallpaper_id;
+                let play_mode = current_config.play_mode;
 
                 // 通过 collection_service 获取下一张壁纸
                 match collection_service::next_wallpaper_id(
@@ -153,8 +155,11 @@ impl TaskSpawner for CarouselTask {
 }
 
 /// 判断是否满足轮播启动条件（纯逻辑判断，不涉及 DB）
+///
+/// 仅检查 active + is_enabled 两个开关条件，
+/// collection_id 是否存在由调用方在具体场景中额外判断。
 pub fn should_start_timer(config: &monitor_config::Model) -> bool {
-    config.active && config.is_enabled && config.collection_id.is_some()
+    config.active && config.is_enabled
 }
 
 /// 检查收藏夹壁纸数量是否 > 1（委托 collection_service）

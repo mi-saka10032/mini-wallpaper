@@ -287,26 +287,27 @@ const WallpaperRenderer: React.FC = () => {
   const src = convertFileSrc(wallpaper.file_path);
 
   // extend 模式：裁剪渲染
+  // 原理：将图片/视频拉伸到整个虚拟画布大小（所有显示器组成的 bounding box），
+  // 然后通过 position:absolute + 负偏移，只显示当前显示器对应的区域。
+  // 容器 overflow:hidden 自动裁剪掉超出部分。
   if (displayMode === "extend" && extendViewport) {
     const { offsetX, offsetY, totalWidth, totalHeight, myWidth, myHeight } = extendViewport;
-    const scaleX = totalWidth / myWidth;
-    const scaleY = totalHeight / myHeight;
-    // 使用较大的缩放比例确保图片覆盖整个虚拟画布
-    const scale = Math.max(scaleX, scaleY);
-    const translateX = -(offsetX / myWidth) * 100;
-    const translateY = -(offsetY / myHeight) * 100;
 
+    // 图片/视频的实际渲染尺寸 = 虚拟画布大小
+    // 偏移量 = 当前显示器在画布中的位置（取负值，向左上方移动）
     const extendStyle: React.CSSProperties = {
-      width: `${scaleX * 100}%`,
-      height: `${scaleY * 100}%`,
+      position: "absolute",
+      left: `-${offsetX}px`,
+      top: `-${offsetY}px`,
+      width: `${totalWidth}px`,
+      height: `${totalHeight}px`,
       objectFit: "cover" as const,
-      transform: `translate(${translateX}%, ${translateY}%)`,
     };
 
     return (
       <div
         className="h-screen w-screen overflow-hidden bg-black"
-        style={{ pointerEvents: "none", userSelect: "none" }}
+        style={{ position: "relative", pointerEvents: "none", userSelect: "none" }}
       >
         {wallpaper.type === "video" ? (
           <video

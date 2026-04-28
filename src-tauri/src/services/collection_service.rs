@@ -49,12 +49,14 @@ pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<co
         .ok_or_else(|| anyhow::anyhow!("Collection not found"))
 }
 
-/// 删除收藏夹（手动清理关联记录，不依赖外键级联）
+/// 删除收藏夹（手动清理关联记录，不依赖外键级联，事务保护）
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
+    let txn = db.begin().await?;
+
     // 1. 清理 collection_wallpapers 关联记录
     collection_wallpaper::Entity::delete_many()
         .filter(collection_wallpaper::Column::CollectionId.eq(id))
-        .exec(db)
+        .exec(&txn)
         .await?;
 
     // 2. 清理 monitor_configs 中引用该收藏夹的字段置空
@@ -64,11 +66,13 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
             Expr::value(sea_orm::Value::Int(None)),
         )
         .filter(monitor_config::Column::CollectionId.eq(id))
-        .exec(db)
+        .exec(&txn)
         .await?;
 
     // 3. 删除收藏夹本身
-    collection::Entity::delete_by_id(id).exec(db).await?;
+    collection::Entity::delete_by_id(id).exec(&txn).await?;
+
+    txn.commit().await?;
     Ok(())
 }
 
@@ -106,19 +110,21 @@ pub async fn get_wallpapers(
     Ok(sorted)
 }
 
-/// 向收藏夹添加壁纸（批量）
+/// 向收藏夹添加壁纸（批量，事务保护）
 pub async fn add_wallpapers(
     db: &DatabaseConnection,
     collection_id: i32,
     wallpaper_ids: Vec<i32>,
 ) -> Result<u32> {
+    let txn = db.begin().await?;
+
     let mut count = 0u32;
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     // 查询已有的关联，避免重复插入
     let existing = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
-        .all(db)
+        .all(&txn)
         .await?;
     let existing_ids: std::collections::HashSet<i32> =
         existing.iter().map(|cw| cw.wallpaper_id).collect();
@@ -138,16 +144,17 @@ pub async fn add_wallpapers(
             added_at: Set(now.clone()),
         };
         collection_wallpaper::Entity::insert(model)
-            .exec(db)
+            .exec(&txn)
             .await?;
         count += 1;
         next_order += 1;
     }
 
+    txn.commit().await?;
     Ok(count)
 }
 
-/// 重新排序收藏夹内的壁纸
+/// 重新排序收藏夹内的壁纸（事务保护）
 ///
 /// 接收按新顺序排列的 wallpaper_ids，按索引写入 sort_order
 pub async fn reorder_wallpapers(
@@ -155,6 +162,8 @@ pub async fn reorder_wallpapers(
     collection_id: i32,
     wallpaper_ids: Vec<i32>,
 ) -> Result<()> {
+    let txn = db.begin().await?;
+
     for (index, wp_id) in wallpaper_ids.iter().enumerate() {
         collection_wallpaper::Entity::update_many()
             .col_expr(
@@ -163,9 +172,11 @@ pub async fn reorder_wallpapers(
             )
             .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
             .filter(collection_wallpaper::Column::WallpaperId.eq(*wp_id))
-            .exec(db)
+            .exec(&txn)
             .await?;
     }
+
+    txn.commit().await?;
     Ok(())
 }
 

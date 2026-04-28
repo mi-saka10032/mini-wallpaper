@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use futures::stream::{self, StreamExt};
 use image::GenericImageView;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::path::{Path, PathBuf};
@@ -78,16 +79,26 @@ fn get_image_dimensions(path: &Path) -> Option<(u32, u32)> {
     image::open(path).ok().map(|img| img.dimensions())
 }
 
-/// 导入单个壁纸文件
+/// 文件预处理结果（纯同步 I/O 阶段产出）
+struct PreparedWallpaper {
+    original_name: String,
+    file_type: String,
+    dest_path: String,
+    thumb_path: Option<String>,
+    width: Option<i32>,
+    height: Option<i32>,
+    file_size: i64,
+}
+
+/// 同步文件预处理：校验、复制、生成缩略图、获取尺寸
 ///
-/// 图片/GIF 在导入时由 image crate 生成缩略图；
-/// 视频缩略图由前端 canvas 抽帧后通过 `save_video_thumbnail` 单独写入。
-pub async fn import_single(
-    db: &DatabaseConnection,
+/// 该函数包含所有阻塞 I/O 操作（文件复制、图片解码/编码），
+/// 应在 `spawn_blocking` 中调用以避免阻塞 async runtime。
+fn prepare_wallpaper_files(
     source_path: &str,
     wallpapers_dir: &Path,
     thumbnails_dir: &Path,
-) -> Result<wallpaper::Model> {
+) -> Result<PreparedWallpaper> {
     let source = Path::new(source_path);
 
     // 1. 检查文件存在
@@ -100,9 +111,8 @@ pub async fn import_single(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
-    let file_type = detect_file_type(ext).ok_or_else(|| {
-        anyhow::anyhow!("Unsupported file type: .{}", ext)
-    })?;
+    let file_type = detect_file_type(ext)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported file type: .{}", ext))?;
 
     // 3. 获取原始文件名
     let original_name = source
@@ -118,7 +128,6 @@ pub async fn import_single(
 
     // 5. 复制文件到应用目录
     let dest_path = copy_to_app_dir(source, wallpapers_dir)?;
-    let dest_path_str = dest_path.to_string_lossy().to_string();
 
     // 6. 生成缩略图：仅图片/GIF 在此生成，视频由前端 canvas 抽帧后单独写入
     let thumb_path_str = if file_type == "image" || file_type == "gif" {
@@ -139,7 +148,6 @@ pub async fn import_single(
             }
         }
     } else {
-        // 视频：thumb_path 暂为 None，等待前端回传
         None
     };
 
@@ -152,19 +160,53 @@ pub async fn import_single(
         (None, None)
     };
 
-    // 8. 获取当前时间
+    Ok(PreparedWallpaper {
+        original_name,
+        file_type: file_type.to_string(),
+        dest_path: dest_path.to_string_lossy().to_string(),
+        thumb_path: thumb_path_str,
+        width,
+        height,
+        file_size,
+    })
+}
+
+/// 导入单个壁纸文件
+///
+/// 分为两个阶段：
+/// 1. **文件预处理**（spawn_blocking）：文件复制、缩略图生成等阻塞 I/O
+/// 2. **数据库写入**（async）：将预处理结果插入数据库
+///
+/// 视频缩略图由前端 canvas 抽帧后通过 `save_video_thumbnail` 单独写入。
+pub async fn import_single(
+    db: &DatabaseConnection,
+    source_path: &str,
+    wallpapers_dir: &Path,
+    thumbnails_dir: &Path,
+) -> Result<wallpaper::Model> {
+    // 阶段 1：在 blocking 线程池中执行所有同步 I/O
+    let source_path_owned = source_path.to_string();
+    let wallpapers_dir_owned = wallpapers_dir.to_path_buf();
+    let thumbnails_dir_owned = thumbnails_dir.to_path_buf();
+
+    let prepared = tokio::task::spawn_blocking(move || {
+        prepare_wallpaper_files(&source_path_owned, &wallpapers_dir_owned, &thumbnails_dir_owned)
+    })
+    .await
+    .context("File preparation task panicked")??;
+
+    // 阶段 2：异步写入数据库
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    // 9. 写入数据库
     let active_model = wallpaper::ActiveModel {
-        name: Set(original_name),
-        r#type: Set(file_type.to_string()),
-        file_path: Set(dest_path_str),
-        thumb_path: Set(thumb_path_str),
-        width: Set(width),
-        height: Set(height),
+        name: Set(prepared.original_name),
+        r#type: Set(prepared.file_type),
+        file_path: Set(prepared.dest_path.clone()),
+        thumb_path: Set(prepared.thumb_path),
+        width: Set(prepared.width),
+        height: Set(prepared.height),
         duration: Set(None),
-        file_size: Set(Some(file_size)),
+        file_size: Set(Some(prepared.file_size)),
         tags: Set(None),
         is_favorite: Set(0),
         play_count: Set(0),
@@ -183,31 +225,55 @@ pub async fn import_single(
     Ok(model)
 }
 
-/// 批量导入壁纸
+/// 批量导入壁纸（有限并发）
+///
+/// 使用 `buffer_unordered` 控制最大并发数为 3，
+/// 每个任务内部通过 `spawn_blocking` 执行文件 I/O，避免阻塞 async runtime。
+/// SQLite 写操作由连接池自动排队，无需额外加锁。
+const IMPORT_CONCURRENCY: usize = 3;
+
 pub async fn import_batch(
     db: &DatabaseConnection,
     source_paths: Vec<String>,
     wallpapers_dir: &Path,
     thumbnails_dir: &Path,
 ) -> Result<Vec<wallpaper::Model>> {
-    let mut results = Vec::new();
+    let wallpapers_dir = wallpapers_dir.to_path_buf();
+    let thumbnails_dir = thumbnails_dir.to_path_buf();
+
+    let results: Vec<std::result::Result<wallpaper::Model, (String, anyhow::Error)>> =
+        stream::iter(source_paths)
+            .map(|path| {
+                let w_dir = wallpapers_dir.clone();
+                let t_dir = thumbnails_dir.clone();
+                async move {
+                    import_single(db, &path, &w_dir, &t_dir)
+                        .await
+                        .map_err(|e| (path, e))
+                }
+            })
+            .buffer_unordered(IMPORT_CONCURRENCY)
+            .collect()
+            .await;
+
+    let mut models = Vec::new();
     let mut errors = Vec::new();
 
-    for path in &source_paths {
-        match import_single(db, path, wallpapers_dir, thumbnails_dir).await {
-            Ok(model) => results.push(model),
-            Err(e) => {
+    for result in results {
+        match result {
+            Ok(model) => models.push(model),
+            Err((path, e)) => {
                 eprintln!("[Import Error] {}: {}", path, e);
                 errors.push(format!("{}: {}", path, e));
             }
         }
     }
 
-    if results.is_empty() && !errors.is_empty() {
+    if models.is_empty() && !errors.is_empty() {
         anyhow::bail!("All imports failed: {}", errors.join("; "));
     }
 
-    Ok(results)
+    Ok(models)
 }
 
 /// 保存前端 canvas 生成的视频缩略图
@@ -251,14 +317,20 @@ pub async fn save_video_thumbnail(
     Ok(thumb_path_str)
 }
 
-/// 批量删除壁纸（删文件 + 删缩略图 + 删数据库记录）
+/// 批量删除壁纸（事务保护 DB 操作，文件删除在事务提交后执行）
 pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64> {
+    use sea_orm::TransactionTrait;
+
+    // 第一阶段：在事务内完成所有 DB 操作，同时收集待删除的文件路径
+    let mut files_to_delete: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
     let mut deleted_count = 0u64;
+
+    let txn = db.begin().await?;
 
     for id in &ids {
         // 1. 查找数据库记录
         let model = wallpaper::Entity::find_by_id(*id)
-            .one(db)
+            .one(&txn)
             .await
             .context("Failed to query wallpaper")?;
 
@@ -267,51 +339,56 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
             continue;
         };
 
-        // 2. 删除壁纸文件
-        let file_path = Path::new(&model.file_path);
-        if file_path.exists() {
-            if let Err(e) = std::fs::remove_file(file_path) {
-                eprintln!("[Delete] Failed to remove file {}: {}", model.file_path, e);
-            }
-        }
+        // 收集文件路径，事务提交后再删除
+        let file_path = PathBuf::from(&model.file_path);
+        let thumb_path = model.thumb_path.as_ref().map(PathBuf::from);
+        files_to_delete.push((file_path, thumb_path));
 
-        // 3. 删除缩略图
-        if let Some(ref thumb) = model.thumb_path {
-            let thumb_path = Path::new(thumb);
-            if thumb_path.exists() {
-                if let Err(e) = std::fs::remove_file(thumb_path) {
-                    eprintln!("[Delete] Failed to remove thumbnail {}: {}", thumb, e);
-                }
-            }
-        }
-
-        // 4. 清理关联表：collection_wallpapers 中引用该壁纸的记录
+        // 2. 清理关联表：collection_wallpapers 中引用该壁纸的记录
         collection_wallpaper::Entity::delete_many()
             .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
-            .exec(db)
+            .exec(&txn)
             .await
             .context("Failed to clean up collection_wallpapers")?;
 
-        // 5. 清理关联表：monitor_configs 中引用该壁纸的字段置空
+        // 3. 清理关联表：monitor_configs 中引用该壁纸的字段置空
         monitor_config::Entity::update_many()
             .col_expr(
                 monitor_config::Column::WallpaperId,
                 sea_orm::prelude::Expr::value(sea_orm::Value::Int(None)),
             )
             .filter(monitor_config::Column::WallpaperId.eq(*id))
-            .exec(db)
+            .exec(&txn)
             .await
             .context("Failed to clean up monitor_configs wallpaper_id")?;
 
-        // 6. 删除数据库记录
+        // 4. 删除数据库记录
         wallpaper::Entity::delete_by_id(*id)
-            .exec(db)
+            .exec(&txn)
             .await
             .context("Failed to delete wallpaper from database")?;
 
-        println!("[Delete] Wallpaper {} deleted", id);
         deleted_count += 1;
     }
 
+    txn.commit().await?;
+
+    // 第二阶段：事务提交成功后，删除物理文件（best-effort，失败仅打印警告）
+    for (file_path, thumb_path) in &files_to_delete {
+        if file_path.exists() {
+            if let Err(e) = std::fs::remove_file(file_path) {
+                eprintln!("[Delete] Failed to remove file {:?}: {}", file_path, e);
+            }
+        }
+        if let Some(ref tp) = thumb_path {
+            if tp.exists() {
+                if let Err(e) = std::fs::remove_file(tp) {
+                    eprintln!("[Delete] Failed to remove thumbnail {:?}: {}", tp, e);
+                }
+            }
+        }
+    }
+
+    println!("[Delete] {} wallpapers deleted", deleted_count);
     Ok(deleted_count)
 }

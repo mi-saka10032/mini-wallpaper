@@ -233,8 +233,9 @@ const MainContent: React.FC<MainContentProps> = ({
   // 是否启用拖拽排序（收藏夹 + 管理模式）
   const isDragEnabled = manageMode && isCollectionView;
 
-  // 是否显示导入拖拽卡片：仅本地壁纸栏 + 非管理模式
-  const showImportCard = activeId === 0 && !manageMode;
+  // 导入拖拽卡片：暂时隐藏，等待 Tauri 拖拽事件在 Win11 下的兼容性修复后再启用
+  // 原始条件：activeId === 0 && !manageMode
+  const showImportCard = false;
 
   const gridContent = (
     <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">

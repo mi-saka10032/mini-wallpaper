@@ -104,4 +104,8 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* 壁纸窗口：body 背景透明，确保 Tauri transparent 窗口生效 */
+  body.wallpaper-body {
+    background: transparent !important;
+  }
 }

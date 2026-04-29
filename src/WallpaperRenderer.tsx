@@ -28,6 +28,16 @@ const WallpaperRenderer: React.FC = () => {
   const [searchParams] = useSearchParams();
   const monitorId = searchParams.get("monitorId");
 
+  // ===== 壁纸窗口 body 透明 =====
+  // 全局 CSS 中 body 有 bg-background（不透明），壁纸窗口需要透明背景
+  // 挂载时添加 wallpaper-body class 覆盖为 transparent
+  useEffect(() => {
+    document.body.classList.add("wallpaper-body");
+    return () => {
+      document.body.classList.remove("wallpaper-body");
+    };
+  }, []);
+
   const [wallpaper, setWallpaper] = useState<Wallpaper | null>(null);
   const [fitMode, setFitMode] = useState<string>("cover");
   const [displayMode, setDisplayMode] = useState<string>("independent");

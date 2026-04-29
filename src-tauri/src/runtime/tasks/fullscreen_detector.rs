@@ -15,7 +15,7 @@ use std::time::Duration;
 use log::info;
 use tokio::task::JoinHandle;
 
-use super::scheduler::TaskSpawner;
+use super::TaskSpawner;
 use crate::events::{FullscreenChangedPayload, TypedEmit};
 
 /// 全屏检测定时器在 Scheduler 中的 key

@@ -9,12 +9,11 @@ use crate::dto::monitor_config_dto::{
 };
 use crate::dto::Validated;
 use crate::entities::monitor_config;
-use crate::runtime::carousel::carousel_key;
+use crate::runtime::tasks::carousel::carousel_key;
 use crate::runtime::Scheduler;
 use crate::services::monitor_config_service;
 
 use super::error::CommandResult;
-use super::playback_cascade;
 
 /// 获取所有显示器配置
 #[tauri::command]
@@ -59,13 +58,11 @@ pub async fn upsert_monitor_config(
     let config = monitor_config_service::upsert(&ctx.db, &req).await?;
 
     // ===== 定时器管理 =====
-    {
-        let mut sched = scheduler.lock().await;
-        sched.manage_carousel_timer(&config, need_restart).await;
-    }
+    let mut sched = scheduler.lock().await;
+    sched.manage_carousel_timer(&config, need_restart).await;
 
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
-    let is_sync = playback_cascade::is_sync_mode(&ctx.db).await;
+    let is_sync = sched.is_sync_mode().await;
 
     let wm = ctx.window_manager.lock().await;
     if let Some(fit_mode) = fit_mode_changed.as_deref() {

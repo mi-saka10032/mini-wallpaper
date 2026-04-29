@@ -13,7 +13,7 @@ use tauri::Manager;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
-use super::scheduler::TaskSpawner;
+use crate::runtime::scheduler::TaskSpawner;
 use crate::ctx::AppContext;
 use crate::dto::app_setting_dto::{self, keys as setting_keys};
 use crate::services::{app_setting_service, collection_service, monitor_config_service};

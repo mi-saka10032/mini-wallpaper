@@ -4,7 +4,6 @@ pub mod collection;
 pub mod error;
 pub mod fullscreen;
 pub mod monitor_config;
-mod playback_cascade;
 pub mod shortcut;
 pub mod wallpaper;
 pub mod wallpaper_window;

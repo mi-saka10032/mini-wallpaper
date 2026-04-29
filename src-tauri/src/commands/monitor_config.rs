@@ -62,7 +62,7 @@ pub async fn upsert_monitor_config(
     sched.manage_carousel_timer(&config, need_restart).await;
 
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
-    let is_sync = sched.is_sync_mode().await;
+    let is_sync = sched.resolve_is_sync_mode().await;
 
     let wm = ctx.window_manager.lock().await;
     if let Some(fit_mode) = fit_mode_changed.as_deref() {

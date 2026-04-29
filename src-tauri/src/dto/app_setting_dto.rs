@@ -30,12 +30,6 @@ const VALID_KEYS: &[&str] = &[
 /// 允许的 display_mode 枚举值
 const VALID_DISPLAY_MODES: &[&str] = &["independent", "mirror", "extend"];
 
-/// 判断 display_mode 是否为同步模式（mirror / extend）
-///
-/// 同步模式下所有显示器共享同一壁纸，切换时需广播到所有壁纸窗口。
-pub fn is_sync_mode(display_mode: &str) -> bool {
-    display_mode == "mirror" || display_mode == "extend"
-}
 
 /// 设置键值对请求
 #[derive(Debug, Deserialize, Validate)]

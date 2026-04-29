@@ -17,7 +17,7 @@ use log::{error, warn};
 
 use super::Scheduler;
 use crate::ctx::window_manager::WallpaperWindowManager;
-use crate::dto::app_setting_dto::{self, keys as setting_keys};
+use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
 use crate::runtime::tasks::carousel::{carousel_key, CarouselTask};
@@ -26,14 +26,16 @@ use crate::services::{app_setting_service, collection_service, monitor_config_se
 impl Scheduler {
     // ==================== 公共入口方法（供 Command 层调用） ====================
 
-    /// 读取 display_mode 设置并判断是否为同步模式
-    pub async fn is_sync_mode(&self) -> bool {
+    /// 从 DB 读取 display_mode 并判断是否为同步模式（mirror / extend）
+    ///
+    /// 同步模式下所有显示器共享同一壁纸，切换时需广播到所有壁纸窗口。
+    pub async fn resolve_is_sync_mode(&self) -> bool {
         let db = self.db();
         let dm = app_setting_service::get(&db, setting_keys::DISPLAY_MODE)
             .await
             .unwrap_or(Some("independent".to_string()))
             .unwrap_or_else(|| "independent".to_string());
-        app_setting_dto::is_sync_mode(&dm)
+        dm == "mirror" || dm == "extend"
     }
 
     /// 壁纸批量删除后的联动处理
@@ -57,7 +59,7 @@ impl Scheduler {
         }
 
         let db = self.db();
-        let is_sync = self.is_sync_mode().await;
+        let is_sync = self.resolve_is_sync_mode().await;
         let wm = self.window_manager();
         let wm_guard = wm.lock().await;
 
@@ -107,7 +109,7 @@ impl Scheduler {
             return;
         }
 
-        let is_sync = self.is_sync_mode().await;
+        let is_sync = self.resolve_is_sync_mode().await;
         let wm = self.window_manager();
         let wm_guard = wm.lock().await;
 
@@ -157,7 +159,7 @@ impl Scheduler {
         }
 
         let db = self.db();
-        let is_sync = self.is_sync_mode().await;
+        let is_sync = self.resolve_is_sync_mode().await;
         let wm = self.window_manager();
         let wm_guard = wm.lock().await;
         let mut config_changed = false;

@@ -15,7 +15,7 @@ use tokio::time::{interval, Duration};
 
 use crate::runtime::scheduler::TaskSpawner;
 use crate::ctx::AppContext;
-use crate::dto::app_setting_dto::{self, keys as setting_keys};
+use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 /// 轮播定时器在 Scheduler 中的 key 前缀
@@ -113,7 +113,7 @@ impl TaskSpawner for CarouselTask {
                 .await
                 {
                     Ok(Some(new_wid)) => {
-                        let is_sync = app_setting_dto::is_sync_mode(&display_mode);
+                        let is_sync = display_mode == "mirror" || display_mode == "extend";
 
                         // 1. 更新当前 monitor 的 DB 记录
                         if let Err(e) = monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await {

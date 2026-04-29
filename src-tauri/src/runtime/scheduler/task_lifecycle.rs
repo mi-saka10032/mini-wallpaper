@@ -11,7 +11,7 @@ use log::{info, warn};
 use tokio::task::JoinHandle;
 
 use super::Scheduler;
-use crate::dto::app_setting_dto::{self, keys as setting_keys};
+use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::monitor_config;
 use crate::runtime::tasks::carousel::{carousel_key, CarouselTask};
 use crate::runtime::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
@@ -156,7 +156,7 @@ impl Scheduler {
             .unwrap_or(None)
             .unwrap_or_else(|| "independent".to_string());
 
-        let is_sync_mode = app_setting_dto::is_sync_mode(&display_mode);
+        let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
         let mut primary_started = false;
 
         for config in &configs {

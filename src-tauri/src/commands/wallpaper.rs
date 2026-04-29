@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use tauri::{Manager, State};
@@ -12,6 +13,7 @@ use crate::runtime::Scheduler;
 use crate::services::{monitor_config_service, wallpaper_service};
 
 use super::error::CommandResult;
+use super::playback_cascade;
 
 /// 获取支持的壁纸文件扩展名列表
 #[tauri::command]
@@ -58,9 +60,14 @@ pub async fn save_video_thumbnail(
     Ok(wallpaper_service::save_video_thumbnail(&ctx.db, wallpaper_id, data, &thumbnails_dir).await?)
 }
 
-/// 批量删除壁纸（删文件 + 删缩略图 + 删数据库记录）
+/// 批量删除壁纸（删文件 + 删缩略图 + 删数据库记录 + 窗口/定时器联动）
 ///
-/// 删除成功后停止所有正在播放被删壁纸的轮播定时器
+/// 删除后根据每个受影响显示器的状态执行联动：
+/// - 场景 1b：单张模式，壁纸被删 → 清空壁纸窗口
+/// - 场景 1c：收藏夹模式，当前壁纸被删 → 切换到下一张 + 重启定时器
+/// - 场景 1c 边界：收藏夹删后只剩 0 张 → 退化为清空
+/// - 场景 1d：收藏夹模式，删除的不是当前壁纸 → 检查剩余数量，≤1 则停止定时器
+/// - 场景 1e：display_mode 同步模式下广播到所有窗口
 #[tauri::command]
 pub async fn delete_wallpapers(
     ctx: State<'_, AppContext>,
@@ -68,20 +75,54 @@ pub async fn delete_wallpapers(
     req: Validated<DeleteWallpapersRequest>,
 ) -> CommandResult<u64> {
     let req = req.into_inner();
+    let deleted_ids: HashSet<i32> = req.ids.iter().copied().collect();
 
-    // 1. 预先查出引用这些壁纸的 monitor_id 列表（内存快照）
-    let monitor_ids = monitor_config_service::get_monitor_ids_by_wallpaper_ids(&ctx.db, &req.ids).await?;
+    // 1. 预先查出引用这些壁纸的完整 config（内存快照，删除后 wallpaper_id 会被置空）
+    let affected_configs = monitor_config_service::get_configs_by_wallpaper_ids(&ctx.db, &req.ids).await?;
 
-    // 2. 执行数据层删除（删文件 + 缩略图 + 关联清理 + 数据库记录）
+    // 2. 执行数据层删除（删文件 + 缩略图 + collection_wallpapers 关联 + monitor_config.wallpaper_id 置空 + 数据库记录）
     let deleted = wallpaper_service::delete_batch(&ctx.db, req.ids).await?;
 
-    // 3. 删除成功后，停止受影响的轮播定时器
-    {
-        let mut sched = scheduler.lock().await;
-        for mid in &monitor_ids {
-            sched.stop(&carousel_key(mid));
+    if affected_configs.is_empty() {
+        // 场景 1a：没有任何显示器在用这些壁纸，无需联动
+        return Ok(deleted);
+    }
+
+    // 3. 读取 display_mode 判断同步模式
+    let is_sync = playback_cascade::is_sync_mode(&ctx.db).await;
+
+    // 4. 逐个处理受影响的显示器
+    let wm = ctx.window_manager.clone();
+    let mut sched = scheduler.lock().await;
+    let wm_guard = wm.lock().await;
+
+    for config in &affected_configs {
+        let mid = &config.monitor_id;
+        let key = carousel_key(mid);
+
+        match config.collection_id {
+            Some(cid) => {
+                // 收藏夹模式：当前壁纸被删，尝试切换到下一张或清空
+                playback_cascade::handle_current_wallpaper_removed(
+                    &ctx.db, &mut sched, &wm_guard, config, cid, &deleted_ids, is_sync,
+                ).await;
+            }
+            None => {
+                // 场景 1b：单张模式，壁纸被删 → 清空窗口 + 停止定时器
+                sched.stop(&key);
+                wm_guard.notify_wallpaper_cleared(mid, is_sync);
+            }
         }
     }
+
+    // 5. 场景 1d：检查未直接受影响的显示器的定时器状态
+    let affected_mids: HashSet<String> = affected_configs.iter()
+        .map(|c| c.monitor_id.clone())
+        .collect();
+    playback_cascade::check_orphaned_timers(&ctx.db, &mut sched, &affected_mids).await;
+
+    // 6. 通知主窗口刷新 config 状态
+    wm_guard.notify_config_refreshed();
 
     Ok(deleted)
 }

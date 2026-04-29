@@ -55,6 +55,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import WallpaperPickerDrawer from "@/components/wallpaper/WallpaperPickerDrawer";
+import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import { addWallpapers, removeWallpapers, reorderWallpapers } from "@/api/collectionWallpaper";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
@@ -232,6 +233,9 @@ const MainContent: React.FC<MainContentProps> = ({
   // 是否启用拖拽排序（收藏夹 + 管理模式）
   const isDragEnabled = manageMode && isCollectionView;
 
+  // 是否显示导入拖拽卡片：仅本地壁纸栏 + 非管理模式
+  const showImportCard = activeId === 0 && !manageMode;
+
   const gridContent = (
     <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">
       {displayWallpapers.map((wp, index) =>
@@ -263,6 +267,7 @@ const MainContent: React.FC<MainContentProps> = ({
           />
         ),
       )}
+      {showImportCard && <ImportDropCard />}
     </div>
   );
 

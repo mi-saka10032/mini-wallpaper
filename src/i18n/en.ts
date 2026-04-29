@@ -65,6 +65,7 @@ export default {
     wallpaperOf: "{{name}}'s wallpaper",
     currentWallpaper: "Current",
     releaseToImport: "Drop to import wallpapers",
+    dropToImport: "Drag files here to import",
     supportedFormats: "Supports images, videos, and GIF files",
     wallpaperFiles: "Wallpaper Files",
   },

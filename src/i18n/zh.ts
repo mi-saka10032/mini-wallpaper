@@ -65,6 +65,7 @@ export default {
     wallpaperOf: "{{name}} 的壁纸",
     currentWallpaper: "当前壁纸",
     releaseToImport: "释放以导入壁纸",
+    dropToImport: "拖拽文件到此处导入",
     supportedFormats: "支持图片、视频、GIF 文件",
     wallpaperFiles: "壁纸文件",
   },

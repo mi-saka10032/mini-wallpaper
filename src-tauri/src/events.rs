@@ -29,6 +29,20 @@ impl TypedEmit for AppHandle {
     }
 }
 
+/// 类型安全的定向事件发送 trait
+///
+/// 与 `TypedEmit` 对应，用于向指定 label 的窗口发送事件。
+/// 事件名同样从 Payload 类型自动推导，编译期保证类型安全。
+pub trait TypedEmitTo {
+    fn typed_emit_to<P: EventPayload>(&self, label: &str, payload: &P) -> Result<(), tauri::Error>;
+}
+
+impl TypedEmitTo for AppHandle {
+    fn typed_emit_to<P: EventPayload>(&self, label: &str, payload: &P) -> Result<(), tauri::Error> {
+        self.emit_to(label, P::EVENT_NAME, payload)
+    }
+}
+
 // ==================== Payload 定义 ====================
 
 /// 壁纸变更事件（通知壁纸窗口切换壁纸）

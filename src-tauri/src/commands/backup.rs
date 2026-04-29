@@ -7,20 +7,19 @@ use crate::events::{BackupProgressPayload, TypedEmit};
 use crate::services::backup_service;
 use crate::utils::progress_io::ByteProgressFn;
 
+use super::error::CommandResult;
+
 /// 导出备份到指定路径
 #[tauri::command]
 pub async fn export_backup(
     ctx: State<'_, AppContext>,
     req: Validated<ExportBackupRequest>,
-) -> Result<String, String> {
+) -> CommandResult<String> {
     let _guard = ctx.backup_lock.try_lock()
         .map_err(|_| "已有备份任务正在执行，请等待完成后再试".to_string())?;
 
     let req = req.into_inner();
-    let app_data_dir = ctx.app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
 
     let handle = ctx.app_handle.clone();
     let progress_cb: Option<ByteProgressFn> = Some(Box::new(move |current, total| {
@@ -48,15 +47,12 @@ pub async fn export_backup(
 pub async fn import_backup(
     ctx: State<'_, AppContext>,
     req: Validated<ImportBackupRequest>,
-) -> Result<u64, String> {
+) -> CommandResult<u64> {
     let _guard = ctx.backup_lock.try_lock()
         .map_err(|_| "已有备份任务正在执行，请等待完成后再试".to_string())?;
 
     let req = req.into_inner();
-    let app_data_dir = ctx.app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
 
     let handle = ctx.app_handle.clone();
     let progress_cb: Option<ByteProgressFn> = Some(Box::new(move |current, total| {
@@ -82,11 +78,7 @@ pub async fn import_backup(
 #[tauri::command]
 pub async fn get_data_size(
     ctx: State<'_, AppContext>,
-) -> Result<u64, String> {
-    let app_data_dir = ctx.app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
-
+) -> CommandResult<u64> {
+    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
     Ok(backup_service::get_data_size(&app_data_dir))
 }

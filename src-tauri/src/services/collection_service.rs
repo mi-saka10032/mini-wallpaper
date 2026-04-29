@@ -95,7 +95,7 @@ pub async fn get_wallpapers(
     let wallpaper_ids: Vec<i32> = cw_list.iter().map(|cw| cw.wallpaper_id).collect();
 
     let wallpapers = wallpaper::Entity::find()
-        .filter(wallpaper::Column::Id.is_in(wallpaper_ids.clone()))
+        .filter(wallpaper::Column::Id.is_in(wallpaper_ids.iter().copied()))
         .all(db)
         .await?;
 

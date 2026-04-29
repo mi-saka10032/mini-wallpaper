@@ -21,7 +21,9 @@ use tokio::task::JoinHandle;
 
 use crate::ctx::AppContext;
 use crate::ctx::window_manager::WallpaperWindowManager;
+use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::monitor_config;
+use crate::events::VolumeChangedPayload;
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 use super::carousel::{carousel_key, CarouselTask};
@@ -79,12 +81,6 @@ impl Scheduler {
             app,
             tasks: HashMap::new(),
         }
-    }
-
-    /// 获取 AppHandle 引用
-    #[allow(dead_code)]
-    pub fn app_handle(&self) -> &tauri::AppHandle {
-        &self.app
     }
 
     /// 从 AppHandle 获取 db 连接（clone 后脱离 self 生命周期）
@@ -227,7 +223,7 @@ impl Scheduler {
             }
         };
 
-        let display_mode = app_setting_service::get(&db, "display_mode")
+        let display_mode = app_setting_service::get(&db, setting_keys::DISPLAY_MODE)
             .await
             .unwrap_or(None)
             .unwrap_or_else(|| "independent".to_string());
@@ -284,7 +280,7 @@ impl Scheduler {
         monitor_id: Option<&str>,
     ) {
         match key {
-            "pause_on_fullscreen" => {
+            setting_keys::PAUSE_ON_FULLSCREEN => {
                 let enabled = value == "true";
                 if enabled {
                     if !self.is_running(FULLSCREEN_TIMER_KEY) {
@@ -299,14 +295,14 @@ impl Scheduler {
                     info!("[Scheduler] 全屏检测已停止");
                 }
             }
-            "global_volume" => {
+            setting_keys::GLOBAL_VOLUME => {
                 let volume = value.parse::<u32>().unwrap_or(0).min(100);
                 let wm = self.window_manager();
                 let mgr = wm.lock().await;
-                mgr.broadcast("volume-changed", &VolumeChangedPayload { volume });
+                mgr.broadcast(&VolumeChangedPayload { volume: volume as f64 });
                 info!("[Scheduler] 音量已更新: {}%", volume);
             }
-            "display_mode" => {
+            setting_keys::DISPLAY_MODE => {
                 self.apply_display_mode_side_effect(value, monitor_id).await;
             }
             _ => {}
@@ -489,7 +485,7 @@ impl Scheduler {
     pub async fn init_fullscreen_detection(&mut self) {
         let db = self.db();
 
-        let should_start = app_setting_service::get(&db, "pause_on_fullscreen")
+        let should_start = app_setting_service::get(&db, setting_keys::PAUSE_ON_FULLSCREEN)
             .await
             .unwrap_or(None)
             .map(|v| v == "true")
@@ -501,9 +497,3 @@ impl Scheduler {
     }
 }
 
-/// 音量变更事件 payload（广播给所有壁纸窗口）
-#[derive(Clone, serde::Serialize)]
-struct VolumeChangedPayload {
-    /// 音量值 0-100
-    volume: u32,
-}

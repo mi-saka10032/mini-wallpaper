@@ -9,31 +9,15 @@
 use log::info;
 use log::warn;
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(target_os = "windows")]
 use crate::platform::windows::desktop_embedder;
 
-/// 壁纸变更事件 payload（发送给指定壁纸窗口）
-#[derive(Clone, serde::Serialize)]
-pub struct WallpaperChangedPayload {
-    pub monitor_id: String,
-    pub wallpaper_id: i32,
-}
-
-/// fitMode 变更事件 payload（发送给指定壁纸窗口）
-#[derive(Clone, serde::Serialize)]
-pub struct FitModeChangedPayload {
-    pub monitor_id: String,
-    pub fit_mode: String,
-}
-
-/// displayMode 变更事件 payload（发送给指定壁纸窗口）
-#[derive(Clone, serde::Serialize)]
-pub struct DisplayModeChangedPayload {
-    pub monitor_id: String,
-    pub display_mode: String,
-}
+use crate::events::{
+    DisplayModeChangedPayload, EventPayload, FitModeChangedPayload, TypedEmitTo,
+    WallpaperChangedPayload,
+};
 
 /// 壁纸窗口管理器
 pub struct WallpaperWindowManager {
@@ -175,18 +159,17 @@ impl WallpaperWindowManager {
 
     /// 向所有壁纸窗口广播事件
     ///
-    /// 遍历 manager 管理的全部窗口 label，逐一 emit_to，
+    /// 泛型约束 `EventPayload`，自动从 Payload 类型推导事件名，
     /// 确保事件仅发送给壁纸窗口，不会波及 main 等其他窗口。
-    pub fn broadcast<S: serde::Serialize + Clone>(
+    pub fn broadcast<P: EventPayload>(
         &self,
-        event: &str,
-        payload: &S,
+        payload: &P,
     ) {
         for (monitor_id, label) in &self.windows {
-            if let Err(e) = self.app_handle.emit_to(label, event, payload.clone()) {
+            if let Err(e) = self.app_handle.typed_emit_to(label, payload) {
                 log::warn!(
                     "[WallpaperWindowManager] 广播事件 '{}' 到 '{}' 失败: {}",
-                    event, monitor_id, e
+                    P::EVENT_NAME, monitor_id, e
                 );
             }
         }
@@ -220,7 +203,7 @@ impl WallpaperWindowManager {
         };
 
         self.app_handle
-            .emit_to(label, "wallpaper-changed", &payload)
+            .typed_emit_to(label, &payload)
             .map_err(|e| format!("发送事件失败: {}", e))?;
 
         info!(
@@ -257,7 +240,7 @@ impl WallpaperWindowManager {
         };
 
         self.app_handle
-            .emit_to(label, "fit-mode-changed", &payload)
+            .typed_emit_to(label, &payload)
             .map_err(|e| format!("发送 fit-mode-changed 事件失败: {}", e))?;
 
         info!(
@@ -296,7 +279,7 @@ impl WallpaperWindowManager {
         };
 
         self.app_handle
-            .emit_to(label, "display-mode-changed", &payload)
+            .typed_emit_to(label, &payload)
             .map_err(|e| format!("发送 display-mode-changed 事件失败: {}", e))?;
 
         info!(
@@ -307,19 +290,37 @@ impl WallpaperWindowManager {
         Ok(())
     }
 
-    /// 获取当前管理的窗口数量
-    pub fn window_count(&self) -> usize {
-        self.windows.len()
-    }
-
-    /// 检查指定显示器是否已有壁纸窗口
-    pub fn has_window(&self, monitor_id: &str) -> bool {
-        self.windows.contains_key(monitor_id)
-    }
-
     /// 获取当前所有已创建壁纸窗口的 monitor_id 列表
     pub fn get_active_window_ids(&self) -> Vec<String> {
         self.windows.keys().cloned().collect()
+    }
+
+    /// 通知壁纸窗口样式 / 壁纸变更（便捷方法）
+    ///
+    /// 根据传入的 Option 字段，按需向对应 monitor_id 的壁纸窗口发送事件：
+    /// - `fit_mode`     → fit-mode-changed
+    /// - `wallpaper_id` → wallpaper-changed（更新壁纸图片）
+    pub fn notify_window_changes(
+        &self,
+        monitor_id: &str,
+        fit_mode: Option<&str>,
+        wallpaper_id: Option<i32>,
+    ) {
+        // 两个字段都为 None 时无需操作
+        if fit_mode.is_none() && wallpaper_id.is_none() {
+            return;
+        }
+
+        if let Some(fit_mode) = fit_mode {
+            if let Err(e) = self.notify_fit_mode_changed(monitor_id, fit_mode) {
+                log::warn!("[WallpaperWindowManager] 发送 fit-mode-changed 事件失败: {}", e);
+            }
+        }
+        if let Some(wallpaper_id) = wallpaper_id {
+            if let Err(e) = self.update_window(monitor_id, wallpaper_id) {
+                log::warn!("[WallpaperWindowManager] 壁纸窗口更新失败: {}", e);
+            }
+        }
     }
 }
 

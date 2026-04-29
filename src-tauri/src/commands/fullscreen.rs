@@ -5,6 +5,8 @@ use tokio::sync::Mutex;
 
 use crate::runtime::Scheduler;
 
+use super::error::CommandResult;
+
 /// 初始化全屏检测（由前端 App.tsx useEffect 首次且唯一一次调用）
 ///
 /// 读取 DB 中 pause_on_fullscreen 设置，若为 true 则注册检测任务。
@@ -16,7 +18,7 @@ use crate::runtime::Scheduler;
 #[tauri::command]
 pub async fn init_fullscreen_detection(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let mut sched = scheduler.lock().await;
     sched.init_fullscreen_detection().await;
     Ok(())

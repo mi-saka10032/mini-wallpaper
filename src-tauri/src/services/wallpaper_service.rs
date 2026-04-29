@@ -17,6 +17,14 @@ const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov"];
 /// 支持的 GIF 扩展名
 const GIF_EXTENSIONS: &[&str] = &["gif"];
 
+/// 获取所有壁纸
+pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<wallpaper::Model>> {
+    wallpaper::Entity::find()
+        .all(db)
+        .await
+        .context("Failed to fetch wallpapers")
+}
+
 /// 获取所有支持的壁纸文件扩展名
 pub fn get_supported_extensions() -> Vec<String> {
     IMAGE_EXTENSIONS
@@ -135,7 +143,7 @@ fn prepare_wallpaper_files(
         ensure_dir(thumbnails_dir)?;
         let thumb_name = format!(
             "{}.webp",
-            dest_path.file_stem().unwrap().to_string_lossy(),
+            dest_path.file_stem().expect("dest_path must have a file stem").to_string_lossy(),
         );
         let thumb_path = thumbnails_dir.join(&thumb_name);
         match generate_static_thumbnail(&dest_path, &thumb_path) {
@@ -299,7 +307,7 @@ pub async fn save_video_thumbnail(
     let stem = Path::new(&model.file_path)
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown_video");
     let thumb_name = format!("{}.webp", stem);
     let thumb_path = thumbnails_dir.join(&thumb_name);
 

@@ -10,27 +10,14 @@ use crate::dto::app_setting_dto::{GetSettingRequest, SetSettingRequest};
 use crate::dto::Validated;
 use crate::services::app_setting_service;
 
-/// 已知的 setting key 常量（与前端 SETTING_KEYS 保持一致）
-#[allow(dead_code)]
-pub(crate) mod keys {
-    pub const THEME: &str = "theme";
-    pub const LANGUAGE: &str = "language";
-    pub const CLOSE_TO_TRAY: &str = "close_to_tray";
-    pub const PAUSE_ON_FULLSCREEN: &str = "pause_on_fullscreen";
-    pub const GLOBAL_VOLUME: &str = "global_volume";
-    pub const DISPLAY_MODE: &str = "display_mode";
-    pub const SHORTCUT_NEXT_WALLPAPER: &str = "shortcut_next_wallpaper";
-    pub const SHORTCUT_PREV_WALLPAPER: &str = "shortcut_prev_wallpaper";
-}
+use super::error::CommandResult;
 
 /// 获取所有设置（返回 key-value 对象）
 #[tauri::command]
 pub async fn get_settings(
     ctx: State<'_, AppContext>,
-) -> Result<HashMap<String, String>, String> {
-    let settings = app_setting_service::get_all(&ctx.db)
-        .await
-        .map_err(|e| e.to_string())?;
+) -> CommandResult<HashMap<String, String>> {
+    let settings = app_setting_service::get_all(&ctx.db).await?;
 
     let map: HashMap<String, String> = settings
         .into_iter()
@@ -45,11 +32,9 @@ pub async fn get_settings(
 pub async fn get_setting(
     ctx: State<'_, AppContext>,
     req: Validated<GetSettingRequest>,
-) -> Result<Option<String>, String> {
+) -> CommandResult<Option<String>> {
     let req = req.into_inner();
-    app_setting_service::get(&ctx.db, &req.key)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(app_setting_service::get(&ctx.db, &req.key).await?)
 }
 
 /// 设置键值对（写入 DB + 按 key 触发副作用）
@@ -66,16 +51,14 @@ pub async fn set_setting(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<SetSettingRequest>,
     monitor_id: Option<String>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let req = req.into_inner();
 
     // 跨字段校验：按 key 校验 value 格式
     req.validate_value_format()?;
 
     // 1. 写入 DB
-    app_setting_service::set(&ctx.db, &req.key, &req.value)
-        .await
-        .map_err(|e| e.to_string())?;
+    app_setting_service::set(&ctx.db, &req.key, &req.value).await?;
 
     // 2. 通过 Scheduler 执行副作用
     let mut sched = scheduler.lock().await;

@@ -96,7 +96,7 @@ impl<W: Write> ProgressWriter<W> {
         Self { inner, counter }
     }
 
-    /// 消费 wrapper，返回底层 Writer
+    /// 消费 wrapper，返回底层 Writer（预留接口，供需要获取底层 Writer 的场景使用）
     #[allow(dead_code)]
     pub fn into_inner(self) -> W {
         self.inner

@@ -13,10 +13,10 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
     TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(app.default_window_icon().expect("default icon must exist").clone())
         .tooltip("Mini Wallpaper")
         .menu(&tray_menu)
-        .menu_on_left_click(false)
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 show_main_window(app);

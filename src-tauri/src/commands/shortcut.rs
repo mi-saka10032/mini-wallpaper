@@ -12,19 +12,19 @@ use crate::dto::shortcut_dto::{Direction, SwitchWallpaperRequest};
 use crate::dto::Validated;
 use crate::services::{collection_service, monitor_config_service};
 
+use super::error::CommandResult;
+
 /// 切换所有活跃显示器的壁纸（上一张/下一张）
 #[tauri::command]
 pub async fn switch_wallpaper(
     ctx: State<'_, AppContext>,
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<SwitchWallpaperRequest>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let req = req.into_inner();
 
     // 获取所有 active 的 monitor_config
-    let configs = monitor_config_service::get_all(&ctx.db)
-        .await
-        .map_err(|e| e.to_string())?;
+    let configs = monitor_config_service::get_all(&ctx.db).await?;
 
     for config in configs {
         if !config.active {
@@ -56,13 +56,10 @@ pub async fn switch_wallpaper(
                 )
                 .await
             }
-        }
-        .map_err(|e| e.to_string())?;
+        }?;
 
         if let Some(wid) = new_wid {
-            monitor_config_service::update_wallpaper_id(&ctx.db, &config.monitor_id, wid)
-                .await
-                .map_err(|e| e.to_string())?;
+            monitor_config_service::update_wallpaper_id(&ctx.db, &config.monitor_id, wid).await?;
 
             // 1. 通知指定壁纸窗口更新壁纸
             let wm_guard = ctx.window_manager.lock().await;

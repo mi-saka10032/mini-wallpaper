@@ -1,16 +1,30 @@
 use garde::Validate;
 use serde::Deserialize;
 
-/// 已知的 setting key 白名单
+// ==================== Setting Keys（Single Source of Truth）====================
+
+/// 已知的 setting key 常量（与前端 SETTING_KEYS 一一对应）
+pub mod keys {
+    pub const THEME: &str = "theme";
+    pub const LANGUAGE: &str = "language";
+    pub const CLOSE_TO_TRAY: &str = "close_to_tray";
+    pub const PAUSE_ON_FULLSCREEN: &str = "pause_on_fullscreen";
+    pub const GLOBAL_VOLUME: &str = "global_volume";
+    pub const DISPLAY_MODE: &str = "display_mode";
+    pub const SHORTCUT_NEXT_WALLPAPER: &str = "shortcut_next_wallpaper";
+    pub const SHORTCUT_PREV_WALLPAPER: &str = "shortcut_prev_wallpaper";
+}
+
+/// 已知的 setting key 白名单（由 keys 模块常量自动组成）
 const VALID_KEYS: &[&str] = &[
-    "theme",
-    "language",
-    "close_to_tray",
-    "pause_on_fullscreen",
-    "global_volume",
-    "display_mode",
-    "shortcut_next_wallpaper",
-    "shortcut_prev_wallpaper",
+    keys::THEME,
+    keys::LANGUAGE,
+    keys::CLOSE_TO_TRAY,
+    keys::PAUSE_ON_FULLSCREEN,
+    keys::GLOBAL_VOLUME,
+    keys::DISPLAY_MODE,
+    keys::SHORTCUT_NEXT_WALLPAPER,
+    keys::SHORTCUT_PREV_WALLPAPER,
 ];
 
 /// 允许的 display_mode 枚举值

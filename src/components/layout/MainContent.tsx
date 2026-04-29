@@ -20,6 +20,7 @@ import {
   GripVertical,
   Image,
   ImagePlus,
+  Monitor,
   Plus,
   Settings2,
   Star,
@@ -55,6 +56,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import WallpaperPickerDrawer from "@/components/wallpaper/WallpaperPickerDrawer";
 import { addWallpapers, removeWallpapers, reorderWallpapers } from "@/api/collectionWallpaper";
+import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
+import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
+import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 
 interface MainContentProps {
   activeId: number;
@@ -236,6 +240,7 @@ const MainContent: React.FC<MainContentProps> = ({
             key={wp.id}
             wallpaper={wp}
             index={index}
+            activeId={activeId}
             manageMode={manageMode}
             selected={selectedIds.has(wp.id)}
             isCollectionView={isCollectionView}
@@ -248,6 +253,7 @@ const MainContent: React.FC<MainContentProps> = ({
             key={wp.id}
             wallpaper={wp}
             index={index}
+            activeId={activeId}
             manageMode={manageMode}
             selected={selectedIds.has(wp.id)}
             isCollectionView={isCollectionView}
@@ -430,6 +436,7 @@ const MainContent: React.FC<MainContentProps> = ({
 interface WallpaperCardProps {
   wallpaper: Wallpaper;
   index: number;
+  activeId: number;
   manageMode: boolean;
   selected: boolean;
   isCollectionView: boolean;
@@ -444,6 +451,7 @@ interface WallpaperCardProps {
 const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSProperties }> = ({
   wallpaper,
   index,
+  activeId,
   manageMode,
   selected,
   isCollectionView,
@@ -455,8 +463,95 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   style,
 }) => {
   const collections = useCollectionStore((s) => s.collections);
+  const configs = useMonitorConfigStore((s) => s.configs);
+  const upsert = useMonitorConfigStore((s) => s.upsert);
+  const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
+  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
   const { t } = useTranslation();
   const TypeIcon = wallpaper.type === "video" ? Film : Image;
+
+  // 有效（active）的显示器配置列表
+  const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
+  const isSyncMode = displayMode === "mirror" || displayMode === "extend";
+
+  /**
+   * 处理"设置为 X 显示器的壁纸"
+   * 根据 activeId（0=本地壁纸栏, >0=收藏夹栏）和目标显示器的 config 状态，分 6 种场景处理
+   */
+  const handleSetAsWallpaper = useCallback(
+    async (monitorId: string) => {
+      const targetConfig = configs.find((c) => c.monitor_id === monitorId);
+      const wallpaperId = wallpaper.id;
+      const collectionId = activeId > 0 ? activeId : null; // 当前所在收藏夹 id
+
+      if (activeId === 0) {
+        // ===== 本地壁纸栏（activeId === 0）=====
+        if (!targetConfig?.collection_id) {
+          // 场景 1a：显示器无收藏夹，直接更新壁纸 id
+          if (isSyncMode) {
+            await upsertAll({ wallpaperId });
+          } else {
+            await upsert({ monitorId, wallpaperId });
+          }
+        } else {
+          // 显示器有收藏夹，需查询壁纸是否在该收藏夹中
+          try {
+            const wallpapersInCollection = await getCollectionWallpapers(targetConfig.collection_id);
+            const isInCollection = wallpapersInCollection.some((w) => w.id === wallpaperId);
+
+            if (isInCollection) {
+              // 场景 1b：壁纸在收藏夹中，直接更新壁纸 id
+              if (isSyncMode) {
+                await upsertAll({ wallpaperId });
+              } else {
+                await upsert({ monitorId, wallpaperId });
+              }
+            } else {
+              // 场景 1c：壁纸不在收藏夹中，强制切换至单张壁纸播放
+              if (isSyncMode) {
+                await upsertAll({ wallpaperId, clearCollection: true, isEnabled: false });
+              } else {
+                await upsert({ monitorId, wallpaperId, clearCollection: true, isEnabled: false });
+              }
+            }
+          } catch (e) {
+            console.error("[handleSetAsWallpaper] query collection wallpapers failed:", e);
+            // 查询失败时保守处理：强制切换至单张
+            if (isSyncMode) {
+              await upsertAll({ wallpaperId, clearCollection: true, isEnabled: false });
+            } else {
+              await upsert({ monitorId, wallpaperId, clearCollection: true, isEnabled: false });
+            }
+          }
+        }
+      } else {
+        // ===== 收藏夹栏（activeId > 0）=====
+        if (!targetConfig?.collection_id) {
+          // 场景 2a：显示器无收藏夹，设置收藏夹播放（默认不启用轮播）
+          if (isSyncMode) {
+            await upsertAll({ wallpaperId, collectionId });
+          } else {
+            await upsert({ monitorId, wallpaperId, collectionId });
+          }
+        } else if (targetConfig.collection_id === collectionId) {
+          // 场景 2b：同一收藏夹，切换壁纸 id
+          if (isSyncMode) {
+            await upsertAll({ wallpaperId });
+          } else {
+            await upsert({ monitorId, wallpaperId });
+          }
+        } else {
+          // 场景 2c：不同收藏夹，切换收藏夹播放
+          if (isSyncMode) {
+            await upsertAll({ wallpaperId, collectionId });
+          } else {
+            await upsert({ monitorId, wallpaperId, collectionId });
+          }
+        }
+      }
+    },
+    [wallpaper.id, activeId, configs, isSyncMode, upsert, upsertAll],
+  );
 
   const card = (
     <div
@@ -529,6 +624,40 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
     <ContextMenu>
       <ContextMenuTrigger>{card}</ContextMenuTrigger>
       <ContextMenuContent>
+        {/* 设置为：选择显示器 */}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger
+            disabled={activeConfigs.length === 0}
+            className={activeConfigs.length === 0 ? "opacity-50" : ""}
+          >
+            <Monitor className="mr-2 size-4" />
+            {t("main.setAs")}
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {activeConfigs.map((config) => {
+              const isCurrent = config.wallpaper_id === wallpaper.id;
+              return (
+                <ContextMenuItem
+                  key={config.monitor_id}
+                  disabled={isCurrent}
+                  onClick={() => !isCurrent && handleSetAsWallpaper(config.monitor_id)}
+                  className={cn(isCurrent && "opacity-50")}
+                >
+                  <Monitor className="mr-2 size-4 shrink-0" />
+                  <span className="max-w-40 truncate">
+                    {t("main.wallpaperOf", { name: config.monitor_id })}
+                  </span>
+                  {isCurrent && (
+                    <span className="ml-auto pl-2 text-xs text-muted-foreground">
+                      {t("main.currentWallpaper")}
+                    </span>
+                  )}
+                </ContextMenuItem>
+              );
+            })}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+
         {/* 全部壁纸视图：添加到收藏夹 */}
         {!isCollectionView && (
           <ContextMenuSub>

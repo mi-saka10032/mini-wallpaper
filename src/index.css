@@ -108,4 +108,29 @@
   body.wallpaper-body {
     background: transparent !important;
   }
+
+  /* ===== 页面安全防护：禁止文本选中 & 拖拽 ===== */
+  *,
+  *::before,
+  *::after {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  /* 允许 input / textarea 内部文本选中 */
+  input,
+  textarea,
+  [contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* 禁止图片 / 视频等媒体元素被拖拽 */
+  img,
+  video,
+  a {
+    -webkit-user-drag: none;
+    pointer-events: auto;
+  }
 }

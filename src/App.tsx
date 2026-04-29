@@ -11,6 +11,7 @@ import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
+import { useWebGuard } from "@/hooks/useWebGuard";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
@@ -21,6 +22,7 @@ import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 const App: React.FC = () => {
   useShortcuts();
   useMonitorHotPlug();
+  useWebGuard();
   const initMonitors = useMonitorConfigStore((s) => s.init);
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);

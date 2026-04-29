@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useTranslation } from "react-i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Toolbar from "@/components/layout/Toolbar";
@@ -61,8 +61,8 @@ const App: React.FC = () => {
 
   // 监听 Tauri 文件拖放事件
   useEffect(() => {
-    const appWindow = getCurrentWindow();
-    const unlisten = appWindow.onDragDropEvent((event) => {
+    const webview = getCurrentWebview();
+    const unlisten = webview.onDragDropEvent((event) => {
       if (event.payload.type === "over") {
         setIsDragOver(true);
       } else if (event.payload.type === "drop") {

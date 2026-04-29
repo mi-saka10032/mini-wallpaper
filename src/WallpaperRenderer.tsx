@@ -299,11 +299,11 @@ const WallpaperRenderer: React.FC = () => {
     return () => { unlisten.then((fn) => fn()); };
   }, [isSlave, wallpaper?.type]);
 
-  // 无数据时黑屏
+  // 无数据时透明
   if (!wallpaper) {
     return (
       <div
-        className="h-screen w-screen bg-black"
+        className="h-screen w-screen bg-transparent"
         style={{ pointerEvents: "none", userSelect: "none" }}
       />
     );
@@ -332,7 +332,7 @@ const WallpaperRenderer: React.FC = () => {
 
     return (
       <div
-        className="h-screen w-screen overflow-hidden bg-black"
+        className="h-screen w-screen overflow-hidden bg-transparent"
         style={{ position: "relative", pointerEvents: "none", userSelect: "none" }}
       >
         <div style={extendStyle}>
@@ -372,7 +372,7 @@ const WallpaperRenderer: React.FC = () => {
   // independent / mirror 模式
   return (
     <div
-      className="h-screen w-screen overflow-hidden bg-black"
+      className="h-screen w-screen overflow-hidden bg-transparent"
       style={{ pointerEvents: "none", userSelect: "none" }}
     >
       {wallpaper.type === "video" ? (

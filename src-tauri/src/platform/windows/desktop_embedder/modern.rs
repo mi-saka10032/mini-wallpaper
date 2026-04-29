@@ -97,12 +97,12 @@ impl EmbedStrategy for ModernStrategy {
 
     fn embed(&self, hwnd: HWND, workerw: HWND, rect: MonitorRect) -> Result<()> {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, MoveWindow, SetLayeredWindowAttributes,
+            GetWindowLongPtrW, MoveWindow,
             SetWindowLongPtrW, SetWindowPos,
-            GWL_EXSTYLE, GWL_STYLE, GWL_WNDPROC, LWA_ALPHA,
+            GWL_EXSTYLE, GWL_STYLE, GWL_WNDPROC,
             SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME,
-            WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
+            WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
             WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE,
             WS_THICKFRAME, WS_VISIBLE,
         };
@@ -130,21 +130,17 @@ impl EmbedStrategy for ModernStrategy {
                 | WS_VISIBLE as isize;
             SetWindowLongPtrW(hwnd, GWL_STYLE, clean_style);
 
-            // 3. 清除扩展样式边框 + 设置 Layered + Transparent
+            // 3. 清除扩展样式边框 + 设置 Transparent（鼠标穿透）
             let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             let clean_ex = (ex_style
                 & !(WS_EX_CLIENTEDGE as isize)
                 & !(WS_EX_STATICEDGE as isize)
                 & !(WS_EX_WINDOWEDGE as isize)
                 & !(WS_EX_DLGMODALFRAME as isize))
-                | WS_EX_LAYERED as isize
                 | WS_EX_TRANSPARENT as isize;
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, clean_ex);
 
-            // 4. Layered 窗口完全不透明
-            SetLayeredWindowAttributes(hwnd, 0, 0xFF, LWA_ALPHA);
-
-            // 5. SWP_FRAMECHANGED 触发 WM_NCCALCSIZE（被我们的 WndProc 拦截返回 0）
+            // 4. SWP_FRAMECHANGED 触发 WM_NCCALCSIZE（被我们的 WndProc 拦截返回 0）
             SetWindowPos(
                 hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,

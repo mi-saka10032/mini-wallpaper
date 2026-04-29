@@ -49,6 +49,7 @@ interface MonitorConfigState {
 }
 
 let _eventUnlisten: (() => void) | null = null;
+let _configRefreshUnlisten: (() => void) | null = null;
 let _initialized = false;
 
 /** 已创建壁纸窗口的 monitor_id 集合（前端侧跟踪，防止重复创建） */
@@ -206,6 +207,21 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
                   : c,
               ),
             }));
+          },
+        );
+      }
+
+      // 监听 monitor-config-refreshed 事件（后端删除操作导致 config 变更，重新拉取）
+      if (!_configRefreshUnlisten) {
+        _configRefreshUnlisten = await listen(
+          EVENTS.MONITOR_CONFIG_REFRESHED,
+          async () => {
+            try {
+              const configs = await getMonitorConfigs();
+              set({ configs });
+            } catch (e) {
+              console.error("[monitorConfigStore] config refresh failed:", e);
+            }
           },
         );
       }

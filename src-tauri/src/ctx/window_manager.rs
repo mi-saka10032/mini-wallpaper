@@ -18,6 +18,7 @@ use crate::events::{
     DisplayModeChangedPayload, EventPayload, FitModeChangedPayload, TypedEmitTo,
     WallpaperChangedPayload,
     ThumbnailChangedPayload, TypedEmit,
+    WallpaperClearedPayload, MonitorConfigRefreshedPayload,
 };
 
 /// 壁纸窗口管理器
@@ -380,6 +381,64 @@ impl WallpaperWindowManager {
     /// 获取当前所有已创建壁纸窗口的 monitor_id 列表
     pub fn get_active_window_ids(&self) -> Vec<String> {
         self.windows.keys().cloned().collect()
+    }
+
+    /// 通知指定壁纸窗口清空壁纸显示
+    ///
+    /// 当壁纸被删除且无后续壁纸可切换时，通知壁纸窗口清除当前壁纸（显示黑屏）。
+    pub fn clear_window(&self, monitor_id: &str) -> Result<(), String> {
+        let (label, _window) = self.resolve_window(monitor_id)?;
+
+        let payload = WallpaperClearedPayload {
+            monitor_id: monitor_id.to_string(),
+        };
+
+        self.app_handle
+            .typed_emit_to(&label, &payload)
+            .map_err(|e| format!("发送 wallpaper-cleared 事件失败: {}", e))?;
+
+        info!(
+            "wallpaper-cleared 事件已发送: monitor='{}', target='{}'",
+            monitor_id, label
+        );
+
+        Ok(())
+    }
+
+    /// display_mode 感知的壁纸清空通知
+    ///
+    /// 根据 is_sync_mode 决定广播或单播：
+    /// - 同步模式（mirror/extend）：清空所有壁纸窗口
+    /// - 独立模式（independent）：仅清空指定 monitor 的壁纸窗口
+    pub fn notify_wallpaper_cleared(&self, monitor_id: &str, is_sync_mode: bool) {
+        if is_sync_mode {
+            for mid in self.windows.keys() {
+                if let Err(e) = self.clear_window(mid) {
+                    log::warn!(
+                        "[WallpaperWindowManager] 同步模式壁纸清空失败 {}: {}",
+                        mid, e
+                    );
+                }
+            }
+        } else if let Err(e) = self.clear_window(monitor_id) {
+            log::warn!(
+                "[WallpaperWindowManager] 壁纸清空失败 {}: {}",
+                monitor_id, e
+            );
+        }
+    }
+
+    /// 通知主窗口刷新 config 状态
+    ///
+    /// 当后端因删除操作导致 monitor_config 发生变更时，
+    /// 通知主窗口重新拉取 store 状态，确保 UI 与 DB 一致。
+    pub fn notify_config_refreshed(&self) {
+        if let Err(e) = self.app_handle.typed_emit(&MonitorConfigRefreshedPayload) {
+            log::warn!(
+                "[WallpaperWindowManager] 发送 monitor-config-refreshed 失败: {}",
+                e
+            );
+        }
     }
 
 }

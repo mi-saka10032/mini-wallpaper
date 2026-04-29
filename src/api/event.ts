@@ -15,6 +15,10 @@ export const EVENTS = {
   FIT_MODE_CHANGED: "fit-mode-changed",
   /** displayMode 变更事件（后端发送给指定壁纸窗口） */
   DISPLAY_MODE_CHANGED: "display-mode-changed",
+  /** 壁纸清空事件（壁纸被删除且无后续壁纸可切换时，通知壁纸窗口清空显示） */
+  WALLPAPER_CLEARED: "wallpaper-cleared",
+  /** 显示器配置刷新事件（后端删除操作导致 config 变更，通知主窗口重新拉取） */
+  MONITOR_CONFIG_REFRESHED: "monitor-config-refreshed",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -57,6 +61,11 @@ export interface DisplayModeChangedPayload {
   display_mode: string;
 }
 
+/** 壁纸清空事件 payload */
+export interface WallpaperClearedPayload {
+  monitor_id: string;
+}
+
 /** 视频同步事件 payload（extend 模式跨窗口帧同步） */
 export interface VideoSyncPayload {
   current_time: number;
@@ -72,6 +81,8 @@ export interface EventMap {
   [EVENTS.VOLUME_CHANGED]: VolumeChangedPayload;
   [EVENTS.FIT_MODE_CHANGED]: FitModeChangedPayload;
   [EVENTS.DISPLAY_MODE_CHANGED]: DisplayModeChangedPayload;
+  [EVENTS.WALLPAPER_CLEARED]: WallpaperClearedPayload;
+  [EVENTS.MONITOR_CONFIG_REFRESHED]: Record<string, never>;
 }
 
 /**

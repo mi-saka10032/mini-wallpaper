@@ -1,7 +1,7 @@
-//! 删除联动辅助模块（Command 层内部共享）
+//! 播放联动辅助模块（Command 层内部共享）
 //!
-//! 提取 delete_wallpapers / delete_collection / remove_wallpapers_from_collection
-//! 三个 command 中的公共联动逻辑，消除重复代码。
+//! 提取 delete_wallpapers / delete_collection / remove_wallpapers_from_collection / switch_wallpaper
+//! 等 command 中的公共联动逻辑，消除重复代码。
 //!
 //! **设计原则**：
 //! - 仅在 commands 模块内部使用（`pub(super)`），不对外暴露
@@ -14,6 +14,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::ctx::window_manager::WallpaperWindowManager;
 use crate::dto::app_setting_dto::{self, keys as setting_keys};
+use crate::dto::shortcut_dto::Direction;
 use crate::runtime::carousel::{carousel_key, CarouselTask};
 use crate::runtime::Scheduler;
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
@@ -132,4 +133,67 @@ pub(super) async fn check_orphaned_timers(
             }
         }
     }
+}
+
+/// 切换指定显示器到相邻壁纸（上一张/下一张）并管理定时器
+///
+/// 适用于 switch_wallpaper command，封装了：
+/// 1. 根据方向获取下一张/上一张壁纸 ID
+/// 2. 更新 DB 中的 wallpaper_id
+/// 3. 通知壁纸窗口 + 主窗口缩略图
+/// 4. 如果有运行中的定时器，重置计时
+///
+/// 返回 true 表示成功切换了壁纸。
+pub(super) async fn switch_to_adjacent_wallpaper(
+    db: &DatabaseConnection,
+    sched: &mut Scheduler,
+    wm: &WallpaperWindowManager,
+    config: &monitor_config::Model,
+    direction: &Direction,
+) -> bool {
+    let collection_id = match config.collection_id {
+        Some(cid) => cid,
+        None => return false,
+    };
+
+    let new_wid = match direction {
+        Direction::Next => {
+            collection_service::next_wallpaper_id(
+                db, collection_id, config.wallpaper_id, &config.play_mode,
+            ).await
+        }
+        Direction::Prev => {
+            collection_service::prev_wallpaper_id(
+                db, collection_id, config.wallpaper_id, &config.play_mode,
+            ).await
+        }
+    };
+
+    let wid = match new_wid {
+        Ok(Some(wid)) => wid,
+        Ok(None) => return false,
+        Err(e) => {
+            log::warn!("[PlaybackCascade] 获取相邻壁纸失败 {}: {}", config.monitor_id, e);
+            return false;
+        }
+    };
+
+    // 更新 DB
+    if let Err(e) = monitor_config_service::update_wallpaper_id(db, &config.monitor_id, wid).await {
+        log::error!("[PlaybackCascade] 更新 wallpaper_id 失败 {}: {}", config.monitor_id, e);
+        return false;
+    }
+
+    // 通知壁纸窗口 + 主窗口缩略图（合并操作）
+    if let Err(e) = wm.update_wallpaper(&config.monitor_id, wid) {
+        log::warn!("[PlaybackCascade] 壁纸更新通知失败 {}: {}", config.monitor_id, e);
+    }
+
+    // 如果有运行中的定时器，重置计时
+    let key = carousel_key(&config.monitor_id);
+    if sched.is_running(&key) {
+        sched.restart(key, CarouselTask { monitor_id: config.monitor_id.clone() });
+    }
+
+    true
 }

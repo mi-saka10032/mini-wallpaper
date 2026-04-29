@@ -1,19 +1,22 @@
 use std::sync::Arc;
 
-use log::warn;
 use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::runtime::carousel::{carousel_key, CarouselTask};
 use crate::runtime::Scheduler;
-use crate::dto::shortcut_dto::{Direction, SwitchWallpaperRequest};
+use crate::dto::shortcut_dto::SwitchWallpaperRequest;
 use crate::dto::Validated;
-use crate::services::{collection_service, monitor_config_service};
+use crate::services::monitor_config_service;
 
 use super::error::CommandResult;
+use super::playback_cascade;
 
 /// 切换所有活跃显示器的壁纸（上一张/下一张）
+///
+/// 遍历所有 active 且绑定了收藏夹的显示器配置，
+/// 委托 `playback_cascade::switch_to_adjacent_wallpaper` 执行：
+/// 获取相邻壁纸 → 更新 DB → 通知窗口 → 重置定时器。
 #[tauri::command]
 pub async fn switch_wallpaper(
     ctx: State<'_, AppContext>,
@@ -21,64 +24,18 @@ pub async fn switch_wallpaper(
     req: Validated<SwitchWallpaperRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
-
-    // 获取所有 active 的 monitor_config
     let configs = monitor_config_service::get_all(&ctx.db).await?;
 
-    for config in configs {
+    let wm_guard = ctx.window_manager.lock().await;
+    let mut sched = scheduler.lock().await;
+
+    for config in &configs {
         if !config.active {
             continue;
         }
-
-        // 需要有 collection_id 才能切换
-        let collection_id = match config.collection_id {
-            Some(cid) => cid,
-            None => continue,
-        };
-
-        let new_wid = match req.direction {
-            Direction::Next => {
-                collection_service::next_wallpaper_id(
-                    &ctx.db,
-                    collection_id,
-                    config.wallpaper_id,
-                    &config.play_mode,
-                )
-                .await
-            }
-            Direction::Prev => {
-                collection_service::prev_wallpaper_id(
-                    &ctx.db,
-                    collection_id,
-                    config.wallpaper_id,
-                    &config.play_mode,
-                )
-                .await
-            }
-        }?;
-
-        if let Some(wid) = new_wid {
-            monitor_config_service::update_wallpaper_id(&ctx.db, &config.monitor_id, wid).await?;
-
-            // 通知壁纸窗口 + 主窗口缩略图（合并操作）
-            let wm_guard = ctx.window_manager.lock().await;
-            if let Err(e) = wm_guard.update_wallpaper(&config.monitor_id, wid) {
-                warn!("[switch_wallpaper] 壁纸更新失败: {}", e);
-            }
-            drop(wm_guard);
-
-            // 3. 如果有运行中的定时器，重置计时
-            let key = carousel_key(&config.monitor_id);
-            let mut sched = scheduler.lock().await;
-            if sched.is_running(&key) {
-                sched.restart(
-                    key,
-                    CarouselTask {
-                        monitor_id: config.monitor_id.clone(),
-                    },
-                );
-            }
-        }
+        playback_cascade::switch_to_adjacent_wallpaper(
+            &ctx.db, &mut sched, &wm_guard, config, &req.direction,
+        ).await;
     }
 
     Ok(())

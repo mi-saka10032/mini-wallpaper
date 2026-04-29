@@ -4,7 +4,6 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::dto::app_setting_dto::{self, keys as setting_keys};
 use crate::dto::monitor_config_dto::{
     DeleteMonitorConfigRequest, GetMonitorConfigRequest, UpsertMonitorConfigRequest,
 };
@@ -12,9 +11,10 @@ use crate::dto::Validated;
 use crate::entities::monitor_config;
 use crate::runtime::carousel::carousel_key;
 use crate::runtime::Scheduler;
-use crate::services::{app_setting_service, monitor_config_service};
+use crate::services::monitor_config_service;
 
 use super::error::CommandResult;
+use super::playback_cascade;
 
 /// 获取所有显示器配置
 #[tauri::command]
@@ -65,15 +65,7 @@ pub async fn upsert_monitor_config(
     }
 
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
-    // display_mode 感知逻辑已内聚在 WallpaperWindowManager 内部，
-    // command 层只需传入 is_sync_mode，无需关心广播/单播分支。
-    let is_sync = {
-        let dm = app_setting_service::get(&ctx.db, setting_keys::DISPLAY_MODE)
-            .await
-            .unwrap_or(Some("independent".to_string()))
-            .unwrap_or_else(|| "independent".to_string());
-        app_setting_dto::is_sync_mode(&dm)
-    };
+    let is_sync = playback_cascade::is_sync_mode(&ctx.db).await;
 
     let wm = ctx.window_manager.lock().await;
     if let Some(fit_mode) = fit_mode_changed.as_deref() {

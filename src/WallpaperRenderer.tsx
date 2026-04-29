@@ -215,6 +215,17 @@ const WallpaperRenderer: React.FC = () => {
     return () => { unlisten.then((fn) => fn()); };
   }, [monitorId, loadFromConfig]);
 
+  // 监听壁纸清空事件（壁纸被删除且无后续壁纸可切换时，清空显示）
+  useEffect(() => {
+    if (!monitorId) return;
+    const unlisten = listen(EVENTS.WALLPAPER_CLEARED, (payload) => {
+      if (payload.monitor_id === monitorId) {
+        setWallpaper(null);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [monitorId]);
+
   // 监听 fitMode 变更事件（直接更新 objectFit 样式，无需重新加载壁纸）
   useEffect(() => {
     if (!monitorId) return;

@@ -119,32 +119,33 @@ pub async fn update_wallpaper_id(
     Ok(model)
 }
 
-/// 查询引用指定收藏夹的 monitor_id 列表
-pub async fn get_monitor_ids_by_collection_id(
-    db: &DatabaseConnection,
-    collection_id: i32,
-) -> Result<Vec<String>> {
-    let configs = monitor_config::Entity::find()
-        .filter(monitor_config::Column::CollectionId.eq(collection_id))
-        .all(db)
-        .await
-        .context("Failed to query monitor_configs by collection_id")?;
-
-    Ok(configs.into_iter().map(|c| c.monitor_id).collect())
-}
-
-/// 查询引用指定壁纸 ID 列表的 monitor_id 列表
-pub async fn get_monitor_ids_by_wallpaper_ids(
+/// 查询引用指定壁纸 ID 列表的完整 config 列表
+///
+/// 与 `get_monitor_ids_by_wallpaper_ids` 不同，返回完整 Model，
+/// 供删除联动逻辑判断 collection_id / wallpaper_id 等字段。
+pub async fn get_configs_by_wallpaper_ids(
     db: &DatabaseConnection,
     wallpaper_ids: &[i32],
-) -> Result<Vec<String>> {
-    let configs = monitor_config::Entity::find()
+) -> Result<Vec<monitor_config::Model>> {
+    monitor_config::Entity::find()
         .filter(monitor_config::Column::WallpaperId.is_in(wallpaper_ids.iter().copied()))
         .all(db)
         .await
-        .context("Failed to query monitor_configs by wallpaper_ids")?;
+        .context("Failed to query monitor_configs by wallpaper_ids")
+}
 
-    Ok(configs.into_iter().map(|c| c.monitor_id).collect())
+/// 查询引用指定收藏夹的完整 config 列表
+///
+/// 返回完整 Model，供删除联动逻辑判断 wallpaper_id 等字段。
+pub async fn get_configs_by_collection_id(
+    db: &DatabaseConnection,
+    collection_id: i32,
+) -> Result<Vec<monitor_config::Model>> {
+    monitor_config::Entity::find()
+        .filter(monitor_config::Column::CollectionId.eq(collection_id))
+        .all(db)
+        .await
+        .context("Failed to query monitor_configs by collection_id")
 }
 
 /// 删除显示器配置

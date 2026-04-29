@@ -131,3 +131,26 @@ pub struct DisplayModeChangedPayload {
 impl EventPayload for DisplayModeChangedPayload {
     const EVENT_NAME: &'static str = "display-mode-changed";
 }
+
+/// 壁纸清空事件（通知壁纸窗口清除当前壁纸，显示黑屏）
+///
+/// 当壁纸被删除且无后续壁纸可切换时，通知壁纸窗口清空显示。
+#[derive(Clone, Serialize)]
+pub struct WallpaperClearedPayload {
+    pub monitor_id: String,
+}
+
+impl EventPayload for WallpaperClearedPayload {
+    const EVENT_NAME: &'static str = "wallpaper-cleared";
+}
+
+/// 显示器配置刷新事件（通知主窗口重新拉取 config 状态）
+///
+/// 当后端因删除操作导致 monitor_config 发生变更（如 wallpaper_id/collection_id 被清空）时，
+/// 通知主窗口刷新 store 状态，确保 UI 与 DB 一致。
+#[derive(Clone, Serialize)]
+pub struct MonitorConfigRefreshedPayload;
+
+impl EventPayload for MonitorConfigRefreshedPayload {
+    const EVENT_NAME: &'static str = "monitor-config-refreshed";
+}

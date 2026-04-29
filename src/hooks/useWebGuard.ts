@@ -89,8 +89,14 @@ export function useWebGuard() {
       }
     };
 
-    /** 禁用右键菜单 */
+    /** 禁用右键菜单（放行组件自定义 ContextMenu 区域） */
     const onContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Radix ContextMenuTrigger 标记为 data-slot="context-menu-trigger"
+      // 如果点击目标在其内部，则放行，让组件自己处理右键菜单
+      if (target.closest?.('[data-slot="context-menu-trigger"]')) {
+        return;
+      }
       e.preventDefault();
     };
 

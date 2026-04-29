@@ -266,6 +266,14 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       }
       return { configs: [...state.configs, config] };
     });
+
+    // 设置了 wallpaperId 时，触发壁纸窗口同步（按需创建尚未存在的窗口）
+    if (params.wallpaperId) {
+      const monitors = await availableMonitors();
+      const configs = useMonitorConfigStore.getState().configs;
+      await syncWallpaperWindows(configs, monitors);
+    }
+
     return config;
   },
 
@@ -306,6 +314,13 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       }
       return { configs: updated };
     });
+
+    // 同步壁纸窗口（source 有 wallpaper_id 时，其他显示器也需要创建窗口）
+    if (source.wallpaper_id) {
+      const monitors = await availableMonitors();
+      const configs = useMonitorConfigStore.getState().configs;
+      await syncWallpaperWindows(configs, monitors);
+    }
   },
 
   upsertAll: async (params) => {
@@ -329,6 +344,13 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       }
       return { configs: updated };
     });
+
+    // 设置了 wallpaperId 时，触发壁纸窗口同步（按需创建尚未存在的窗口）
+    if (params.wallpaperId) {
+      const monitors = await availableMonitors();
+      const configs = useMonitorConfigStore.getState().configs;
+      await syncWallpaperWindows(configs, monitors);
+    }
   },
 
   remove: async (id, _monitorId) => {

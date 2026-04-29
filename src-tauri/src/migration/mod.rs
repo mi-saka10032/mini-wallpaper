@@ -3,7 +3,6 @@ pub mod m002_create_collections;
 pub mod m003_create_collection_wallpapers;
 pub mod m004_create_monitor_configs;
 pub mod m005_create_app_settings;
-pub mod m006_move_display_mode_to_app_settings;
 
 use sea_orm_migration::prelude::*;
 
@@ -18,7 +17,6 @@ impl MigratorTrait for Migrator {
             Box::new(m003_create_collection_wallpapers::Migration),
             Box::new(m004_create_monitor_configs::Migration),
             Box::new(m005_create_app_settings::Migration),
-            Box::new(m006_move_display_mode_to_app_settings::Migration),
         ]
     }
 }

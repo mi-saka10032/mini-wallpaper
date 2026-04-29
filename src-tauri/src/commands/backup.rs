@@ -1,19 +1,11 @@
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 
 use crate::ctx::AppContext;
 use crate::dto::backup_dto::{ExportBackupRequest, ImportBackupRequest};
 use crate::dto::Validated;
+use crate::events::{BackupProgressPayload, TypedEmit};
 use crate::services::backup_service;
 use crate::utils::progress_io::ByteProgressFn;
-
-/// 字节级进度事件 payload
-#[derive(Clone, serde::Serialize)]
-struct BackupProgress {
-    /// 已处理字节数
-    current: u64,
-    /// 总字节数
-    total: u64,
-}
 
 /// 导出备份到指定路径
 #[tauri::command]
@@ -32,7 +24,7 @@ pub async fn export_backup(
 
     let handle = ctx.app_handle.clone();
     let progress_cb: Option<ByteProgressFn> = Some(Box::new(move |current, total| {
-        let _ = handle.emit("backup-progress", BackupProgress { current, total });
+        let _ = handle.typed_emit(&BackupProgressPayload { current, total });
     }));
 
     // 在 blocking 线程中执行 IO 密集操作
@@ -68,7 +60,7 @@ pub async fn import_backup(
 
     let handle = ctx.app_handle.clone();
     let progress_cb: Option<ByteProgressFn> = Some(Box::new(move |current, total| {
-        let _ = handle.emit("backup-progress", BackupProgress { current, total });
+        let _ = handle.typed_emit(&BackupProgressPayload { current, total });
     }));
 
     let zip = req.zip_path.clone();

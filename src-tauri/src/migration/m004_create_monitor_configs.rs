@@ -24,12 +24,6 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .unique_key(),
                     )
-                    .col(
-                        ColumnDef::new(MonitorConfigs::DisplayMode)
-                            .string()
-                            .not_null()
-                            .default("independent"),
-                    )
                     .col(ColumnDef::new(MonitorConfigs::WallpaperId).integer())
                     .col(ColumnDef::new(MonitorConfigs::CollectionId).integer())
                     .col(
@@ -107,7 +101,6 @@ pub enum MonitorConfigs {
     Table,
     Id,
     MonitorId,
-    DisplayMode,
     WallpaperId,
     CollectionId,
     FitMode,

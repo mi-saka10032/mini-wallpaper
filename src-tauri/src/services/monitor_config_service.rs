@@ -185,3 +185,11 @@ pub async fn sync_config_from(
         .context("Failed to sync monitor config")?;
     Ok(model)
 }
+
+/// 判断是否满足轮播启动条件（纯逻辑判断，不涉及 DB）
+///
+/// 仅检查 active + is_enabled 两个开关条件，
+/// collection_id 是否存在由调用方在具体场景中额外判断。
+pub fn should_start_timer(config: &monitor_config::Model) -> bool {
+    config.active && config.is_enabled
+}

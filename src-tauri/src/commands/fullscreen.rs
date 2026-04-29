@@ -3,11 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
-use crate::ctx::AppContext;
-use crate::runtime::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
 use crate::runtime::Scheduler;
-use crate::services::app_setting_service;
-use crate::commands::app_setting::keys;
 
 /// 初始化全屏检测（由前端 App.tsx useEffect 首次且唯一一次调用）
 ///
@@ -19,24 +15,9 @@ use crate::commands::app_setting::keys;
 /// 不再需要单独的 set_fullscreen_detection command。
 #[tauri::command]
 pub async fn init_fullscreen_detection(
-    ctx: State<'_, AppContext>,
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
 ) -> Result<(), String> {
-    let should_start = app_setting_service::get(&ctx.db, keys::PAUSE_ON_FULLSCREEN)
-        .await
-        .unwrap_or(None)
-        .map(|v| v == "true")
-        .unwrap_or(false);
-
-    if should_start {
-        let mut sched = scheduler.lock().await;
-        if !sched.is_running(FULLSCREEN_TIMER_KEY) {
-            sched.spawn(
-                FULLSCREEN_TIMER_KEY.to_string(),
-                FullscreenDetectionTask { app: ctx.app_handle.clone() },
-            );
-        }
-    }
-
+    let mut sched = scheduler.lock().await;
+    sched.init_fullscreen_detection().await;
     Ok(())
 }

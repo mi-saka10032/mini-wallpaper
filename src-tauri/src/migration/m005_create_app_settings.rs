@@ -30,6 +30,7 @@ impl MigrationTrait for Migration {
             .values_panic(["language".into(), "zh-CN".into()])
             .values_panic(["pause_on_fullscreen".into(), "true".into()])
             .values_panic(["global_volume".into(), "0".into()])
+            .values_panic(["display_mode".into(), "independent".into()])
             .to_owned();
 
         manager.exec_stmt(insert).await?;

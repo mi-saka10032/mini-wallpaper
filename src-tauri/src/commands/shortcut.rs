@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use log::warn;
-use tauri::{Emitter, State};
+use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::runtime::carousel::{carousel_key, CarouselTask, ThumbnailChangedPayload};
+use crate::events::{ThumbnailChangedPayload, TypedEmit};
+use crate::runtime::carousel::{carousel_key, CarouselTask};
 use crate::runtime::Scheduler;
 use crate::dto::shortcut_dto::{Direction, SwitchWallpaperRequest};
 use crate::dto::Validated;
@@ -71,8 +72,7 @@ pub async fn switch_wallpaper(
             drop(wm_guard);
 
             // 2. 通知主窗口更新缩略图
-            let _ = ctx.app_handle.emit(
-                "thumbnail-changed",
+            let _ = ctx.app_handle.typed_emit(
                 &ThumbnailChangedPayload {
                     monitor_id: config.monitor_id.clone(),
                     wallpaper_id: wid,
@@ -86,7 +86,6 @@ pub async fn switch_wallpaper(
                 sched.restart(
                     key,
                     CarouselTask {
-                        app: ctx.app_handle.clone(),
                         monitor_id: config.monitor_id.clone(),
                     },
                 );

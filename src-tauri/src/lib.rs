@@ -2,6 +2,7 @@ mod commands;
 mod ctx;
 mod dto;
 mod entities;
+pub mod events;
 mod migration;
 mod platform;
 mod runtime;
@@ -43,8 +44,8 @@ pub fn run() {
             .expect("Failed to initialize AppContext");
             app.manage(ctx);
 
-            // 构造 Scheduler（独立全局 state，纯 JoinHandle 注册表）
-            let scheduler = Arc::new(Mutex::new(Scheduler::new()));
+            // 构造 Scheduler（持有 AppHandle，通过控制反转向任务注入句柄）
+            let scheduler = Arc::new(Mutex::new(Scheduler::new(handle)));
             app.manage(scheduler);
 
             // ===== 系统托盘 =====

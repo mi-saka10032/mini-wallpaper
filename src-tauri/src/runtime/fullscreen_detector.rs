@@ -8,36 +8,28 @@
 //! - `FullscreenDetectionTask`: 任务定义，实现 `TaskSpawner` trait
 //!
 //! 定时器生命周期由 `Scheduler` 统一管理，
-//! `FullscreenDetectionTask` 自身持有 `AppHandle`，`spawn` 零参数消费 self。
+//! `FullscreenDetectionTask` 为零字段单元结构体，`spawn` 接收调度器注入的 `AppHandle`。
 
 use std::time::Duration;
 
 use log::info;
-use tauri::Emitter;
 use tokio::task::JoinHandle;
 
 use super::scheduler::TaskSpawner;
+use crate::events::{FullscreenChangedPayload, TypedEmit};
 
 /// 全屏检测定时器在 Scheduler 中的 key
 pub const FULLSCREEN_TIMER_KEY: &str = "fullscreen_detector";
 
-/// 全屏状态变更事件 payload
-#[derive(Clone, serde::Serialize)]
-pub struct FullscreenChangedPayload {
-    pub is_fullscreen: bool,
-}
-
 /// 全屏检测任务定义
 ///
-/// 自身持有 `AppHandle`（用于 emit 事件），`spawn` 消费 self 即可启动，
-/// 无需外部注入任何依赖。
-pub struct FullscreenDetectionTask {
-    pub app: tauri::AppHandle,
-}
+/// 零字段单元结构体，`spawn` 接收调度器注入的 `AppHandle`（用于 emit 事件），
+/// 无需外部注入任何其他依赖。
+pub struct FullscreenDetectionTask;
 
 impl TaskSpawner for FullscreenDetectionTask {
-    fn spawn(self) -> JoinHandle<()> {
-        let app = self.app;
+    fn spawn(self, app: &tauri::AppHandle) -> JoinHandle<()> {
+        let app = app.clone();
 
         tokio::spawn(async move {
             let mut was_fullscreen = false;
@@ -52,9 +44,8 @@ impl TaskSpawner for FullscreenDetectionTask {
                         info!("全屏应用已退出 — 恢复壁纸");
                     }
 
-                    let _ = app.emit(
-                        "fullscreen-changed",
-                        FullscreenChangedPayload { is_fullscreen },
+                    let _ = app.typed_emit(
+                        &FullscreenChangedPayload { is_fullscreen },
                     );
                     was_fullscreen = is_fullscreen;
                 }

@@ -2,22 +2,20 @@
 //!
 //! 本模块负责轮播切换的业务逻辑：
 //! - `CarouselTask`：轮播任务定义，实现 `TaskSpawner` trait
-//! - `should_start_timer()`: 纯逻辑判断，是否满足轮播启动条件
-//! - `collection_has_enough_wallpapers()`: 检查收藏夹壁纸数量
+//! - `carousel_key()`：生成轮播定时器的 scheduler key
 //!
 //! 定时器生命周期由 `Scheduler` 统一管理，
-//! `CarouselTask` 自身持有 `AppHandle` + 纯业务参数 `monitor_id`，
-//! 在 `spawn` 内部通过句柄按需获取 db / window_manager 等共享资源。
+//! `CarouselTask` 仅持有纯业务参数 `monitor_id`，
+//! `spawn` 接收调度器注入的 `AppHandle`，按需获取 db / window_manager 等共享资源。
 
 use log::{error, info, warn};
-use sea_orm::DatabaseConnection;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
 use super::scheduler::TaskSpawner;
 use crate::ctx::AppContext;
-use crate::entities::monitor_config;
+use crate::events::{ThumbnailChangedPayload, TypedEmit};
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 /// 轮播定时器在 Scheduler 中的 key 前缀
@@ -28,25 +26,17 @@ pub fn carousel_key(monitor_id: &str) -> String {
     format!("{}{}", CAROUSEL_TIMER_PREFIX, monitor_id)
 }
 
-/// 缩略图变更事件 payload（发送给主窗口更新缩略图）
-#[derive(Clone, serde::Serialize)]
-pub struct ThumbnailChangedPayload {
-    pub monitor_id: String,
-    pub wallpaper_id: i32,
-}
-
 /// 轮播任务定义
 ///
-/// 自身持有 `AppHandle`（用于按需获取 db / window_manager / emit 事件）
-/// 和纯业务参数 `monitor_id`，`spawn` 消费 self 即可启动，无需外部注入。
+/// 仅持有纯业务参数 `monitor_id`，`spawn` 接收调度器注入的 `AppHandle`，
+/// 按需获取 db / window_manager / emit 事件等共享资源。
 pub struct CarouselTask {
-    pub app: tauri::AppHandle,
     pub monitor_id: String,
 }
 
 impl TaskSpawner for CarouselTask {
-    fn spawn(self) -> JoinHandle<()> {
-        let app = self.app;
+    fn spawn(self, app: &tauri::AppHandle) -> JoinHandle<()> {
+        let app = app.clone();
         let mid = self.monitor_id;
 
         tokio::spawn(async move {
@@ -144,7 +134,9 @@ impl TaskSpawner for CarouselTask {
                                     &db,
                                     &config.monitor_id,
                                     new_wid,
-                                ).await {
+                                )
+                                .await
+                                {
                                     error!(
                                         "[Carousel] Failed to update wallpaper_id for {}: {}",
                                         config.monitor_id, e
@@ -153,8 +145,13 @@ impl TaskSpawner for CarouselTask {
 
                                 // 通知每个壁纸窗口更新
                                 let wm_guard = window_manager.lock().await;
-                                if let Err(e) = wm_guard.update_window(&config.monitor_id, new_wid) {
-                                    warn!("[Carousel] 壁纸窗口更新失败 {}: {}", config.monitor_id, e);
+                                if let Err(e) =
+                                    wm_guard.update_window(&config.monitor_id, new_wid)
+                                {
+                                    warn!(
+                                        "[Carousel] 壁纸窗口更新失败 {}: {}",
+                                        config.monitor_id, e
+                                    );
                                 }
                                 drop(wm_guard);
 
@@ -163,16 +160,23 @@ impl TaskSpawner for CarouselTask {
                                     monitor_id: config.monitor_id.clone(),
                                     wallpaper_id: new_wid,
                                 };
-                                if let Err(e) = app.emit("thumbnail-changed", &payload) {
-                                    error!("[Carousel] Failed to emit thumbnail-changed for {}: {}", config.monitor_id, e);
+                                if let Err(e) = app.typed_emit(&payload) {
+                                    error!(
+                                        "[Carousel] Failed to emit thumbnail-changed for {}: {}",
+                                        config.monitor_id, e
+                                    );
                                 }
                             }
 
-                            info!("[Carousel] {} 模式同步更新所有窗口: wallpaper_id={}", display_mode, new_wid);
+                            info!(
+                                "[Carousel] {} 模式同步更新所有窗口: wallpaper_id={}",
+                                display_mode, new_wid
+                            );
                         } else {
                             // independent 模式：仅更新当前 monitor
                             if let Err(e) =
-                                monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await
+                                monitor_config_service::update_wallpaper_id(&db, &mid, new_wid)
+                                    .await
                             {
                                 error!(
                                     "[Carousel] Failed to update wallpaper_id for {}: {}",
@@ -193,7 +197,7 @@ impl TaskSpawner for CarouselTask {
                                 monitor_id: mid.clone(),
                                 wallpaper_id: new_wid,
                             };
-                            if let Err(e) = app.emit("thumbnail-changed", &payload) {
+                            if let Err(e) = app.typed_emit(&payload) {
                                 error!("[Carousel] Failed to emit thumbnail-changed: {}", e);
                             }
                         }
@@ -211,21 +215,4 @@ impl TaskSpawner for CarouselTask {
             }
         })
     }
-}
-
-/// 判断是否满足轮播启动条件（纯逻辑判断，不涉及 DB）
-///
-/// 仅检查 active + is_enabled 两个开关条件，
-/// collection_id 是否存在由调用方在具体场景中额外判断。
-pub fn should_start_timer(config: &monitor_config::Model) -> bool {
-    config.active && config.is_enabled
-}
-
-/// 检查收藏夹壁纸数量是否 > 1（委托 collection_service）
-pub async fn collection_has_enough_wallpapers(
-    db: &DatabaseConnection,
-    collection_id: i32,
-) -> anyhow::Result<bool> {
-    let count = collection_service::count_wallpapers(db, collection_id).await?;
-    Ok(count > 1)
 }

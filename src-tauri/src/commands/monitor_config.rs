@@ -9,13 +9,9 @@ use crate::dto::monitor_config_dto::{
 };
 use crate::dto::Validated;
 use crate::entities::monitor_config;
-use crate::runtime::carousel::{
-    carousel_key, collection_has_enough_wallpapers, should_start_timer, CarouselTask,
-};
+use crate::runtime::carousel::carousel_key;
 use crate::runtime::Scheduler;
 use crate::services::{app_setting_service, monitor_config_service};
-
-use log::info;
 
 /// 获取所有显示器配置
 #[tauri::command]
@@ -66,8 +62,10 @@ pub async fn upsert_monitor_config(
         .map_err(|e| e.to_string())?;
 
     // ===== 定时器管理 =====
-    // should_start_timer 基于更新后的 config 判断 active && is_enabled
-    manage_timer_for_config(&ctx, &scheduler, &config, need_restart).await;
+    {
+        let mut sched = scheduler.lock().await;
+        sched.manage_carousel_timer(&config, need_restart).await;
+    }
 
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
     // 读取全局 display_mode，决定是否需要广播到所有窗口
@@ -137,79 +135,6 @@ async fn notify_window_changes(
     }
 }
 
-/// 根据更新后的 config 状态管理定时器
-///
-/// - `need_restart`: play_interval / collection_id 变更时为 true，需要重启定时器
-///
-/// should_start_timer 基于更新后的 config 判断 active && is_enabled（总开关），
-/// collection_id 是否存在由本函数额外判断。
-async fn manage_timer_for_config(
-    ctx: &AppContext,
-    scheduler: &Arc<Mutex<Scheduler>>,
-    config: &monitor_config::Model,
-    need_restart: bool,
-) {
-    let key = carousel_key(&config.monitor_id);
-    let mut sched = scheduler.lock().await;
-
-    if !should_start_timer(config) {
-        // active=false 或 is_enabled=false → 无条件停止
-        sched.stop(&key);
-        return;
-    }
-
-    // 以下 should_start_timer=true（active && is_enabled）
-
-    let cid = match config.collection_id {
-        Some(cid) => cid,
-        None => {
-            // 没有 collection_id，定时器不应运行
-            sched.stop(&key);
-            return;
-        }
-    };
-
-    if need_restart {
-        // play_interval 或 collection_id 变更 → 重启定时器
-        match collection_has_enough_wallpapers(&ctx.db, cid).await {
-            Ok(true) => {
-                sched.restart(
-                    key,
-                    CarouselTask {
-                        app: ctx.app_handle.clone(),
-                        monitor_id: config.monitor_id.clone(),
-                    },
-                );
-            }
-            Ok(false) => {
-                sched.stop(&key);
-            }
-            Err(e) => {
-                log::warn!("[upsert] Failed to check collection wallpapers: {}", e);
-                sched.stop(&key);
-            }
-        }
-    } else if !sched.is_running(&key) {
-        // 定时器未运行但条件满足（如 is_enabled 从 false→true）→ 启动
-        match collection_has_enough_wallpapers(&ctx.db, cid).await {
-            Ok(true) => {
-                sched.spawn(
-                    key,
-                    CarouselTask {
-                        app: ctx.app_handle.clone(),
-                        monitor_id: config.monitor_id.clone(),
-                    },
-                );
-            }
-            Ok(false) => {}
-            Err(e) => {
-                log::warn!("[upsert] Failed to check collection wallpapers: {}", e);
-            }
-        }
-    }
-    // 定时器已在运行且无需重启 → 不做任何操作
-}
-
 /// 删除显示器配置
 #[tauri::command]
 pub async fn delete_monitor_config(
@@ -234,61 +159,13 @@ pub async fn delete_monitor_config(
 
 /// 启动所有满足轮播条件的定时器（应用启动时由前端调用）
 ///
-/// display_mode 感知：
-/// - independent: 为每个满足条件的 monitor 启动独立定时器
-/// - mirror/extend: 仅为第一个满足条件的 active monitor 启动定时器（主定时器）
+/// 委托 Scheduler 的 start_all_carousel_timers 方法，
+/// display_mode 感知逻辑已内聚在 Scheduler 中。
 #[tauri::command]
 pub async fn start_timers(
-    ctx: State<'_, AppContext>,
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
 ) -> Result<(), String> {
-    let configs = monitor_config_service::get_all(&ctx.db)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // 读取全局 display_mode
-    let display_mode = app_setting_service::get(&ctx.db, "display_mode")
-        .await
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| "independent".to_string());
-
-    let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
-
     let mut sched = scheduler.lock().await;
-    let mut primary_started = false;
-
-    for config in &configs {
-        if should_start_timer(config) {
-            // mirror/extend 模式下，只启动第一个满足条件的定时器
-            if is_sync_mode && primary_started {
-                continue;
-            }
-
-            if let Some(cid) = config.collection_id {
-                match collection_has_enough_wallpapers(&ctx.db, cid).await {
-                    Ok(true) => {
-                        let key = carousel_key(&config.monitor_id);
-                        sched.spawn(
-                            key.clone(),
-                            CarouselTask {
-                                app: ctx.app_handle.clone(),
-                                monitor_id: config.monitor_id.clone(),
-                            },
-                        );
-                        info!("[start_timers] 启动定时器: {} (display_mode={})", config.monitor_id, display_mode);
-
-                        if is_sync_mode {
-                            primary_started = true;
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        log::warn!("[start_timers] 检查收藏夹失败 {}: {}", config.monitor_id, e);
-                    }
-                }
-            }
-        }
-    }
-
+    sched.start_all_carousel_timers().await;
     Ok(())
 }

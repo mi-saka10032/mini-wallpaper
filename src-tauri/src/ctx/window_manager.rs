@@ -7,6 +7,7 @@
 //! 构造时注入 `AppHandle`，所有方法不再需要外部传递 app 参数。
 
 use log::info;
+use log::warn;
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -72,6 +73,15 @@ impl WallpaperWindowManager {
         // 如果已经存在，先销毁旧的
         if self.windows.contains_key(monitor_id) {
             self.destroy_window(monitor_id);
+        }
+
+        // 检查 Tauri 运行时中是否仍存在同 label 的窗口实例（如 F5 刷新导致的销毁延迟）
+        if self.app_handle.get_webview_window(&label).is_some() {
+            warn!(
+                "WebviewWindow '{}' 仍存在于运行时中（可能尚未完成销毁），跳过创建",
+                label
+            );
+            return Ok(());
         }
 
         let url = match extra_query {

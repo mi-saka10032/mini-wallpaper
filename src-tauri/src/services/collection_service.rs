@@ -203,6 +203,12 @@ pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Re
     Ok(count)
 }
 
+/// 检查收藏夹壁纸数量是否 > 1（满足轮播切换的最低条件）
+pub async fn has_enough_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Result<bool> {
+    let count = count_wallpapers(db, collection_id).await?;
+    Ok(count > 1)
+}
+
 // ==================== 可复用的 ORM 辅助函数 ====================
 
 /// 查询某壁纸在收藏夹中的 sort_order

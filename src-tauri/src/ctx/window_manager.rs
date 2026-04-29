@@ -17,6 +17,7 @@ use crate::platform::windows::desktop_embedder;
 use crate::events::{
     DisplayModeChangedPayload, EventPayload, FitModeChangedPayload, TypedEmitTo,
     WallpaperChangedPayload,
+    ThumbnailChangedPayload, TypedEmit,
 };
 
 /// 壁纸窗口管理器
@@ -175,6 +176,29 @@ impl WallpaperWindowManager {
         }
     }
 
+    /// 解析 monitor_id 对应的窗口实例
+    ///
+    /// 统一的窗口查找逻辑：先从 HashMap 获取 label，再从 Tauri 运行时获取窗口实例。
+    /// 消除 update_window / notify_fit_mode_changed / notify_display_mode_changed 中的重复代码。
+    fn resolve_window(
+        &self,
+        monitor_id: &str,
+    ) -> Result<(String, tauri::WebviewWindow), String> {
+        let label = self
+            .windows
+            .get(monitor_id)
+            .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
+
+        let window = self.app_handle.get_webview_window(label).ok_or_else(|| {
+            format!(
+                "窗口实例已丢失: label='{}', monitor_id='{}'",
+                label, monitor_id
+            )
+        })?;
+
+        Ok((label.clone(), window))
+    }
+
     /// 通知指定显示器的壁纸窗口更新壁纸
     ///
     /// 通过 HashMap 精确获取 monitor_id 对应的窗口 label，
@@ -184,18 +208,7 @@ impl WallpaperWindowManager {
         monitor_id: &str,
         wallpaper_id: i32,
     ) -> Result<(), String> {
-        let label = self
-            .windows
-            .get(monitor_id)
-            .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
-
-        // 确认窗口实例仍然存在
-        let _window = self.app_handle.get_webview_window(label).ok_or_else(|| {
-            format!(
-                "窗口实例已丢失: label='{}', monitor_id='{}'",
-                label, monitor_id
-            )
-        })?;
+        let (label, _window) = self.resolve_window(monitor_id)?;
 
         let payload = WallpaperChangedPayload {
             monitor_id: monitor_id.to_string(),
@@ -203,7 +216,7 @@ impl WallpaperWindowManager {
         };
 
         self.app_handle
-            .typed_emit_to(label, &payload)
+            .typed_emit_to(&label, &payload)
             .map_err(|e| format!("发送事件失败: {}", e))?;
 
         info!(
@@ -214,6 +227,100 @@ impl WallpaperWindowManager {
         Ok(())
     }
 
+    /// 更新壁纸并同步通知主窗口缩略图
+    ///
+    /// 合并了两个绑定的操作：
+    /// 1. 向壁纸窗口发送 wallpaper-changed 事件
+    /// 2. 向主窗口发送 thumbnail-changed 事件
+    ///
+    /// 避免调用方遗漏其中一个 emit，确保壁纸窗口与主窗口缩略图始终同步。
+    pub fn update_wallpaper(
+        &self,
+        monitor_id: &str,
+        wallpaper_id: i32,
+    ) -> Result<(), String> {
+        // 1. 通知壁纸窗口
+        self.update_window(monitor_id, wallpaper_id)?;
+
+        // 2. 通知主窗口更新缩略图
+        let thumbnail_payload = ThumbnailChangedPayload {
+            monitor_id: monitor_id.to_string(),
+            wallpaper_id,
+        };
+        if let Err(e) = self.app_handle.typed_emit(&thumbnail_payload) {
+            log::warn!(
+                "[WallpaperWindowManager] 发送 thumbnail-changed 失败: monitor='{}', err={}",
+                monitor_id, e
+            );
+        }
+
+        Ok(())
+    }
+
+    /// display_mode 感知的壁纸更新通知
+    ///
+    /// 根据 is_sync_mode 决定广播或单播：
+    /// - 同步模式（mirror/extend）：通知所有壁纸窗口 + 主窗口缩略图
+    /// - 独立模式（independent）：仅通知指定 monitor 的壁纸窗口 + 主窗口缩略图
+    ///
+    /// 封装了 display_mode 判断逻辑，command 层无需感知同步策略。
+    pub fn notify_wallpaper_update(
+        &self,
+        monitor_id: &str,
+        wallpaper_id: i32,
+        is_sync_mode: bool,
+    ) {
+        if is_sync_mode {
+            for mid in self.windows.keys() {
+                if let Err(e) = self.update_wallpaper(mid, wallpaper_id) {
+                    log::warn!(
+                        "[WallpaperWindowManager] 同步模式壁纸更新失败 {}: {}",
+                        mid, e
+                    );
+                }
+            }
+        } else {
+            if let Err(e) = self.update_wallpaper(monitor_id, wallpaper_id) {
+                log::warn!(
+                    "[WallpaperWindowManager] 壁纸更新失败 {}: {}",
+                    monitor_id, e
+                );
+            }
+        }
+    }
+
+    /// display_mode 感知的 fitMode 变更通知
+    ///
+    /// 根据 is_sync_mode 决定广播或单播：
+    /// - 同步模式（mirror/extend）：通知所有壁纸窗口
+    /// - 独立模式（independent）：仅通知指定 monitor 的壁纸窗口
+    ///
+    /// 封装了 display_mode 判断逻辑，command 层无需感知同步策略。
+    pub fn notify_fit_mode_update(
+        &self,
+        monitor_id: &str,
+        fit_mode: &str,
+        is_sync_mode: bool,
+    ) {
+        if is_sync_mode {
+            for mid in self.windows.keys() {
+                if let Err(e) = self.notify_fit_mode_changed(mid, fit_mode) {
+                    log::warn!(
+                        "[WallpaperWindowManager] 同步模式 fit-mode 更新失败 {}: {}",
+                        mid, e
+                    );
+                }
+            }
+        } else {
+            if let Err(e) = self.notify_fit_mode_changed(monitor_id, fit_mode) {
+                log::warn!(
+                    "[WallpaperWindowManager] fit-mode 更新失败 {}: {}",
+                    monitor_id, e
+                );
+            }
+        }
+    }
+
     /// 通知指定显示器的壁纸窗口 fitMode 变更
     ///
     /// 壁纸窗口收到后直接更新 objectFit 样式，无需重新加载壁纸数据。
@@ -222,17 +329,7 @@ impl WallpaperWindowManager {
         monitor_id: &str,
         fit_mode: &str,
     ) -> Result<(), String> {
-        let label = self
-            .windows
-            .get(monitor_id)
-            .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
-
-        let _window = self.app_handle.get_webview_window(label).ok_or_else(|| {
-            format!(
-                "窗口实例已丢失: label='{}', monitor_id='{}'",
-                label, monitor_id
-            )
-        })?;
+        let (label, _window) = self.resolve_window(monitor_id)?;
 
         let payload = FitModeChangedPayload {
             monitor_id: monitor_id.to_string(),
@@ -240,7 +337,7 @@ impl WallpaperWindowManager {
         };
 
         self.app_handle
-            .typed_emit_to(label, &payload)
+            .typed_emit_to(&label, &payload)
             .map_err(|e| format!("发送 fit-mode-changed 事件失败: {}", e))?;
 
         info!(
@@ -261,17 +358,7 @@ impl WallpaperWindowManager {
         monitor_id: &str,
         display_mode: &str,
     ) -> Result<(), String> {
-        let label = self
-            .windows
-            .get(monitor_id)
-            .ok_or_else(|| format!("壁纸窗口不存在: monitor_id='{}'", monitor_id))?;
-
-        let _window = self.app_handle.get_webview_window(label).ok_or_else(|| {
-            format!(
-                "窗口实例已丢失: label='{}', monitor_id='{}'",
-                label, monitor_id
-            )
-        })?;
+        let (label, _window) = self.resolve_window(monitor_id)?;
 
         let payload = DisplayModeChangedPayload {
             monitor_id: monitor_id.to_string(),
@@ -279,7 +366,7 @@ impl WallpaperWindowManager {
         };
 
         self.app_handle
-            .typed_emit_to(label, &payload)
+            .typed_emit_to(&label, &payload)
             .map_err(|e| format!("发送 display-mode-changed 事件失败: {}", e))?;
 
         info!(
@@ -295,33 +382,6 @@ impl WallpaperWindowManager {
         self.windows.keys().cloned().collect()
     }
 
-    /// 通知壁纸窗口样式 / 壁纸变更（便捷方法）
-    ///
-    /// 根据传入的 Option 字段，按需向对应 monitor_id 的壁纸窗口发送事件：
-    /// - `fit_mode`     → fit-mode-changed
-    /// - `wallpaper_id` → wallpaper-changed（更新壁纸图片）
-    pub fn notify_window_changes(
-        &self,
-        monitor_id: &str,
-        fit_mode: Option<&str>,
-        wallpaper_id: Option<i32>,
-    ) {
-        // 两个字段都为 None 时无需操作
-        if fit_mode.is_none() && wallpaper_id.is_none() {
-            return;
-        }
-
-        if let Some(fit_mode) = fit_mode {
-            if let Err(e) = self.notify_fit_mode_changed(monitor_id, fit_mode) {
-                log::warn!("[WallpaperWindowManager] 发送 fit-mode-changed 事件失败: {}", e);
-            }
-        }
-        if let Some(wallpaper_id) = wallpaper_id {
-            if let Err(e) = self.update_window(monitor_id, wallpaper_id) {
-                log::warn!("[WallpaperWindowManager] 壁纸窗口更新失败: {}", e);
-            }
-        }
-    }
 }
 
 /// 清理 monitor_id 使其适合做 Tauri window label

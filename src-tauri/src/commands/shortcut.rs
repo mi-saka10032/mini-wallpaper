@@ -5,7 +5,6 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::events::{ThumbnailChangedPayload, TypedEmit};
 use crate::runtime::carousel::{carousel_key, CarouselTask};
 use crate::runtime::Scheduler;
 use crate::dto::shortcut_dto::{Direction, SwitchWallpaperRequest};
@@ -61,20 +60,12 @@ pub async fn switch_wallpaper(
         if let Some(wid) = new_wid {
             monitor_config_service::update_wallpaper_id(&ctx.db, &config.monitor_id, wid).await?;
 
-            // 1. 通知指定壁纸窗口更新壁纸
+            // 通知壁纸窗口 + 主窗口缩略图（合并操作）
             let wm_guard = ctx.window_manager.lock().await;
-            if let Err(e) = wm_guard.update_window(&config.monitor_id, wid) {
-                warn!("[switch_wallpaper] 壁纸窗口更新失败: {}", e);
+            if let Err(e) = wm_guard.update_wallpaper(&config.monitor_id, wid) {
+                warn!("[switch_wallpaper] 壁纸更新失败: {}", e);
             }
             drop(wm_guard);
-
-            // 2. 通知主窗口更新缩略图
-            let _ = ctx.app_handle.typed_emit(
-                &ThumbnailChangedPayload {
-                    monitor_id: config.monitor_id.clone(),
-                    wallpaper_id: wid,
-                },
-            );
 
             // 3. 如果有运行中的定时器，重置计时
             let key = carousel_key(&config.monitor_id);

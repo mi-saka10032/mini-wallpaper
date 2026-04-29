@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 
 use crate::ctx::AppContext;
 use crate::ctx::window_manager::WallpaperWindowManager;
-use crate::dto::app_setting_dto::keys as setting_keys;
+use crate::dto::app_setting_dto::{self, keys as setting_keys};
 use crate::entities::monitor_config;
 use crate::events::VolumeChangedPayload;
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
@@ -228,7 +228,7 @@ impl Scheduler {
             .unwrap_or(None)
             .unwrap_or_else(|| "independent".to_string());
 
-        let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
+        let is_sync_mode = app_setting_dto::is_sync_mode(&display_mode);
         let mut primary_started = false;
 
         for config in &configs {

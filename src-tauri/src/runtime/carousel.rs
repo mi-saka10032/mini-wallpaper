@@ -8,20 +8,14 @@
 //! `CarouselTask` 仅持有纯业务参数 `monitor_id`，
 //! `spawn` 接收调度器注入的 `AppHandle`，按需获取 db / window_manager 等共享资源。
 
-use log::{error, info, warn};
-use std::sync::Arc;
+use log::{error, warn};
 use tauri::Manager;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
-use sea_orm::DatabaseConnection;
-
 use super::scheduler::TaskSpawner;
 use crate::ctx::AppContext;
-use crate::ctx::window_manager::WallpaperWindowManager;
-use crate::dto::app_setting_dto::keys as setting_keys;
-use crate::events::{ThumbnailChangedPayload, TypedEmit};
+use crate::dto::app_setting_dto::{self, keys as setting_keys};
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 /// 轮播定时器在 Scheduler 中的 key 前缀
@@ -38,44 +32,6 @@ pub fn carousel_key(monitor_id: &str) -> String {
 /// 按需获取 db / window_manager / emit 事件等共享资源。
 pub struct CarouselTask {
     pub monitor_id: String,
-}
-
-/// 对单个 monitor 执行壁纸切换：更新 DB + 通知壁纸窗口 + 通知主窗口缩略图
-async fn apply_wallpaper_change(
-    db: &DatabaseConnection,
-    window_manager: &Arc<Mutex<WallpaperWindowManager>>,
-    app: &tauri::AppHandle,
-    monitor_id: &str,
-    new_wid: i32,
-) {
-    // 1. 更新 DB 中的 wallpaper_id
-    if let Err(e) = monitor_config_service::update_wallpaper_id(db, monitor_id, new_wid).await {
-        error!(
-            "[Carousel] Failed to update wallpaper_id for {}: {}",
-            monitor_id, e
-        );
-        return;
-    }
-
-    // 2. 通知壁纸窗口更新
-    {
-        let wm_guard = window_manager.lock().await;
-        if let Err(e) = wm_guard.update_window(monitor_id, new_wid) {
-            warn!("[Carousel] 壁纸窗口更新失败 {}: {}", monitor_id, e);
-        }
-    }
-
-    // 3. 通知主窗口更新缩略图
-    let payload = ThumbnailChangedPayload {
-        monitor_id: monitor_id.to_string(),
-        wallpaper_id: new_wid,
-    };
-    if let Err(e) = app.typed_emit(&payload) {
-        error!(
-            "[Carousel] Failed to emit thumbnail-changed for {}: {}",
-            monitor_id, e
-        );
-    }
 }
 
 impl TaskSpawner for CarouselTask {
@@ -157,45 +113,33 @@ impl TaskSpawner for CarouselTask {
                 .await
                 {
                     Ok(Some(new_wid)) => {
-                        let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
+                        let is_sync = app_setting_dto::is_sync_mode(&display_mode);
 
-                        if is_sync_mode {
-                            // mirror/extend 模式：遍历所有 active monitor，同步更新
-                            let all_configs = match monitor_config_service::get_all(&db).await {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    error!("[Carousel] Failed to get all configs: {}", e);
-                                    continue;
-                                }
-                            };
+                        // 1. 更新当前 monitor 的 DB 记录
+                        if let Err(e) = monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await {
+                            error!("[Carousel] Failed to update wallpaper_id for {}: {}", mid, e);
+                            continue;
+                        }
 
-                            for config in &all_configs {
-                                if config.active {
-                                    apply_wallpaper_change(
-                                        &db,
-                                        &window_manager,
-                                        &app,
-                                        &config.monitor_id,
-                                        new_wid,
-                                    )
-                                    .await;
+                        // 2. 同步模式下同步更新所有从属 monitor 的 DB 记录
+                        if is_sync {
+                            if let Ok(all_configs) = monitor_config_service::get_all(&db).await {
+                                for config in &all_configs {
+                                    if config.active && config.monitor_id != mid {
+                                        if let Err(e) = monitor_config_service::update_wallpaper_id(
+                                            &db, &config.monitor_id, new_wid,
+                                        ).await {
+                                            error!("[Carousel] Failed to sync wallpaper_id for {}: {}", config.monitor_id, e);
+                                        }
+                                    }
                                 }
                             }
+                        }
 
-                            info!(
-                                "[Carousel] {} 模式同步更新所有窗口: wallpaper_id={}",
-                                display_mode, new_wid
-                            );
-                        } else {
-                            // independent 模式：仅更新当前 monitor
-                            apply_wallpaper_change(
-                                &db,
-                                &window_manager,
-                                &app,
-                                &mid,
-                                new_wid,
-                            )
-                            .await;
+                        // 3. 通知壁纸窗口 + 主窗口缩略图（display_mode 感知逻辑已内聚在 WallpaperWindowManager）
+                        {
+                            let wm_guard = window_manager.lock().await;
+                            wm_guard.notify_wallpaper_update(&mid, new_wid, is_sync);
                         }
                     }
                     Ok(None) => {

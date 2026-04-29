@@ -4,6 +4,7 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
+use crate::dto::app_setting_dto::{self, keys as setting_keys};
 use crate::dto::monitor_config_dto::{
     DeleteMonitorConfigRequest, GetMonitorConfigRequest, UpsertMonitorConfigRequest,
 };
@@ -64,37 +65,22 @@ pub async fn upsert_monitor_config(
     }
 
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
-    // 读取全局 display_mode，决定是否需要广播到所有窗口
-    let display_mode = app_setting_service::get(&ctx.db, "display_mode")
-        .await
-        .unwrap_or(Some("independent".to_string()))
-        .unwrap_or_else(|| "independent".to_string());
-
-    let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
+    // display_mode 感知逻辑已内聚在 WallpaperWindowManager 内部，
+    // command 层只需传入 is_sync_mode，无需关心广播/单播分支。
+    let is_sync = {
+        let dm = app_setting_service::get(&ctx.db, setting_keys::DISPLAY_MODE)
+            .await
+            .unwrap_or(Some("independent".to_string()))
+            .unwrap_or_else(|| "independent".to_string());
+        app_setting_dto::is_sync_mode(&dm)
+    };
 
     let wm = ctx.window_manager.lock().await;
-    if is_sync_mode {
-        // 同步模式：通知所有壁纸窗口
-        let all_ids = wm.get_active_window_ids();
-        for mid in &all_ids {
-            if let Some(fit_mode) = fit_mode_changed.as_deref() {
-                if let Err(e) = wm.notify_fit_mode_changed(mid, fit_mode) {
-                    log::warn!("[upsert] 发送 fit-mode-changed 事件失败 {}: {}", mid, e);
-                }
-            }
-            if let Some(wid) = wallpaper_changed {
-                if let Err(e) = wm.update_window(mid, wid) {
-                    log::warn!("[upsert] 壁纸窗口更新失败 {}: {}", mid, e);
-                }
-            }
-        }
-    } else {
-        // independent 模式：仅通知当前 monitor
-        wm.notify_window_changes(
-            &config.monitor_id,
-            fit_mode_changed.as_deref(),
-            wallpaper_changed,
-        );
+    if let Some(fit_mode) = fit_mode_changed.as_deref() {
+        wm.notify_fit_mode_update(&config.monitor_id, fit_mode, is_sync);
+    }
+    if let Some(wid) = wallpaper_changed {
+        wm.notify_wallpaper_update(&config.monitor_id, wid, is_sync);
     }
 
     Ok(config)

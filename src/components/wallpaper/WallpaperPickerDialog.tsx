@@ -65,7 +65,7 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="flex h-[80vh] max-h-[800px] w-[80vw] max-w-[1200px] flex-col gap-0 overflow-hidden p-0"
+        className="flex h-[80vh] max-h-[800px] w-[80vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0"
       >
         {/* Header */}
         <DialogHeader className="shrink-0 border-b border-border px-6 py-4">

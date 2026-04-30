@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
 import { Check, Palette, Plus, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { HslColorPicker } from "react-colorful";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Slider } from "@/components/ui/slider";
 import { useAccentColor, ACCENT_PRESETS } from "@/hooks/useAccentColor";
 
 /**
@@ -18,7 +18,21 @@ function getPresetPreviewColor(hue: number, chroma: number, isDefault: boolean):
 }
 
 /**
- * Toolbar 用的换肤按钮，点击弹出 Popover 展示色块选择
+ * 将 oklch chroma (0~0.25) 映射到 HSL saturation (0~100)
+ */
+function chromaToSaturation(chroma: number): number {
+  return Math.round((chroma / 0.25) * 100);
+}
+
+/**
+ * 将 HSL saturation (0~100) 映射到 oklch chroma (0~0.25)
+ */
+function saturationToChroma(saturation: number): number {
+  return Number(((saturation / 100) * 0.25).toFixed(3));
+}
+
+/**
+ * Toolbar 用的换肤按钮，点击弹出 Popover 展示色块选择 + ColorPicker
  */
 const AccentColorToggle: React.FC = () => {
   const { t } = useTranslation();
@@ -26,10 +40,13 @@ const AccentColorToggle: React.FC = () => {
 
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(false);
-  const [customHue, setCustomHue] = useState(currentConfig.hue || 250);
-  const [customChroma, setCustomChroma] = useState(
-    currentConfig.chroma > 0 ? currentConfig.chroma : 0.15,
-  );
+
+  // HSL 状态用于 react-colorful
+  const [hslColor, setHslColor] = useState({
+    h: currentConfig.hue || 250,
+    s: currentConfig.chroma > 0 ? chromaToSaturation(currentConfig.chroma) : 60,
+    l: 50,
+  });
 
   // 判断当前选中的是哪个预设
   const activePresetId = useMemo(() => {
@@ -48,19 +65,20 @@ const AccentColorToggle: React.FC = () => {
   );
 
   const handleCustomConfirm = useCallback(() => {
-    setCustomColor(customHue, customChroma);
+    const chroma = saturationToChroma(hslColor.s);
+    setCustomColor(hslColor.h, chroma);
     setCustomMode(false);
-  }, [customHue, customChroma, setCustomColor]);
+  }, [hslColor, setCustomColor]);
 
   const handleReset = useCallback(() => {
     setAccentColor("default");
     setCustomMode(false);
   }, [setAccentColor]);
 
-  // 自定义颜色预览
+  // 自定义颜色预览（oklch 格式）
   const customPreviewColor = useMemo(
-    () => `oklch(0.6 ${customChroma} ${customHue})`,
-    [customHue, customChroma],
+    () => `oklch(0.6 ${saturationToChroma(hslColor.s)} ${hslColor.h})`,
+    [hslColor],
   );
 
   return (
@@ -70,7 +88,7 @@ const AccentColorToggle: React.FC = () => {
           <Palette className="size-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-64" align="end" sideOffset={8}>
+      <PopoverContent className="w-72" align="end" sideOffset={8}>
         <div className="space-y-3">
           {/* 标题 */}
           <div className="flex items-center justify-between">
@@ -134,7 +152,10 @@ const AccentColorToggle: React.FC = () => {
               )}
               style={
                 isCustomActive
-                  ? { backgroundColor: `oklch(0.6 ${currentConfig.chroma} ${currentConfig.hue})`, borderColor: "transparent" }
+                  ? {
+                      backgroundColor: `oklch(0.6 ${currentConfig.chroma} ${currentConfig.hue})`,
+                      borderColor: "transparent",
+                    }
                   : undefined
               }
               title={t("accentColor.custom")}
@@ -150,84 +171,32 @@ const AccentColorToggle: React.FC = () => {
             </button>
           </div>
 
-          {/* 自定义颜色面板 */}
+          {/* 自定义颜色面板 - 使用 react-colorful */}
           {customMode && (
             <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-              {/* 颜色预览 */}
+              {/* ColorPicker */}
+              <div className="accent-color-picker">
+                <HslColorPicker color={hslColor} onChange={setHslColor} />
+              </div>
+
+              {/* 颜色预览 + 信息 */}
               <div className="flex items-center gap-3">
                 <div
-                  className="size-8 rounded-lg shadow-inner ring-1 ring-black/10"
+                  className="size-8 shrink-0 rounded-lg shadow-inner ring-1 ring-black/10"
                   style={{ backgroundColor: customPreviewColor }}
                 />
                 <div className="flex-1 space-y-0.5">
                   <p className="text-xs text-muted-foreground">
-                    {t("accentColor.hue")}: {Math.round(customHue)}°
+                    {t("accentColor.hue")}: {Math.round(hslColor.h)}°
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {t("accentColor.saturation")}: {Math.round(customChroma * 100)}%
+                    {t("accentColor.saturation")}: {hslColor.s}%
                   </p>
-                </div>
-              </div>
-
-              {/* 色相滑块 */}
-              <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">
-                  {t("accentColor.hue")}
-                </label>
-                <div className="relative">
-                  <div
-                    className="absolute inset-0 rounded-full"
-                    style={{
-                      background:
-                        "linear-gradient(to right, oklch(0.6 0.15 0), oklch(0.6 0.15 60), oklch(0.6 0.15 120), oklch(0.6 0.15 180), oklch(0.6 0.15 240), oklch(0.6 0.15 300), oklch(0.6 0.15 360))",
-                      height: "8px",
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                    }}
-                  />
-                  <Slider
-                    value={[customHue]}
-                    onValueChange={(v) => setCustomHue(v[0])}
-                    min={0}
-                    max={360}
-                    step={1}
-                    className="relative"
-                  />
-                </div>
-              </div>
-
-              {/* 饱和度滑块 */}
-              <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground">
-                  {t("accentColor.saturation")}
-                </label>
-                <div className="relative">
-                  <div
-                    className="absolute inset-0 rounded-full"
-                    style={{
-                      background: `linear-gradient(to right, oklch(0.6 0 ${customHue}), oklch(0.6 0.2 ${customHue}))`,
-                      height: "8px",
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                    }}
-                  />
-                  <Slider
-                    value={[customChroma * 100]}
-                    onValueChange={(v) => setCustomChroma(v[0] / 100)}
-                    min={5}
-                    max={25}
-                    step={1}
-                    className="relative"
-                  />
                 </div>
               </div>
 
               {/* 确认按钮 */}
-              <Button
-                size="sm"
-                className="w-full"
-                onClick={handleCustomConfirm}
-              >
+              <Button size="sm" className="w-full" onClick={handleCustomConfirm}>
                 {t("accentColor.apply")}
               </Button>
             </div>
@@ -237,7 +206,10 @@ const AccentColorToggle: React.FC = () => {
           <p className="text-xs text-muted-foreground">
             {isCustomActive
               ? t("accentColor.customActive")
-              : t(ACCENT_PRESETS.find((p) => p.id === (activePresetId || "default"))?.label || "accentColor.default")}
+              : t(
+                  ACCENT_PRESETS.find((p) => p.id === (activePresetId || "default"))?.label ||
+                    "accentColor.default",
+                )}
           </p>
         </div>
       </PopoverContent>

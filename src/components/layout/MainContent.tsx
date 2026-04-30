@@ -30,7 +30,7 @@ import {
   Unlink,
   X,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import type { Wallpaper } from "@/stores/wallpaperStore";
@@ -112,10 +112,14 @@ const MainContent: React.FC<MainContentProps> = ({
   // 添加壁纸到收藏夹的 picker
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // 搜索 + 排序状态
+  // 搜索 + 排序状态（管理模式）
   const [keyword, setKeyword] = useState("");
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+
+  // 常态模式搜索
+  const [normalKeyword, setNormalKeyword] = useState("");
+  const [searchExpanded, setSearchExpanded] = useState(false);
 
   const isCollectionView = activeId > 0;
   const collectionId = isCollectionView ? activeId : null;
@@ -149,12 +153,20 @@ const MainContent: React.FC<MainContentProps> = ({
     return result;
   }, [wallpapers, manageMode, isCollectionView, pendingRemovals, keyword, sortField, sortOrder]);
 
-  // 排序模式下使用 localOrder；管理模式下使用过滤排序后的列表；常态下直接使用后端排序
+  // 常态模式下基于 normalKeyword 过滤的壁纸列表
+  const normalFilteredWallpapers = useMemo(() => {
+    if (manageMode || sortMode) return wallpapers;
+    const kw = normalKeyword.trim().toLowerCase();
+    if (!kw) return wallpapers;
+    return wallpapers.filter((w) => w.name.toLowerCase().includes(kw));
+  }, [wallpapers, manageMode, sortMode, normalKeyword]);
+
+  // 排序模式下使用 localOrder；管理模式下使用过滤排序后的列表；常态下使用 normalKeyword 过滤
   const displayWallpapers = sortMode && localOrder
     ? localOrder
     : manageMode
       ? filteredWallpapers
-      : wallpapers;
+      : normalFilteredWallpapers;
   const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
 
   // dnd-kit sensor: 需要拖动 10px 才触发，避免和点击选择冲突
@@ -164,11 +176,29 @@ const MainContent: React.FC<MainContentProps> = ({
     }),
   );
 
+  // activeId 切换时清理常态搜索词
+  useEffect(() => {
+    setNormalKeyword("");
+    setSearchExpanded(false);
+  }, [activeId]);
+
+  // 导入完成时（loading: true → false）清理常态搜索词
+  const prevLoadingRef = useRef(loading);
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading) {
+      setNormalKeyword("");
+      setSearchExpanded(false);
+    }
+    prevLoadingRef.current = loading;
+  }, [loading]);
+
   const enterManageMode = useCallback(() => {
     setManageMode(true);
     setSelectedIds(new Set());
     setPendingRemovals([]);
     setKeyword("");
+    setNormalKeyword("");
+    setSearchExpanded(false);
     onManageModeChange?.(true);
   }, [onManageModeChange]);
 
@@ -232,7 +262,7 @@ const MainContent: React.FC<MainContentProps> = ({
   }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId]);
 
   const handleCardClick = useCallback(
-    (wp: Wallpaper, index: number, _e: React.MouseEvent) => {
+    (wp: Wallpaper, _index: number, _e: React.MouseEvent) => {
       if (sortMode) {
         // 排序模式下点击不做任何操作（仅拖拽有效）
         return;
@@ -241,10 +271,12 @@ const MainContent: React.FC<MainContentProps> = ({
         // 管理模式下点击即 toggle 选中状态（多选）
         toggleSelect(wp.id);
       } else {
-        onPreview(index);
+        // 常态模式：如果有搜索过滤，需要找到壁纸在原始列表中的真实索引
+        const realIndex = wallpapers.findIndex((w) => w.id === wp.id);
+        onPreview(realIndex !== -1 ? realIndex : _index);
       }
     },
-    [sortMode, manageMode, toggleSelect, onPreview],
+    [sortMode, manageMode, toggleSelect, onPreview, wallpapers],
   );
 
   const handleAddToCollection = useCallback(async (wallpaperId: number, collectionId: number) => {
@@ -257,6 +289,8 @@ const MainContent: React.FC<MainContentProps> = ({
 
   const handlePickerConfirm = useCallback(() => {
     setPickerOpen(false);
+    setNormalKeyword("");
+    setSearchExpanded(false);
     onCollectionChanged?.();
   }, [onCollectionChanged]);
 
@@ -265,6 +299,8 @@ const MainContent: React.FC<MainContentProps> = ({
     setSortMode(true);
     setLocalOrder([...wallpapers]);
     setOrderDirty(false);
+    setNormalKeyword("");
+    setSearchExpanded(false);
     onManageModeChange?.(true); // 通知外部进入特殊模式
   }, [wallpapers, onManageModeChange]);
 
@@ -482,6 +518,54 @@ const MainContent: React.FC<MainContentProps> = ({
 
             <div className="flex-1" />
 
+            {/* 常态搜索框（可折叠） */}
+            {!isEmpty && (
+              <div className="flex items-center">
+                {searchExpanded ? (
+                  <div className="relative animate-in fade-in slide-in-from-right-2 duration-200">
+                    <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      autoFocus
+                      value={normalKeyword}
+                      onChange={(e) => setNormalKeyword(e.target.value)}
+                      placeholder={t("grid.searchPlaceholder")}
+                      className="h-7 w-44 pl-7 pr-7 text-xs"
+                      onBlur={() => {
+                        if (!normalKeyword) setSearchExpanded(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          setNormalKeyword("");
+                          setSearchExpanded(false);
+                        }
+                      }}
+                    />
+                    {normalKeyword && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNormalKeyword("");
+                          setSearchExpanded(false);
+                        }}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSearchExpanded(true)}
+                    className="gap-1.5 text-muted-foreground"
+                  >
+                    <Search className="size-3.5" />
+                  </Button>
+                )}
+              </div>
+            )}
+
             {/* 收藏夹视图：拖拽排序按钮 */}
             {!isEmpty && isCollectionView && (
               <Button
@@ -555,6 +639,11 @@ const MainContent: React.FC<MainContentProps> = ({
             : t("main.total", { count: displayWallpapers.length })}
         </span>
         {manageMode && keyword && displayWallpapers.length !== wallpapers.length && (
+          <span className="ml-2 text-xs text-muted-foreground">
+            {t("grid.filterResult", { filtered: displayWallpapers.length, total: wallpapers.length })}
+          </span>
+        )}
+        {!manageMode && !sortMode && normalKeyword && displayWallpapers.length !== wallpapers.length && (
           <span className="ml-2 text-xs text-muted-foreground">
             {t("grid.filterResult", { filtered: displayWallpapers.length, total: wallpapers.length })}
           </span>

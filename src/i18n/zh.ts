@@ -143,6 +143,8 @@ export default {
 
   // WallpaperGrid / FilterBar
   grid: {
+    selectAll: "全选",
+    clearSelection: "取消全选",
     searchPlaceholder: "搜索壁纸...",
     sortByDate: "按时间",
     sortByName: "按名称",

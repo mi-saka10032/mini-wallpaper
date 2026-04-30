@@ -143,6 +143,8 @@ export default {
 
   // WallpaperGrid / FilterBar
   grid: {
+    selectAll: "Select All",
+    clearSelection: "Deselect All",
     searchPlaceholder: "Search wallpapers...",
     sortByDate: "By Date",
     sortByName: "By Name",

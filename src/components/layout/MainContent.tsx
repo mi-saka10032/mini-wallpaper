@@ -66,6 +66,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog";
+import { sortWallpapers } from "@/components/wallpaper/WallpaperGrid";
+import type { SortField, SortOrder } from "@/components/wallpaper/WallpaperGrid";
 import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import { addWallpapers, removeWallpapers, reorderWallpapers } from "@/api/collectionWallpaper";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
@@ -106,8 +108,8 @@ const MainContent: React.FC<MainContentProps> = ({
 
   // 搜索 + 排序状态
   const [keyword, setKeyword] = useState("");
-  const [sortField, setSortField] = useState<"name" | "created_at" | "file_size" | "type">("created_at");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [sortField, setSortField] = useState<SortField>("created_at");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
 
   const isCollectionView = activeId > 0;
   const collectionId = isCollectionView ? activeId : null;
@@ -121,26 +123,8 @@ const MainContent: React.FC<MainContentProps> = ({
       const kw = keyword.trim().toLowerCase();
       result = result.filter((w) => w.name.toLowerCase().includes(kw));
     }
-    // 排序
-    const sorted = [...result].sort((a, b) => {
-      let cmp = 0;
-      switch (sortField) {
-        case "name":
-          cmp = a.name.localeCompare(b.name, undefined, { numeric: true });
-          break;
-        case "created_at":
-          cmp = a.created_at.localeCompare(b.created_at);
-          break;
-        case "file_size":
-          cmp = (a.file_size ?? 0) - (b.file_size ?? 0);
-          break;
-        case "type":
-          cmp = a.type.localeCompare(b.type);
-          break;
-      }
-      return sortOrder === "asc" ? cmp : -cmp;
-    });
-    return sorted;
+    // 排序（复用 WallpaperGrid 的排序逻辑）
+    return sortWallpapers(result, sortField, sortOrder);
   }, [wallpapers, keyword, sortField, sortOrder]);
 
   // 拖拽排序时使用本地排序列表，否则用过滤排序后的列表

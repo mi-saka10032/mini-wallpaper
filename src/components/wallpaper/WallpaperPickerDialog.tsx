@@ -99,6 +99,7 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
             disabledIds={existingWallpaperIds}
             onSelectionChange={setSelectedIds}
             showFilter={true}
+            showSelectActions={true}
             className="h-full"
             emptyContent={
               availableCount === 0 ? (

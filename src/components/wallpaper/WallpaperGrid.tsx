@@ -37,6 +37,8 @@ export interface WallpaperGridProps {
   renderCard?: (wallpaper: Wallpaper, index: number) => React.ReactNode;
   /** 是否显示 FilterBar，默认 true */
   showFilter?: boolean;
+  /** 是否显示全选/取消全选操作栏（select 模式下有效），默认 false */
+  showSelectActions?: boolean;
   /** 空状态自定义内容 */
   emptyContent?: React.ReactNode;
   /** 额外的 className */
@@ -45,7 +47,7 @@ export interface WallpaperGridProps {
 
 // ============ 排序逻辑 ============
 
-function sortWallpapers(
+export function sortWallpapers(
   wallpapers: Wallpaper[],
   field: SortField,
   order: SortOrder,
@@ -82,9 +84,15 @@ interface FilterBarProps {
   onSortOrderChange: (order: SortOrder) => void;
   totalCount: number;
   filteredCount: number;
+  /** select 模式下的全选/取消全选操作 */
+  showSelectActions?: boolean;
+  selectedCount?: number;
+  selectableCount?: number;
+  onSelectAll?: () => void;
+  onClearSelection?: () => void;
 }
 
-const FilterBar: React.FC<FilterBarProps> = ({
+export const FilterBar: React.FC<FilterBarProps> = ({
   keyword,
   onKeywordChange,
   sortField,
@@ -93,11 +101,40 @@ const FilterBar: React.FC<FilterBarProps> = ({
   onSortOrderChange,
   totalCount,
   filteredCount,
+  showSelectActions = false,
+  selectedCount = 0,
+  selectableCount = 0,
+  onSelectAll,
+  onClearSelection,
 }) => {
   const { t } = useTranslation();
 
   return (
     <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+      {/* 全选/取消全选操作（select 模式） */}
+      {showSelectActions && (
+        <>
+          <button
+            type="button"
+            onClick={onSelectAll}
+            disabled={selectableCount === 0}
+            className="text-xs text-primary hover:underline disabled:text-muted-foreground disabled:no-underline"
+          >
+            {t("grid.selectAll")}
+          </button>
+          {selectedCount > 0 && (
+            <button
+              type="button"
+              onClick={onClearSelection}
+              className="text-xs text-primary hover:underline"
+            >
+              {t("grid.clearSelection")}
+            </button>
+          )}
+          <div className="mx-1 h-4 w-px bg-border" />
+        </>
+      )}
+
       {/* 搜索框 */}
       <div className="relative flex-1 max-w-xs">
         <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -252,6 +289,7 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
   onCardClick,
   renderCard,
   showFilter = true,
+  showSelectActions = false,
   emptyContent,
   className,
 }) => {
@@ -292,6 +330,21 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
     [selectedIds, onSelectionChange],
   );
 
+  // 全选：选中所有可选的（排除 disabled 的）
+  const selectableWallpapers = useMemo(
+    () => filteredWallpapers.filter((w) => !disabledIds.has(w.id)),
+    [filteredWallpapers, disabledIds],
+  );
+
+  const handleSelectAll = useCallback(() => {
+    const allIds = new Set(selectableWallpapers.map((w) => w.id));
+    onSelectionChange?.(allIds);
+  }, [selectableWallpapers, onSelectionChange]);
+
+  const handleClearSelection = useCallback(() => {
+    onSelectionChange?.(new Set());
+  }, [onSelectionChange]);
+
   const isEmpty = filteredWallpapers.length === 0;
 
   return (
@@ -307,6 +360,11 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
           onSortOrderChange={setSortOrder}
           totalCount={wallpapers.length}
           filteredCount={filteredWallpapers.length}
+          showSelectActions={showSelectActions && mode === "select"}
+          selectedCount={selectedIds.size}
+          selectableCount={selectableWallpapers.length}
+          onSelectAll={handleSelectAll}
+          onClearSelection={handleClearSelection}
         />
       )}
 

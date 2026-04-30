@@ -57,18 +57,24 @@ export const AppShell: React.FC = () => {
     init();
   }, [fetchSettings, fetchWallpapers, initMonitors]);
 
-  // Loading 阶段：只渲染 Loading 组件，不渲染主界面 DOM
-  if (!loadingExited) {
-    return (
-      <AppLoading finished={initDone} onExited={() => setLoadingExited(true)} />
-    );
-  }
-
-  // 初始化完成且 Loading 退出后，挂载 App 主体
-  return <App />;
+  return (
+    <>
+      {/* Loading 与 App 同时挂载，通过显隐切换避免白屏 */}
+      {!loadingExited && (
+        <AppLoading finished={initDone} onExited={() => setLoadingExited(true)} />
+      )}
+      <div
+        className={`transition-opacity duration-300 ${
+          loadingExited ? "opacity-100" : "invisible opacity-0"
+        }`}
+      >
+        <App hideBorder={!loadingExited} />
+      </div>
+    </>
+  );
 };
 
-const App: React.FC = () => {
+const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
   const { t } = useTranslation();
   useShortcuts();
   useMonitorHotPlug();
@@ -127,7 +133,9 @@ const App: React.FC = () => {
 
   return (
     <TooltipProvider>
-      <div className="relative h-screen w-screen overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl">
+      <div className={`relative h-screen w-screen overflow-hidden rounded-xl ${
+        hideBorder ? "" : "border border-border"
+      } bg-background text-foreground shadow-2xl`}>
         {/* 顶部工具栏 */}
         <div className="relative">
           <Toolbar onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />

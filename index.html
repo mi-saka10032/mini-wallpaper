@@ -8,14 +8,6 @@
   </head>
 
   <body>
-    <script>
-      // 防止主题闪烁：在 React 挂载前同步设置 dark class
-      (function() {
-        var theme = localStorage.getItem('mini-wallpaper-theme') || 'dark';
-        var isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        if (isDark) document.documentElement.classList.add('dark');
-      })();
-    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

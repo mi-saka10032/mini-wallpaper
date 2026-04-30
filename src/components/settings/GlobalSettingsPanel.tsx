@@ -2,14 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AppWindow,
   Download,
-  Globe,
   HardDrive,
   Keyboard,
-  Monitor,
-  Moon,
-  Palette,
   Power,
-  Sun,
   Upload,
   Volume2,
   VolumeX,
@@ -29,23 +24,14 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+
 import { Slider } from "@/components/ui/slider";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { DEFAULT_SHORTCUTS } from "@/hooks/useShortcuts";
-import { useTheme } from "@/hooks/useTheme";
-import AccentColorPicker from "@/components/settings/AccentColorPicker";
-import { changeLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /** 设置分组 ID */
-type SettingSection = "general" | "startup" | "tray" | "shortcuts" | "audio" | "backup";
+type SettingSection = "startup" | "tray" | "shortcuts" | "audio" | "backup";
 
 interface GlobalSettingsDialogProps {
   open: boolean;
@@ -56,8 +42,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
   open,
   onOpenChange,
 }) => {
-  const { t, i18n } = useTranslation();
-  const { theme, setTheme } = useTheme();
+  const { t } = useTranslation();
   const updateSetting = useSettingStore((s) => s.updateSetting);
   const volumeStr = useSettingStore(
     (s) => s.settings[SETTING_KEYS.GLOBAL_VOLUME],
@@ -66,7 +51,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
     (s) => s.settings[SETTING_KEYS.CLOSE_TO_TRAY],
   );
 
-  const [activeSection, setActiveSection] = useState<SettingSection>("general");
+  const [activeSection, setActiveSection] = useState<SettingSection>("startup");
 
   const volume = Number(volumeStr ?? "0");
   const isMuted = volume === 0;
@@ -76,21 +61,6 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
     (s) => s.settings[SETTING_KEYS.PAUSE_ON_FULLSCREEN],
   );
   const isPauseOnFullscreen = pauseOnFullscreen === "true";
-
-  const handleThemeChange = useCallback(
-    (value: string) => {
-      setTheme(value as "light" | "dark" | "system");
-    },
-    [setTheme],
-  );
-
-  const handleLanguageChange = useCallback(
-    (value: string) => {
-      changeLanguage(value);
-      updateSetting(SETTING_KEYS.LANGUAGE, value);
-    },
-    [updateSetting],
-  );
 
   const handleVolumeChange = useCallback(
     (value: number[]) => {
@@ -335,7 +305,6 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
 
   /** 侧边栏导航项 */
   const navItems: { id: SettingSection; icon: React.ElementType; labelKey: string }[] = [
-    { id: "general", icon: Palette, labelKey: "settings.navGeneral" },
     { id: "startup", icon: Power, labelKey: "settings.navStartup" },
     { id: "tray", icon: AppWindow, labelKey: "settings.navTray" },
     { id: "shortcuts", icon: Keyboard, labelKey: "settings.navShortcuts" },
@@ -376,65 +345,6 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
           {/* ===== 右侧设置面板 ===== */}
           <div className="flex-1 overflow-y-auto">
             <div className="px-6 py-5">
-              {activeSection === "general" && (
-                <div className="space-y-6">
-                  <h3 className="text-base font-semibold">{t("settings.navGeneral")}</h3>
-
-                  {/* 主题 */}
-                  <div className="space-y-3">
-                    <Label className="text-sm font-medium">{t("settings.theme")}</Label>
-                    <div className="flex gap-2">
-                      <Button
-                        variant={theme === "light" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => handleThemeChange("light")}
-                      >
-                        <Sun className="mr-1.5 size-3.5" />
-                        {t("settings.themeLight")}
-                      </Button>
-                      <Button
-                        variant={theme === "dark" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => handleThemeChange("dark")}
-                      >
-                        <Moon className="mr-1.5 size-3.5" />
-                        {t("settings.themeDark")}
-                      </Button>
-                      <Button
-                        variant={theme === "system" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => handleThemeChange("system")}
-                      >
-                        <Monitor className="mr-1.5 size-3.5" />
-                        {t("settings.themeSystem")}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* 主题色 */}
-                  <AccentColorPicker />
-
-                  <Separator />
-
-                  {/* 语言 */}
-                  <div className="space-y-3">
-                    <Label className="text-sm font-medium">{t("settings.language")}</Label>
-                    <Select value={i18n.resolvedLanguage || i18n.language || "zh"} onValueChange={handleLanguageChange}>
-                      <SelectTrigger className="w-full max-w-xs">
-                        <Globe className="mr-2 size-4 text-muted-foreground" />
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="zh">{t("language.zh")}</SelectItem>
-                        <SelectItem value="en">{t("language.en")}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              )}
-
               {activeSection === "startup" && (
                 <div className="space-y-6">
                   <h3 className="text-base font-semibold">{t("settings.navStartup")}</h3>

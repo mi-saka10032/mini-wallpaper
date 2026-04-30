@@ -13,6 +13,7 @@ pub mod keys {
     pub const DISPLAY_MODE: &str = "display_mode";
     pub const SHORTCUT_NEXT_WALLPAPER: &str = "shortcut_next_wallpaper";
     pub const SHORTCUT_PREV_WALLPAPER: &str = "shortcut_prev_wallpaper";
+    pub const ACCENT_COLOR: &str = "accent_color";
 }
 
 /// 已知的 setting key 白名单（由 keys 模块常量自动组成）
@@ -25,6 +26,7 @@ const VALID_KEYS: &[&str] = &[
     keys::DISPLAY_MODE,
     keys::SHORTCUT_NEXT_WALLPAPER,
     keys::SHORTCUT_PREV_WALLPAPER,
+    keys::ACCENT_COLOR,
 ];
 
 /// 允许的 display_mode 枚举值

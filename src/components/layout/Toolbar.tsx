@@ -5,6 +5,7 @@ import { useWallpaperStore } from "@/stores/wallpaperStore";
 import WindowControls from "./WindowControls";
 import ThemeToggle from "./ThemeToggle";
 import LanguageToggle from "./LanguageToggle";
+import AccentColorToggle from "./AccentColorToggle";
 
 interface ToolbarProps {
   onActiveIdChange: (id: number) => void;
@@ -41,6 +42,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
         </Button>
         <LanguageToggle />
         <ThemeToggle />
+        <AccentColorToggle />
         <WindowControls />
       </div>
     </div>

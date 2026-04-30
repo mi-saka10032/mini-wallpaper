@@ -95,7 +95,7 @@ const App: React.FC = () => {
       <div className="relative h-screen w-screen overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl">
         {/* 顶部工具栏 */}
         <div className="relative">
-          <Toolbar onActiveIdChange={setActiveId} />
+          <Toolbar onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
           {/* 管理模式蒙层 - 覆盖 Toolbar */}
           {manageMode && (
             <div className="absolute inset-0 z-40 rounded-t-xl bg-black/30" />
@@ -105,7 +105,7 @@ const App: React.FC = () => {
         <main className="flex h-[calc(100vh-48px)]">
           {/* 侧边栏 */}
           <div className="relative h-full shrink-0">
-            <Sidebar activeId={activeId} onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
+            <Sidebar activeId={activeId} onActiveIdChange={setActiveId} />
             {/* 管理模式蒙层 - 覆盖 Sidebar */}
             {manageMode && (
               <div className="absolute inset-0 z-40 bg-black/30" />

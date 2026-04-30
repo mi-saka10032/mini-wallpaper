@@ -1,6 +1,7 @@
-import { Monitor, Plus } from "lucide-react";
+import { Monitor, Plus, Sliders } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import WindowControls from "./WindowControls";
 import ThemeToggle from "./ThemeToggle";
@@ -9,9 +10,10 @@ import AccentColorToggle from "./AccentColorToggle";
 
 interface ToolbarProps {
   onActiveIdChange: (id: number) => void;
+  onOpenSettings: () => void;
 }
 
-const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
+const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange, onOpenSettings }) => {
   const { t } = useTranslation();
   const importWallpapers = useWallpaperStore((s) => s.importWallpapers);
 
@@ -40,6 +42,14 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
         <LanguageToggle />
         <ThemeToggle />
         <AccentColorToggle />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" className="size-8" onClick={onOpenSettings}>
+              <Sliders className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{t("sidebar.globalSettings")}</TooltipContent>
+        </Tooltip>
         <WindowControls />
       </div>
     </div>

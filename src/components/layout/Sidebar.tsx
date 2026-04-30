@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, Pencil, Plus, Sliders, Star, Trash2 } from "lucide-react";
+import { FolderOpen, Pencil, Plus, Star, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Separator } from "@/components/ui/separator";
@@ -35,10 +35,9 @@ import { useCollectionStore, type Collection } from "@/stores/collectionStore";
 interface SidebarProps {
   activeId: number;
   onActiveIdChange: (id: number) => void;
-  onOpenSettings: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeId, onActiveIdChange, onOpenSettings }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeId, onActiveIdChange }) => {
   const { t } = useTranslation();
   const collections = useCollectionStore((s) => s.collections);
   const fetchCollections = useCollectionStore((s) => s.fetchCollections);
@@ -193,17 +192,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeId, onActiveIdChange, onOpenSet
         </div>
       </div>
 
-      {/* 底部设置 */}
-      <div className="space-y-0.5 border-t border-border p-2">
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-base text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-        >
-          <Sliders className="size-4" />
-          <span>{t("sidebar.globalSettings")}</span>
-        </button>
-      </div>
+
 
       {/* 新建/重命名 Dialog */}
       <Dialog open={dialogMode !== null} onOpenChange={() => closeDialog()}>

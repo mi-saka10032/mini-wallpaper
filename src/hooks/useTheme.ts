@@ -18,7 +18,7 @@ export function useTheme() {
   );
   const updateSetting = useSettingStore((s) => s.updateSetting);
 
-  const [theme, setThemeState] = useState<Theme>(storedTheme || "dark");
+  const [theme, setThemeState] = useState<Theme>(storedTheme || "system");
 
   // 当 store 中的 theme 变化时同步
   useEffect(() => {
@@ -26,7 +26,9 @@ export function useTheme() {
       setThemeState(storedTheme);
       applyTheme(storedTheme);
     }
-  }, [storedTheme]);
+  }, [
+    
+  ]);
 
   const setTheme = useCallback(
     (newTheme: Theme) => {

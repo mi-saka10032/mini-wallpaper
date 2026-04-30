@@ -13,7 +13,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 interface WallpaperPickerDrawerProps {
@@ -100,7 +99,7 @@ const WallpaperPickerDrawer: React.FC<WallpaperPickerDrawerProps> = ({
         </div>
 
         {/* 壁纸列表 */}
-        <ScrollArea className="flex-1">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {availableWallpapers.length === 0 ? (
             <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
               {t("picker.allAdded")}
@@ -117,7 +116,7 @@ const WallpaperPickerDrawer: React.FC<WallpaperPickerDrawerProps> = ({
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
 
         {/* 底部操作 */}
         <SheetFooter className="border-t border-border px-4 py-3">

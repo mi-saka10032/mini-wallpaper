@@ -16,7 +16,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -271,7 +270,7 @@ const MonitorSettingsPanel: React.FC = () => {
         </Button>
       </div>
 
-      <ScrollArea className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto">
         <div className="space-y-6 px-6 py-5">
           {/* ===== 显示器可视化 ===== */}
           {loading && activeConfigs.length === 0 ? (
@@ -662,7 +661,7 @@ const MonitorSettingsPanel: React.FC = () => {
             </>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 };

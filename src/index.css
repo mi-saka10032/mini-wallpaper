@@ -100,7 +100,43 @@
 @layer base {
   * {
     @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
   }
+  *:hover {
+    scrollbar-color: oklch(0.6 0 0 / 0.3) transparent;
+  }
+  .dark *:hover {
+    scrollbar-color: oklch(0.8 0 0 / 0.25) transparent;
+  }
+
+  /* Webkit 滚动条样式 (Chromium / WebView2) */
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 3px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+    transition: background 0.2s;
+  }
+  *:hover::-webkit-scrollbar-thumb {
+    background: oklch(0.6 0 0 / 0.3);
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.5 0 0 / 0.5);
+  }
+  .dark *:hover::-webkit-scrollbar-thumb {
+    background: oklch(0.8 0 0 / 0.25);
+  }
+  .dark *::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.85 0 0 / 0.4);
+  }
+
   body {
     @apply bg-background text-foreground;
   }

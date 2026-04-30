@@ -66,6 +66,7 @@ interface MainContentProps {
   wallpapers: Wallpaper[];
   onPreview: (index: number) => void;
   onCollectionChanged?: () => void;
+  onManageModeChange?: (active: boolean) => void;
 }
 
 const MainContent: React.FC<MainContentProps> = ({
@@ -73,6 +74,7 @@ const MainContent: React.FC<MainContentProps> = ({
   wallpapers,
   onPreview,
   onCollectionChanged,
+  onManageModeChange,
 }) => {
   const { t } = useTranslation();
   const loading = useWallpaperStore((s) => s.loading);
@@ -109,12 +111,13 @@ const MainContent: React.FC<MainContentProps> = ({
   const enterManageMode = useCallback(() => {
     setManageMode(true);
     setSelectedIds(new Set());
+    onManageModeChange?.(true);
     // 收藏夹模式进入管理时，初始化本地排序副本
     if (activeId > 0) {
       setLocalOrder([...wallpapers]);
       setOrderDirty(false);
     }
-  }, [activeId, wallpapers]);
+  }, [activeId, wallpapers, onManageModeChange]);
 
   const exitManageMode = useCallback(async () => {
     // 退出管理模式时，如果排序有变更，持久化到后端
@@ -130,28 +133,22 @@ const MainContent: React.FC<MainContentProps> = ({
     setSelectedIds(new Set());
     setLocalOrder(null);
     setOrderDirty(false);
-  }, [isCollectionView, collectionId, orderDirty, localOrder, onCollectionChanged]);
+    onManageModeChange?.(false);
+  }, [isCollectionView, collectionId, orderDirty, localOrder, onCollectionChanged, onManageModeChange]);
 
   const cancelManageMode = useCallback(() => {
     setManageMode(false);
     setSelectedIds(new Set());
     setLocalOrder(null);
     setOrderDirty(false);
-  }, []);
+    onManageModeChange?.(false);
+  }, [onManageModeChange]);
 
-  const toggleSelect = useCallback((id: number, ctrlKey: boolean) => {
+  const toggleSelect = useCallback((id: number) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (ctrlKey) {
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-      } else {
-        if (next.size === 1 && next.has(id)) next.clear();
-        else {
-          next.clear();
-          next.add(id);
-        }
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
@@ -190,7 +187,8 @@ const MainContent: React.FC<MainContentProps> = ({
   const handleCardClick = useCallback(
     (wp: Wallpaper, index: number, e: React.MouseEvent) => {
       if (manageMode) {
-        toggleSelect(wp.id, e.ctrlKey || e.metaKey);
+        // 管理模式下点击即 toggle 选中状态（多选）
+        toggleSelect(wp.id);
       } else {
         onPreview(index);
       }
@@ -573,10 +571,11 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
         if (!isDragging) onClick(wallpaper, index, e);
       }}
     >
-      {/* 拖拽手柄（收藏夹管理模式） */}
+      {/* 拖拽手柄（收藏夹管理模式），阻止点击冒泡以避免触发选中 */}
       {manageMode && isCollectionView && dragHandleProps && (
         <div
           {...dragHandleProps}
+          onClick={(e) => e.stopPropagation()}
           className="absolute right-1.5 bottom-8 z-20 flex size-6 cursor-grab items-center justify-center rounded bg-black/40 text-white opacity-0 transition-opacity active:cursor-grabbing group-hover:opacity-100"
         >
           <GripVertical className="size-3.5" />

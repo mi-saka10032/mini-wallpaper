@@ -12,6 +12,7 @@ import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
 import { useWebGuard } from "@/hooks/useWebGuard";
+import { useAccentColor } from "@/hooks/useAccentColor";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
@@ -23,6 +24,7 @@ const App: React.FC = () => {
   useShortcuts();
   useMonitorHotPlug();
   useWebGuard();
+  useAccentColor(); // 初始化主题色（启动时应用持久化的 accent color）
   const initMonitors = useMonitorConfigStore((s) => s.init);
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);
@@ -36,6 +38,9 @@ const App: React.FC = () => {
 
   // 全局设置 Dialog
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // 管理模式状态（用于蒙层遮挡）
+  const [manageMode, setManageMode] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -85,9 +90,25 @@ const App: React.FC = () => {
   return (
     <TooltipProvider>
       <div className="relative h-screen w-screen overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl">
-        <Toolbar onActiveIdChange={setActiveId} />
+        {/* 顶部工具栏 */}
+        <div className="relative">
+          <Toolbar onActiveIdChange={setActiveId} />
+          {/* 管理模式蒙层 - 覆盖 Toolbar */}
+          {manageMode && (
+            <div className="absolute inset-0 z-40 rounded-t-xl bg-black/30" />
+          )}
+        </div>
+
         <main className="flex h-[calc(100vh-48px)]">
-          <Sidebar activeId={activeId} onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
+          {/* 侧边栏 */}
+          <div className="relative h-full shrink-0">
+            <Sidebar activeId={activeId} onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
+            {/* 管理模式蒙层 - 覆盖 Sidebar */}
+            {manageMode && (
+              <div className="absolute inset-0 z-40 bg-black/30" />
+            )}
+          </div>
+
           {activeId === -1 ? (
             <div className="flex-1 overflow-hidden">
               <MonitorSettingsPanel />
@@ -98,6 +119,7 @@ const App: React.FC = () => {
               wallpapers={viewWallpapers}
               onPreview={openPreview}
               onCollectionChanged={refreshCollectionView}
+              onManageModeChange={setManageMode}
             />
           )}
         </main>

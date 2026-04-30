@@ -4,6 +4,7 @@ import { getSettings, setSetting } from "@/api/appSetting";
 /** 设置 key 常量 */
 export const SETTING_KEYS = {
   THEME: "theme",
+  ACCENT_COLOR: "accent_color",
   LANGUAGE: "language",
   CLOSE_TO_TRAY: "close_to_tray",
   PAUSE_ON_FULLSCREEN: "pause_on_fullscreen",

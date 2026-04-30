@@ -28,7 +28,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -41,6 +40,7 @@ import { Slider } from "@/components/ui/slider";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { DEFAULT_SHORTCUTS } from "@/hooks/useShortcuts";
 import { useTheme } from "@/hooks/useTheme";
+import AccentColorPicker from "@/components/settings/AccentColorPicker";
 import { changeLanguage } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -374,7 +374,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
           </nav>
 
           {/* ===== 右侧设置面板 ===== */}
-          <ScrollArea className="flex-1">
+          <div className="flex-1 overflow-y-auto">
             <div className="px-6 py-5">
               {activeSection === "general" && (
                 <div className="space-y-6">
@@ -413,10 +413,15 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
 
                   <Separator />
 
+                  {/* 主题色 */}
+                  <AccentColorPicker />
+
+                  <Separator />
+
                   {/* 语言 */}
                   <div className="space-y-3">
                     <Label className="text-sm font-medium">{t("settings.language")}</Label>
-                    <Select value={i18n.language} onValueChange={handleLanguageChange}>
+                    <Select value={i18n.resolvedLanguage || i18n.language || "zh"} onValueChange={handleLanguageChange}>
                       <SelectTrigger className="w-full max-w-xs">
                         <Globe className="mr-2 size-4 text-muted-foreground" />
                         <SelectValue />
@@ -676,7 +681,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                 </div>
               )}
             </div>
-          </ScrollArea>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

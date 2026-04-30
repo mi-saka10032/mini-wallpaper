@@ -134,10 +134,31 @@ export default {
     hours: "{{count}}h",
   },
 
+  // AccentColor
+  accentColor: {
+    default: "Default",
+    blue: "Blue",
+    purple: "Purple",
+    pink: "Pink",
+    red: "Red",
+    orange: "Orange",
+    green: "Green",
+    teal: "Teal",
+    cyan: "Cyan",
+    custom: "Custom",
+    customTitle: "Custom Accent Color",
+    customActive: "Custom color",
+    hue: "Hue",
+    saturation: "Saturation",
+    apply: "Apply",
+    reset: "Reset",
+  },
+
   // GlobalSettingsPanel
   settings: {
     title: "Global Settings",
     navGeneral: "General",
+    accentColor: "Accent Color",
     navStartup: "Startup",
     navTray: "System Tray",
     navShortcuts: "Shortcuts",

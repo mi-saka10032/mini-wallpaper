@@ -134,10 +134,31 @@ export default {
     hours: "{{count}} 小时",
   },
 
+  // AccentColor
+  accentColor: {
+    default: "默认",
+    blue: "蓝色",
+    purple: "紫色",
+    pink: "粉色",
+    red: "红色",
+    orange: "橙色",
+    green: "绿色",
+    teal: "青绿",
+    cyan: "天蓝",
+    custom: "自定义",
+    customTitle: "自定义主题色",
+    customActive: "自定义颜色",
+    hue: "色相",
+    saturation: "饱和度",
+    apply: "应用",
+    reset: "重置",
+  },
+
   // GlobalSettingsPanel
   settings: {
     title: "全局设置",
     navGeneral: "通用",
+    accentColor: "主题色",
     navStartup: "启动",
     navTray: "系统托盘",
     navShortcuts: "快捷键",

@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { Wallpaper } from "@/api/config";
+import VirtualGrid from "./VirtualGrid";
 
 // ============ 类型定义 ============
 
@@ -369,7 +370,7 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
       )}
 
       {/* 网格内容 */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-hidden p-4">
         {isEmpty ? (
           emptyContent || (
             <div className="flex h-full min-h-40 items-center justify-center">
@@ -379,12 +380,14 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
             </div>
           )
         ) : (
-          <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">
-            {filteredWallpapers.map((wp, index) => {
+          <VirtualGrid
+            items={filteredWallpapers}
+            getKey={(wp) => wp.id}
+            className="h-full"
+            renderItem={(wp, index) => {
               if (mode === "select") {
                 return (
                   <SelectableCard
-                    key={wp.id}
                     wallpaper={wp}
                     selected={selectedIds.has(wp.id)}
                     disabled={disabledIds.has(wp.id)}
@@ -400,13 +403,12 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
 
               return (
                 <BrowseCard
-                  key={wp.id}
                   wallpaper={wp}
                   onClick={() => onCardClick?.(wp, index)}
                 />
               );
-            })}
-          </div>
+            }}
+          />
         )}
       </div>
     </div>

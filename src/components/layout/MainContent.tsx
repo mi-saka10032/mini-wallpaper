@@ -69,6 +69,7 @@ import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog"
 import { sortWallpapers } from "@/components/wallpaper/WallpaperGrid";
 import type { SortField, SortOrder } from "@/components/wallpaper/WallpaperGrid";
 import ImportDropCard from "@/components/wallpaper/ImportDropCard";
+import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { addWallpapers, removeWallpapers, reorderWallpapers } from "@/api/collectionWallpaper";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
@@ -384,39 +385,48 @@ const MainContent: React.FC<MainContentProps> = ({
   // 原始条件：activeId === 0 && !manageMode
   const showImportCard = false;
 
-  const gridContent = (
+  // 排序模式下的网格内容（dnd-kit 需要所有 DOM 在文档中，不能虚拟化）
+  const sortableGridContent = (
     <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">
-      {displayWallpapers.map((wp, index) =>
-        isDragEnabled ? (
-          <SortableWallpaperCard
-            key={wp.id}
-            wallpaper={wp}
-            index={index}
-            activeId={activeId}
-            manageMode={manageMode}
-            selected={selectedIds.has(wp.id)}
-            isCollectionView={isCollectionView}
-            onClick={handleCardClick}
-            onDelete={(id) => handleDeleteRequest([id])}
-            onAddToCollection={handleAddToCollection}
-          />
-        ) : (
-          <WallpaperCard
-            key={wp.id}
-            wallpaper={wp}
-            index={index}
-            activeId={activeId}
-            manageMode={manageMode}
-            selected={selectedIds.has(wp.id)}
-            isCollectionView={isCollectionView}
-            onClick={handleCardClick}
-            onDelete={(id) => handleDeleteRequest([id])}
-            onAddToCollection={handleAddToCollection}
-          />
-        ),
-      )}
-      {showImportCard && <ImportDropCard />}
+      {displayWallpapers.map((wp, index) => (
+        <SortableWallpaperCard
+          key={wp.id}
+          wallpaper={wp}
+          index={index}
+          activeId={activeId}
+          manageMode={manageMode}
+          selected={selectedIds.has(wp.id)}
+          isCollectionView={isCollectionView}
+          onClick={handleCardClick}
+          onDelete={(id) => handleDeleteRequest([id])}
+          onAddToCollection={handleAddToCollection}
+        />
+      ))}
     </div>
+  );
+
+  // 非排序模式下的网格内容（支持虚拟滚动）
+  const virtualGridContent = (
+    <VirtualGrid
+      items={displayWallpapers}
+      getKey={(wp) => wp.id}
+      className="h-full p-4"
+      forceDisable={false}
+      trailingElement={showImportCard ? <ImportDropCard /> : undefined}
+      renderItem={(wp, index) => (
+        <WallpaperCard
+          wallpaper={wp}
+          index={index}
+          activeId={activeId}
+          manageMode={manageMode}
+          selected={selectedIds.has(wp.id)}
+          isCollectionView={isCollectionView}
+          onClick={handleCardClick}
+          onDelete={(id) => handleDeleteRequest([id])}
+          onAddToCollection={handleAddToCollection}
+        />
+      )}
+    />
   );
 
   return (
@@ -627,7 +637,11 @@ const MainContent: React.FC<MainContentProps> = ({
       </div>
 
       {/* 内容区 */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className={cn(
+        "flex-1 overflow-hidden",
+        // 非虚拟滚动场景（loading/空状态/排序模式）需要自身滚动 + padding
+        (loading || isEmpty || displayWallpapers.length === 0 || isDragEnabled) && "overflow-y-auto p-4",
+      )}>
         {loading ? (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-muted-foreground">{t("main.importing")}</p>
@@ -655,11 +669,11 @@ const MainContent: React.FC<MainContentProps> = ({
             onDragEnd={handleDragEnd}
           >
             <SortableContext items={wallpaperIds} strategy={rectSortingStrategy}>
-              {gridContent}
+              {sortableGridContent}
             </SortableContext>
           </DndContext>
         ) : (
-          gridContent
+          virtualGridContent
         )}
       </div>
 

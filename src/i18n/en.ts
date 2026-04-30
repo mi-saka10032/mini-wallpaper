@@ -56,6 +56,7 @@ export default {
     selectedTotal: "{{selected}} / {{total}} selected",
     orderModified: "· Order changed, click Done to save",
     pendingRemovals: "· {{count}} item(s) pending removal",
+    pendingDeletions: "· {{count}} item(s) pending deletion",
     sortWallpapers: "Sort",
     sortModeHint: "Drag cards to reorder",
     save: "Save",

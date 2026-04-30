@@ -106,8 +106,11 @@ const MainContent: React.FC<MainContentProps> = ({
   const [localOrder, setLocalOrder] = useState<Wallpaper[] | null>(null);
   const [orderDirty, setOrderDirty] = useState(false);
 
-  // 收藏夹管理模式下延迟删除的壁纸 ID 列表（退出时批量持久化）
+  // 收藏夹管理模式下延迟移除的壁纸 ID 列表（退出时批量持久化）
   const [pendingRemovals, setPendingRemovals] = useState<number[]>([]);
+
+  // 本地壁纸管理模式下延迟删除的壁纸 ID 列表（退出时批量持久化）
+  const [pendingDeletions, setPendingDeletions] = useState<number[]>([]);
 
   // 添加壁纸到收藏夹的 picker
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -129,10 +132,13 @@ const MainContent: React.FC<MainContentProps> = ({
   const filteredWallpapers = useMemo(() => {
     if (!manageMode) return wallpapers;
     // 管理模式下基于 wallpapers 进行过滤排序
-    // 收藏夹视图需要排除已标记删除的项
+    // 收藏夹视图需要排除已标记移除的项；本地壁纸视图需要排除已标记删除的项
     let source = wallpapers;
     if (isCollectionView && pendingRemovals.length > 0) {
       source = source.filter((w) => !pendingRemovals.includes(w.id));
+    }
+    if (!isCollectionView && pendingDeletions.length > 0) {
+      source = source.filter((w) => !pendingDeletions.includes(w.id));
     }
 
     // 无搜索且默认排序时，直接返回源列表
@@ -151,7 +157,7 @@ const MainContent: React.FC<MainContentProps> = ({
       result = sortWallpapers(result, sortField, sortOrder);
     }
     return result;
-  }, [wallpapers, manageMode, isCollectionView, pendingRemovals, keyword, sortField, sortOrder]);
+  }, [wallpapers, manageMode, isCollectionView, pendingRemovals, pendingDeletions, keyword, sortField, sortOrder]);
 
   // 常态模式下基于 normalKeyword 过滤的壁纸列表
   const normalFilteredWallpapers = useMemo(() => {
@@ -196,6 +202,7 @@ const MainContent: React.FC<MainContentProps> = ({
     setManageMode(true);
     setSelectedIds(new Set());
     setPendingRemovals([]);
+    setPendingDeletions([]);
     setKeyword("");
     setNormalKeyword("");
     setSearchExpanded(false);
@@ -211,17 +218,26 @@ const MainContent: React.FC<MainContentProps> = ({
         console.error("[exitManageMode]", e);
       }
     }
+    if (!isCollectionView && pendingDeletions.length > 0) {
+      try {
+        await deleteWallpapers(pendingDeletions);
+      } catch (e) {
+        console.error("[exitManageMode] delete wallpapers failed:", e);
+      }
+    }
     setManageMode(false);
     setSelectedIds(new Set());
     setPendingRemovals([]);
+    setPendingDeletions([]);
     setKeyword("");
     onManageModeChange?.(false);
-  }, [isCollectionView, collectionId, pendingRemovals, onCollectionChanged, onManageModeChange]);
+  }, [isCollectionView, collectionId, pendingRemovals, pendingDeletions, deleteWallpapers, onCollectionChanged, onManageModeChange]);
 
   const cancelManageMode = useCallback(() => {
     setManageMode(false);
     setSelectedIds(new Set());
     setPendingRemovals([]);
+    setPendingDeletions([]);
     setKeyword("");
     onManageModeChange?.(false);
   }, [onManageModeChange]);
@@ -244,22 +260,38 @@ const MainContent: React.FC<MainContentProps> = ({
   }, []);
 
   const handleDeleteRequest = useCallback((ids: number[]) => {
-    setPendingDeleteIds(ids);
-    setDeleteDialogOpen(true);
-  }, []);
+    if (manageMode) {
+      // 管理模式下：不弹确认框，直接加入 pending 列表
+      if (isCollectionView) {
+        setPendingRemovals((prev) => [...prev, ...ids]);
+      } else {
+        setPendingDeletions((prev) => [...prev, ...ids]);
+      }
+      // 清除已选中的项（如果是通过选中后点击删除按钮触发的）
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      // 常态模式下：弹出确认对话框
+      setPendingDeleteIds(ids);
+      setDeleteDialogOpen(true);
+    }
+  }, [manageMode, isCollectionView]);
 
   const handleDeleteConfirm = useCallback(async () => {
+    // 仅常态模式下使用：确认后立即执行 API
     if (isCollectionView && collectionId !== null) {
-      // 收藏夹视图：延迟删除，仅记录待删除 ID
-      setPendingRemovals((prev) => [...prev, ...pendingDeleteIds]);
+      await removeWallpapers(collectionId, pendingDeleteIds);
+      onCollectionChanged?.();
     } else {
-      // 全部壁纸视图：彻底删除文件（立即执行）
       await deleteWallpapers(pendingDeleteIds);
     }
     setPendingDeleteIds([]);
     setDeleteDialogOpen(false);
     setSelectedIds(new Set());
-  }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId]);
+  }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId, onCollectionChanged]);
 
   const handleCardClick = useCallback(
     (wp: Wallpaper, _index: number, _e: React.MouseEvent) => {
@@ -651,6 +683,11 @@ const MainContent: React.FC<MainContentProps> = ({
         {manageMode && pendingRemovals.length > 0 && (
           <span className="ml-2 text-xs text-orange-500">
             {t("main.pendingRemovals", { count: pendingRemovals.length })}
+          </span>
+        )}
+        {manageMode && pendingDeletions.length > 0 && (
+          <span className="ml-2 text-xs text-orange-500">
+            {t("main.pendingDeletions", { count: pendingDeletions.length })}
           </span>
         )}
       </div>

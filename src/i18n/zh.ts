@@ -56,6 +56,7 @@ export default {
     selectedTotal: "已选 {{selected}} / 共 {{total}} 项",
     orderModified: "· 排序已修改，点击「完成」保存",
     pendingRemovals: "· {{count}} 项待移除",
+    pendingDeletions: "· {{count}} 项待删除",
     sortWallpapers: "排序",
     sortModeHint: "拖拽卡片调整顺序",
     save: "保存",

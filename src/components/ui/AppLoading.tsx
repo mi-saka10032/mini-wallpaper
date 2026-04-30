@@ -9,13 +9,21 @@ interface AppLoadingProps {
 
 /**
  * App 启动 Loading 组件
- * - 透明背景，无其他 UI 元素
+ * - 窗口完全透明，仅显示 loading 动画元素
  * - 3D Q弹球体动画
- * - 初始化完成后 fade-out 退出
+ * - 初始化完成后 fade-out 退出，恢复 body 背景
  */
 const AppLoading: React.FC<AppLoadingProps> = ({ finished, onExited }) => {
   const [exiting, setExiting] = useState(false);
   const [removed, setRemoved] = useState(false);
+
+  // 挂载时让 body 透明，卸载/退出时恢复
+  useEffect(() => {
+    document.body.classList.add("loading-transparent");
+    return () => {
+      document.body.classList.remove("loading-transparent");
+    };
+  }, []);
 
   useEffect(() => {
     if (finished) {
@@ -23,6 +31,8 @@ const AppLoading: React.FC<AppLoadingProps> = ({ finished, onExited }) => {
       setExiting(true);
       const timer = setTimeout(() => {
         setRemoved(true);
+        // 先恢复 body 背景，再通知外层
+        document.body.classList.remove("loading-transparent");
         onExited?.();
       }, 500); // 退出动画持续 500ms
       return () => clearTimeout(timer);
@@ -57,14 +67,14 @@ const AppLoading: React.FC<AppLoadingProps> = ({ finished, onExited }) => {
           border-radius: 50%;
           background: linear-gradient(
             135deg,
-            hsl(var(--primary-hue, 220) 70% 60%) 0%,
-            hsl(var(--primary-hue, 220) 80% 45%) 100%
+            hsl(220 80% 65%) 0%,
+            hsl(260 75% 55%) 100%
           );
-          background: var(--primary);
           box-shadow:
-            0 4px 12px oklch(0.5 0.1 250 / 0.3),
-            inset 0 -3px 6px oklch(0.3 0.05 250 / 0.2),
-            inset 0 3px 6px oklch(0.9 0.02 250 / 0.4);
+            0 4px 14px hsla(240, 70%, 50%, 0.4),
+            0 0 20px hsla(240, 70%, 60%, 0.2),
+            inset 0 -3px 6px hsla(240, 50%, 30%, 0.3),
+            inset 0 3px 6px hsla(240, 50%, 90%, 0.4);
           animation: bounce3d 0.8s cubic-bezier(0.28, 0.84, 0.42, 1) infinite alternate;
           transform-style: preserve-3d;
         }
@@ -73,9 +83,10 @@ const AppLoading: React.FC<AppLoadingProps> = ({ finished, onExited }) => {
           0% {
             transform: translateY(0) scale(1, 1) rotateX(0deg);
             box-shadow:
-              0 4px 12px oklch(0.5 0.1 250 / 0.3),
-              inset 0 -3px 6px oklch(0.3 0.05 250 / 0.2),
-              inset 0 3px 6px oklch(0.9 0.02 250 / 0.4);
+              0 4px 14px hsla(240, 70%, 50%, 0.4),
+              0 0 20px hsla(240, 70%, 60%, 0.2),
+              inset 0 -3px 6px hsla(240, 50%, 30%, 0.3),
+              inset 0 3px 6px hsla(240, 50%, 90%, 0.4);
           }
           30% {
             transform: translateY(-20px) scale(0.9, 1.1) rotateX(20deg);
@@ -89,9 +100,10 @@ const AppLoading: React.FC<AppLoadingProps> = ({ finished, onExited }) => {
           100% {
             transform: translateY(0) scale(1.15, 0.85) rotateX(0deg);
             box-shadow:
-              0 2px 6px oklch(0.5 0.1 250 / 0.15),
-              inset 0 -2px 4px oklch(0.3 0.05 250 / 0.15),
-              inset 0 2px 4px oklch(0.9 0.02 250 / 0.3);
+              0 2px 8px hsla(240, 70%, 50%, 0.2),
+              0 0 12px hsla(240, 70%, 60%, 0.1),
+              inset 0 -2px 4px hsla(240, 50%, 30%, 0.2),
+              inset 0 2px 4px hsla(240, 50%, 90%, 0.3);
           }
         }
       `}</style>

@@ -140,6 +140,10 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Loading 阶段：body 背景透明，让 Tauri transparent 窗口穿透可见桌面 */
+  body.loading-transparent {
+    background: transparent !important;
+  }
   /* 壁纸窗口：body 背景透明，确保 Tauri transparent 窗口生效 */
   body.wallpaper-body {
     background: transparent !important;

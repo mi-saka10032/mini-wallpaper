@@ -1,5 +1,5 @@
 import { createBrowserRouter } from "react-router-dom";
-import App from "@/App";
+import { AppShell } from "@/App";
 import WallpaperRenderer from "@/WallpaperRenderer";
 
 /**
@@ -10,7 +10,7 @@ import WallpaperRenderer from "@/WallpaperRenderer";
 const router = createBrowserRouter([
   {
     path: "/",
-    element: <App />,
+    element: <AppShell />,
   },
   {
     path: "/wallpaper",

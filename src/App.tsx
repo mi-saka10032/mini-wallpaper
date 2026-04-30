@@ -20,6 +20,53 @@ import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
+import AppLoading from "@/components/ui/AppLoading";
+
+/**
+ * AppShell - 外层容器，负责初始化逻辑
+ * 初始化完成前只渲染 Loading，完成后才挂载 App 主体
+ */
+export const AppShell: React.FC = () => {
+  const [initDone, setInitDone] = useState(false);
+  const [loadingExited, setLoadingExited] = useState(false);
+
+  const fetchSettings = useSettingStore((s) => s.fetchSettings);
+  const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);
+  const initMonitors = useMonitorConfigStore((s) => s.init);
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        await Promise.all([
+          fetchSettings(),
+          fetchWallpapers(),
+          initMonitors(),
+          invoke(COMMANDS.INIT_FULLSCREEN_DETECTION).catch((e) =>
+            console.error("[initFullscreenDetection]", e),
+          ),
+        ]);
+        // 初始化完成后立即同步语言，避免 App 挂载时出现语言闪烁
+        const lang = useSettingStore.getState().settings[SETTING_KEYS.LANGUAGE];
+        if (lang) changeLanguage(lang);
+      } catch (e) {
+        console.error("[App init]", e);
+      } finally {
+        setInitDone(true);
+      }
+    };
+    init();
+  }, [fetchSettings, fetchWallpapers, initMonitors]);
+
+  // Loading 阶段：只渲染 Loading 组件，不渲染主界面 DOM
+  if (!loadingExited) {
+    return (
+      <AppLoading finished={initDone} onExited={() => setLoadingExited(true)} />
+    );
+  }
+
+  // 初始化完成且 Loading 退出后，挂载 App 主体
+  return <App />;
+};
 
 const App: React.FC = () => {
   const { t } = useTranslation();
@@ -27,16 +74,14 @@ const App: React.FC = () => {
   useMonitorHotPlug();
   useWebGuard();
   useAccentColor(); // 初始化主题色（启动时应用持久化的 accent color）
-  const initMonitors = useMonitorConfigStore((s) => s.init);
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
-  const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);
   const importing = useWallpaperStore((s) => s.loading);
-  const fetchSettings = useSettingStore((s) => s.fetchSettings);
   const language = useSettingStore((s) => s.settings[SETTING_KEYS.LANGUAGE]);
 
   // activeId: 0 = 本地壁纸，>0 = 收藏夹 id
   const [activeId, setActiveId] = useState(0);
-  const [viewWallpapers, setViewWallpapers] = useState<Wallpaper[]>([]);
+  // 初始值直接从 store 取，避免首帧空列表闪烁（AppShell 已确保数据就绪）
+  const [viewWallpapers, setViewWallpapers] = useState<Wallpaper[]>(wallpapers);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   // 全局设置 Dialog
@@ -44,16 +89,6 @@ const App: React.FC = () => {
 
   // 管理模式状态（用于蒙层遮挡）
   const [manageMode, setManageMode] = useState(false);
-
-  useEffect(() => {
-    fetchSettings();
-    fetchWallpapers();
-    initMonitors();
-    // 初始化全屏检测（读取 DB 设置，按需启动，首次且唯一一次调用）
-    invoke(COMMANDS.INIT_FULLSCREEN_DETECTION).catch((e) =>
-      console.error("[initFullscreenDetection]", e),
-    );
-  }, [fetchSettings, fetchWallpapers, initMonitors]);
 
   // DB 中 language 变化时同步 i18n
   useEffect(() => {

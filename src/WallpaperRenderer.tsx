@@ -326,7 +326,7 @@ const WallpaperRenderer: React.FC = () => {
   // 然后通过 position:absolute + 负偏移，只显示当前显示器对应的区域。
   // 容器 overflow:hidden 自动裁剪掉超出部分。
   if (displayMode === "extend" && extendViewport) {
-    const { offsetX, offsetY, totalWidth, totalHeight, myWidth, myHeight } = extendViewport;
+    const { offsetX, offsetY, totalWidth, totalHeight } = extendViewport;
 
     // 图片/视频的实际渲染尺寸 = 虚拟画布大小（逻辑像素）
     // 偏移量 = 当前显示器在画布中的位置（取负值，向左上方移动）

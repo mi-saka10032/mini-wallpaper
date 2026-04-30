@@ -22,10 +22,13 @@ import {
   ImagePlus,
   Monitor,
   Plus,
+  Search,
   Settings2,
+  SortAsc,
   Star,
   Trash2,
   Unlink,
+  X,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -52,9 +55,17 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import WallpaperPickerDrawer from "@/components/wallpaper/WallpaperPickerDrawer";
+import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog";
 import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import { addWallpapers, removeWallpapers, reorderWallpapers } from "@/api/collectionWallpaper";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
@@ -93,12 +104,47 @@ const MainContent: React.FC<MainContentProps> = ({
   // 添加壁纸到收藏夹的 picker
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // 搜索 + 排序状态
+  const [keyword, setKeyword] = useState("");
+  const [sortField, setSortField] = useState<"name" | "created_at" | "file_size" | "type">("created_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+
   const isCollectionView = activeId > 0;
   const collectionId = isCollectionView ? activeId : null;
   const isEmpty = wallpapers.length === 0;
 
-  // 拖拽排序时使用本地排序列表，否则用 props 传入的列表
-  const displayWallpapers = (manageMode && isCollectionView && localOrder) ? localOrder : wallpapers;
+  // 搜索 + 排序后的壁纸列表（非管理模式下使用）
+  const filteredWallpapers = useMemo(() => {
+    let result = wallpapers;
+    // 关键词过滤
+    if (keyword.trim()) {
+      const kw = keyword.trim().toLowerCase();
+      result = result.filter((w) => w.name.toLowerCase().includes(kw));
+    }
+    // 排序
+    const sorted = [...result].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case "name":
+          cmp = a.name.localeCompare(b.name, undefined, { numeric: true });
+          break;
+        case "created_at":
+          cmp = a.created_at.localeCompare(b.created_at);
+          break;
+        case "file_size":
+          cmp = (a.file_size ?? 0) - (b.file_size ?? 0);
+          break;
+        case "type":
+          cmp = a.type.localeCompare(b.type);
+          break;
+      }
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [wallpapers, keyword, sortField, sortOrder]);
+
+  // 拖拽排序时使用本地排序列表，否则用过滤排序后的列表
+  const displayWallpapers = (manageMode && isCollectionView && localOrder) ? localOrder : filteredWallpapers;
   const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
 
   // dnd-kit sensor: 需要拖动 10px 才触发，避免和点击选择冲突
@@ -185,7 +231,7 @@ const MainContent: React.FC<MainContentProps> = ({
   }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId, onCollectionChanged, localOrder]);
 
   const handleCardClick = useCallback(
-    (wp: Wallpaper, index: number, e: React.MouseEvent) => {
+    (wp: Wallpaper, index: number, _e: React.MouseEvent) => {
       if (manageMode) {
         // 管理模式下点击即 toggle 选中状态（多选）
         toggleSelect(wp.id);
@@ -337,7 +383,67 @@ const MainContent: React.FC<MainContentProps> = ({
                 {t("main.addWallpaper")}
               </Button>
             )}
+
+            {/* 搜索框 */}
+            {!isEmpty && (
+              <div className="relative max-w-48">
+                <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  placeholder={t("grid.searchPlaceholder")}
+                  className="h-7 pl-7 pr-7 text-xs"
+                />
+                {keyword && (
+                  <button
+                    type="button"
+                    onClick={() => setKeyword("")}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* 排序 */}
+            {!isEmpty && (
+              <>
+                <Select value={sortField} onValueChange={(v) => setSortField(v as typeof sortField)}>
+                  <SelectTrigger size="sm" className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent">
+                    <SortAsc className="size-3" />
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="created_at">{t("grid.sortByDate")}</SelectItem>
+                    <SelectItem value="name">{t("grid.sortByName")}</SelectItem>
+                    <SelectItem value="file_size">{t("grid.sortBySize")}</SelectItem>
+                    <SelectItem value="type">{t("grid.sortByType")}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <button
+                  type="button"
+                  onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
+                  className={cn(
+                    "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                    sortOrder === "desc" && "rotate-180",
+                  )}
+                  title={sortOrder === "asc" ? t("grid.ascending") : t("grid.descending")}
+                >
+                  <SortAsc className="size-3.5" />
+                </button>
+              </>
+            )}
+
             <div className="flex-1" />
+
+            {/* 筛选结果提示 */}
+            {keyword && filteredWallpapers.length !== wallpapers.length && (
+              <span className="text-xs text-muted-foreground">
+                {t("grid.filterResult", { filtered: filteredWallpapers.length, total: wallpapers.length })}
+              </span>
+            )}
+
             {!isEmpty && (
               <Button
                 variant="ghost"
@@ -366,6 +472,13 @@ const MainContent: React.FC<MainContentProps> = ({
               <p className="text-sm">
                 {isCollectionView ? t("main.emptyCollection") : t("main.emptyAll")}
               </p>
+            </div>
+          </div>
+        ) : displayWallpapers.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex flex-col items-center gap-3 text-muted-foreground/60">
+              <Search className="size-10" strokeWidth={1} />
+              <p className="text-sm">{t("grid.noResults")}</p>
             </div>
           </div>
         ) : isDragEnabled ? (
@@ -422,9 +535,9 @@ const MainContent: React.FC<MainContentProps> = ({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 壁纸选择器 Drawer */}
+      {/* 壁纸选择器 Dialog */}
       {isCollectionView && collectionId !== null && (
-        <WallpaperPickerDrawer
+        <WallpaperPickerDialog
           open={pickerOpen}
           collectionId={collectionId}
           existingWallpaperIds={new Set(wallpapers.map((w) => w.id))}

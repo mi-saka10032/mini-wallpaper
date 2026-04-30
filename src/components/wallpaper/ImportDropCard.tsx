@@ -63,7 +63,7 @@ const ImportDropCard: React.FC = () => {
           const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
           return extSet.has(ext);
         })
-        .map((f) => f.path);
+        .map((f) => (f as File & { path: string }).path);
 
       if (validPaths.length > 0) {
         await importByPaths(validPaths);

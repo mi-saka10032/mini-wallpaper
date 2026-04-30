@@ -14,7 +14,7 @@ import {
   destroyWallpaperWindow,
   getActiveWallpaperWindows,
 } from "@/api/wallpaperWindow";
-import { getSetting } from "@/api/appSetting";
+
 
 interface MonitorConfigState {
   configs: MonitorConfig[];

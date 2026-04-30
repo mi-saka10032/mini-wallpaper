@@ -127,6 +127,35 @@ export default {
     cancel: "Cancel",
   },
 
+  // WallpaperPickerDialog
+  pickerDialog: {
+    title: "Add Wallpapers to Collection",
+    description: "Select wallpapers from your library to add to this collection",
+    selectedCount: "{{count}} selected",
+    allAdded: "All wallpapers have been added to this collection",
+    selectedHint: "{{count}} wallpapers selected",
+    hint: "Click wallpaper cards to select",
+    cancel: "Cancel",
+    adding: "Adding...",
+    addCount: "Add {{count}}",
+    add: "Add",
+  },
+
+  // WallpaperGrid / FilterBar
+  grid: {
+    searchPlaceholder: "Search wallpapers...",
+    sortByDate: "By Date",
+    sortByName: "By Name",
+    sortBySize: "By Size",
+    sortByType: "By Type",
+    ascending: "Ascending",
+    descending: "Descending",
+    filterResult: "{{filtered}} / {{total}} items",
+    noResults: "No wallpapers found",
+    empty: "No wallpapers",
+    alreadyAdded: "Added",
+  },
+
   // Common time units
   time: {
     seconds: "{{count}}s",

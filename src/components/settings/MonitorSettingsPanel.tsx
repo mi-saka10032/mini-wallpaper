@@ -51,7 +51,6 @@ const MonitorSettingsPanel: React.FC = () => {
   const syncMonitors = useMonitorConfigStore((s) => s.syncMonitors);
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
-  const syncConfigToAll = useMonitorConfigStore((s) => s.syncConfigToAll);
   const loading = useMonitorConfigStore((s) => s.loading);
   const collections = useCollectionStore((s) => s.collections);
   const fetchCollections = useCollectionStore((s) => s.fetchCollections);

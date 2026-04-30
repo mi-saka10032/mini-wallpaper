@@ -127,6 +127,35 @@ export default {
     cancel: "取消",
   },
 
+  // WallpaperPickerDialog
+  pickerDialog: {
+    title: "添加壁纸到收藏夹",
+    description: "从壁纸库中选择壁纸添加到当前收藏夹",
+    selectedCount: "已选 {{count}} 项",
+    allAdded: "所有壁纸都已添加到此收藏夹",
+    selectedHint: "已选择 {{count}} 张壁纸",
+    hint: "点击壁纸卡片进行选择",
+    cancel: "取消",
+    adding: "添加中...",
+    addCount: "添加 {{count}} 项",
+    add: "添加",
+  },
+
+  // WallpaperGrid / FilterBar
+  grid: {
+    searchPlaceholder: "搜索壁纸...",
+    sortByDate: "按时间",
+    sortByName: "按名称",
+    sortBySize: "按大小",
+    sortByType: "按类型",
+    ascending: "升序",
+    descending: "降序",
+    filterResult: "{{filtered}} / {{total}} 项",
+    noResults: "没有找到匹配的壁纸",
+    empty: "暂无壁纸",
+    alreadyAdded: "已添加",
+  },
+
   // Common time units
   time: {
     seconds: "{{count}} 秒",

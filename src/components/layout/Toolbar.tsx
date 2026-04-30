@@ -1,4 +1,4 @@
-import { Monitor, Plus, Search } from "lucide-react";
+import { Monitor, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
@@ -35,11 +35,8 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
       {/* 中间拖拽区域 */}
       <div data-tauri-drag-region className="flex-1" />
 
-      {/* 右侧搜索 + 语言切换 + 主题切换 + 窗口控制 */}
+      {/* 右侧语言切换 + 主题切换 + 窗口控制 */}
       <div className="flex items-center gap-1">
-        <Button variant="ghost" size="icon-sm">
-          <Search className="size-4" />
-        </Button>
         <LanguageToggle />
         <ThemeToggle />
         <AccentColorToggle />

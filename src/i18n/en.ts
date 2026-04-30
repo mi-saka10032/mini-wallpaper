@@ -55,6 +55,7 @@ export default {
     total: "{{count}} items",
     selectedTotal: "{{selected}} / {{total}} selected",
     orderModified: "· Order changed, click Done to save",
+    pendingRemovals: "· {{count}} item(s) pending removal",
     removeFromCollection: "Remove from Collection",
     addTo: "Add to",
     deleteConfirmTitle: "Confirm Delete",

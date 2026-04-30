@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Toolbar from "@/components/layout/Toolbar";
 import Sidebar from "@/components/layout/Sidebar";
@@ -21,6 +22,7 @@ import type { Wallpaper } from "@/api/config";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 
 const App: React.FC = () => {
+  const { t } = useTranslation();
   useShortcuts();
   useMonitorHotPlug();
   useWebGuard();
@@ -28,6 +30,7 @@ const App: React.FC = () => {
   const initMonitors = useMonitorConfigStore((s) => s.init);
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);
+  const importing = useWallpaperStore((s) => s.loading);
   const fetchSettings = useSettingStore((s) => s.fetchSettings);
   const language = useSettingStore((s) => s.settings[SETTING_KEYS.LANGUAGE]);
 
@@ -134,6 +137,16 @@ const App: React.FC = () => {
 
         {/* 全局设置 Dialog */}
         <GlobalSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+
+        {/* 导入中全局蒙层 */}
+        {importing && (
+          <div className="absolute inset-0 z-[100] flex items-center justify-center rounded-xl bg-black/40 backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-3 rounded-xl bg-background/90 px-8 py-6 shadow-2xl">
+              <div className="size-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+              <span className="text-sm font-medium text-foreground">{t("main.importing")}</span>
+            </div>
+          </div>
+        )}
 
         {/* 全局 Toast 消息容器 (sonner) */}
         <Toaster position="top-center" richColors closeButton duration={4000} />

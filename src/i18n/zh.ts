@@ -55,6 +55,7 @@ export default {
     total: "共 {{count}} 项",
     selectedTotal: "已选 {{selected}} / 共 {{total}} 项",
     orderModified: "· 排序已修改，点击「完成」保存",
+    pendingRemovals: "· {{count}} 项待移除",
     removeFromCollection: "从收藏夹移除",
     addTo: "添加到",
     deleteConfirmTitle: "确认删除",

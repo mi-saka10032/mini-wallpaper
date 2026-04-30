@@ -103,6 +103,9 @@ const MainContent: React.FC<MainContentProps> = ({
   const [localOrder, setLocalOrder] = useState<Wallpaper[] | null>(null);
   const [orderDirty, setOrderDirty] = useState(false);
 
+  // 收藏夹管理模式下延迟删除的壁纸 ID 列表（退出时批量持久化）
+  const [pendingRemovals, setPendingRemovals] = useState<number[]>([]);
+
   // 添加壁纸到收藏夹的 picker
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -115,20 +118,32 @@ const MainContent: React.FC<MainContentProps> = ({
   const collectionId = isCollectionView ? activeId : null;
   const isEmpty = wallpapers.length === 0;
 
-  // 搜索 + 排序后的壁纸列表（非管理模式下使用）
+  // 搜索 + 排序后的壁纸列表（仅管理模式下使用）
   const filteredWallpapers = useMemo(() => {
-    let result = wallpapers;
+    if (!manageMode) return wallpapers;
+    // 管理模式下基于 localOrder（收藏夹）或 wallpapers（全部壁纸）进行过滤排序
+    const source = (isCollectionView && localOrder) ? localOrder : wallpapers;
+
+    // 无搜索且默认排序时，直接返回源列表（保持拖拽排序）
+    const hasKeyword = keyword.trim().length > 0;
+    const isDefault = sortField === "created_at" && sortOrder === "desc";
+    if (!hasKeyword && isDefault) return source;
+
     // 关键词过滤
-    if (keyword.trim()) {
+    let result = source;
+    if (hasKeyword) {
       const kw = keyword.trim().toLowerCase();
       result = result.filter((w) => w.name.toLowerCase().includes(kw));
     }
     // 排序（复用 WallpaperGrid 的排序逻辑）
-    return sortWallpapers(result, sortField, sortOrder);
-  }, [wallpapers, keyword, sortField, sortOrder]);
+    if (!isDefault) {
+      result = sortWallpapers(result, sortField, sortOrder);
+    }
+    return result;
+  }, [wallpapers, manageMode, isCollectionView, localOrder, keyword, sortField, sortOrder]);
 
-  // 拖拽排序时使用本地排序列表，否则用过滤排序后的列表
-  const displayWallpapers = (manageMode && isCollectionView && localOrder) ? localOrder : filteredWallpapers;
+  // 常态下直接使用后端排序的 wallpapers；管理模式下使用过滤排序后的列表
+  const displayWallpapers = manageMode ? filteredWallpapers : wallpapers;
   const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
 
   // dnd-kit sensor: 需要拖动 10px 才触发，避免和点击选择冲突
@@ -141,6 +156,8 @@ const MainContent: React.FC<MainContentProps> = ({
   const enterManageMode = useCallback(() => {
     setManageMode(true);
     setSelectedIds(new Set());
+    setPendingRemovals([]);
+    setKeyword("");
     onManageModeChange?.(true);
     // 收藏夹模式进入管理时，初始化本地排序副本
     if (activeId > 0) {
@@ -150,27 +167,41 @@ const MainContent: React.FC<MainContentProps> = ({
   }, [activeId, wallpapers, onManageModeChange]);
 
   const exitManageMode = useCallback(async () => {
-    // 退出管理模式时，如果排序有变更，持久化到后端
-    if (isCollectionView && collectionId !== null && orderDirty && localOrder) {
+    if (isCollectionView && collectionId !== null) {
       try {
-        await reorderWallpapers(collectionId, localOrder.map((w) => w.id));
-        onCollectionChanged?.();
+        // 1. 先执行批量删除（如果有待删除项）
+        if (pendingRemovals.length > 0) {
+          await removeWallpapers(collectionId, pendingRemovals);
+        }
+        // 2. 再持久化排序（如果排序有变更）
+        if (orderDirty && localOrder) {
+          // localOrder 已经过滤掉了 pendingRemovals 中的项
+          await reorderWallpapers(collectionId, localOrder.map((w) => w.id));
+        }
+        // 3. 刷新视图
+        if (pendingRemovals.length > 0 || orderDirty) {
+          onCollectionChanged?.();
+        }
       } catch (e) {
-        console.error("[reorderWallpapers]", e);
+        console.error("[exitManageMode]", e);
       }
     }
     setManageMode(false);
     setSelectedIds(new Set());
     setLocalOrder(null);
     setOrderDirty(false);
+    setPendingRemovals([]);
+    setKeyword("");
     onManageModeChange?.(false);
-  }, [isCollectionView, collectionId, orderDirty, localOrder, onCollectionChanged, onManageModeChange]);
+  }, [isCollectionView, collectionId, pendingRemovals, orderDirty, localOrder, onCollectionChanged, onManageModeChange]);
 
   const cancelManageMode = useCallback(() => {
     setManageMode(false);
     setSelectedIds(new Set());
     setLocalOrder(null);
     setOrderDirty(false);
+    setPendingRemovals([]);
+    setKeyword("");
     onManageModeChange?.(false);
   }, [onManageModeChange]);
 
@@ -198,21 +229,22 @@ const MainContent: React.FC<MainContentProps> = ({
 
   const handleDeleteConfirm = useCallback(async () => {
     if (isCollectionView && collectionId !== null) {
-      // 收藏夹视图：解除关联
-      await removeWallpapers(collectionId!, pendingDeleteIds);
-      // 同步更新本地排序列表
+      // 收藏夹视图：延迟删除，仅更新本地状态
+      // 记录待删除 ID
+      setPendingRemovals((prev) => [...prev, ...pendingDeleteIds]);
+      // 从本地排序列表中移除
       if (localOrder) {
         setLocalOrder(localOrder.filter((w) => !pendingDeleteIds.includes(w.id)));
+        setOrderDirty(true);
       }
-      onCollectionChanged?.();
     } else {
-      // 全部壁纸视图：彻底删除文件
+      // 全部壁纸视图：彻底删除文件（立即执行）
       await deleteWallpapers(pendingDeleteIds);
     }
     setPendingDeleteIds([]);
     setDeleteDialogOpen(false);
     setSelectedIds(new Set());
-  }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId, onCollectionChanged, localOrder]);
+  }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId, localOrder]);
 
   const handleCardClick = useCallback(
     (wp: Wallpaper, index: number, _e: React.MouseEvent) => {
@@ -258,8 +290,9 @@ const MainContent: React.FC<MainContentProps> = ({
     [localOrder],
   );
 
-  // 是否启用拖拽排序（收藏夹 + 管理模式）
-  const isDragEnabled = manageMode && isCollectionView;
+  // 是否启用拖拽排序（收藏夹 + 管理模式 + 无搜索过滤 + 默认排序时才启用）
+  const isDefaultSort = sortField === "created_at" && sortOrder === "desc";
+  const isDragEnabled = manageMode && isCollectionView && !keyword.trim() && isDefaultSort;
 
   // 导入拖拽卡片：暂时隐藏，等待 Tauri 拖拽事件在 Win11 下的兼容性修复后再启用
   // 原始条件：activeId === 0 && !manageMode
@@ -321,6 +354,52 @@ const MainContent: React.FC<MainContentProps> = ({
             >
               {t("main.clearSelection")}
             </button>
+
+            {/* 搜索框（管理模式） */}
+            <div className="relative ml-2 max-w-44">
+              <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder={t("grid.searchPlaceholder")}
+                className="h-7 pl-7 pr-7 text-xs"
+              />
+              {keyword && (
+                <button
+                  type="button"
+                  onClick={() => setKeyword("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </div>
+
+            {/* 排序（管理模式） */}
+            <Select value={sortField} onValueChange={(v) => setSortField(v as typeof sortField)}>
+              <SelectTrigger size="sm" className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent">
+                <SortAsc className="size-3" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="created_at">{t("grid.sortByDate")}</SelectItem>
+                <SelectItem value="name">{t("grid.sortByName")}</SelectItem>
+                <SelectItem value="file_size">{t("grid.sortBySize")}</SelectItem>
+                <SelectItem value="type">{t("grid.sortByType")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
+              className={cn(
+                "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                sortOrder === "desc" && "rotate-180",
+              )}
+              title={sortOrder === "asc" ? t("grid.ascending") : t("grid.descending")}
+            >
+              <SortAsc className="size-3.5" />
+            </button>
+
             <div className="flex-1" />
             {selectedIds.size > 0 && (
               <button
@@ -368,65 +447,7 @@ const MainContent: React.FC<MainContentProps> = ({
               </Button>
             )}
 
-            {/* 搜索框 */}
-            {!isEmpty && (
-              <div className="relative max-w-48">
-                <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={keyword}
-                  onChange={(e) => setKeyword(e.target.value)}
-                  placeholder={t("grid.searchPlaceholder")}
-                  className="h-7 pl-7 pr-7 text-xs"
-                />
-                {keyword && (
-                  <button
-                    type="button"
-                    onClick={() => setKeyword("")}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-                  >
-                    <X className="size-3" />
-                  </button>
-                )}
-              </div>
-            )}
-
-            {/* 排序 */}
-            {!isEmpty && (
-              <>
-                <Select value={sortField} onValueChange={(v) => setSortField(v as typeof sortField)}>
-                  <SelectTrigger size="sm" className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent">
-                    <SortAsc className="size-3" />
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="created_at">{t("grid.sortByDate")}</SelectItem>
-                    <SelectItem value="name">{t("grid.sortByName")}</SelectItem>
-                    <SelectItem value="file_size">{t("grid.sortBySize")}</SelectItem>
-                    <SelectItem value="type">{t("grid.sortByType")}</SelectItem>
-                  </SelectContent>
-                </Select>
-                <button
-                  type="button"
-                  onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
-                  className={cn(
-                    "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                    sortOrder === "desc" && "rotate-180",
-                  )}
-                  title={sortOrder === "asc" ? t("grid.ascending") : t("grid.descending")}
-                >
-                  <SortAsc className="size-3.5" />
-                </button>
-              </>
-            )}
-
             <div className="flex-1" />
-
-            {/* 筛选结果提示 */}
-            {keyword && filteredWallpapers.length !== wallpapers.length && (
-              <span className="text-xs text-muted-foreground">
-                {t("grid.filterResult", { filtered: filteredWallpapers.length, total: wallpapers.length })}
-              </span>
-            )}
 
             {!isEmpty && (
               <Button
@@ -487,8 +508,18 @@ const MainContent: React.FC<MainContentProps> = ({
             ? t("main.selectedTotal", { selected: selectedIds.size, total: displayWallpapers.length })
             : t("main.total", { count: displayWallpapers.length })}
         </span>
+        {manageMode && keyword && displayWallpapers.length !== (localOrder?.length ?? wallpapers.length) && (
+          <span className="ml-2 text-xs text-muted-foreground">
+            {t("grid.filterResult", { filtered: displayWallpapers.length, total: localOrder?.length ?? wallpapers.length })}
+          </span>
+        )}
         {isDragEnabled && orderDirty && (
           <span className="ml-2 text-xs text-primary">{t("main.orderModified")}</span>
+        )}
+        {manageMode && pendingRemovals.length > 0 && (
+          <span className="ml-2 text-xs text-orange-500">
+            {t("main.pendingRemovals", { count: pendingRemovals.length })}
+          </span>
         )}
       </div>
 

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { availableMonitors, type Monitor } from "@tauri-apps/api/window";
+import { availableMonitors } from "@tauri-apps/api/window";
 import { listen, EVENTS } from "@/api/event";
 import type { MonitorConfig } from "@/api/config";
 import {
@@ -9,12 +9,7 @@ import {
 } from "@/api/monitorConfig";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
-import {
-  createWallpaperWindow,
-  destroyWallpaperWindow,
-  getActiveWallpaperWindows,
-} from "@/api/wallpaperWindow";
-
+import { syncWallpaperWindows, doSyncMonitors } from "./monitorSync";
 
 interface MonitorConfigState {
   configs: MonitorConfig[];
@@ -51,129 +46,6 @@ interface MonitorConfigState {
 let _eventUnlisten: (() => void) | null = null;
 let _configRefreshUnlisten: (() => void) | null = null;
 let _initialized = false;
-
-/** 已创建壁纸窗口的 monitor_id 集合（前端侧跟踪，防止重复创建） */
-const _activeWallpaperWindows = new Set<string>();
-
-/**
- * 为 active 且有 wallpaper_id 的显示器创建壁纸窗口
- * display_mode 从全局 app_setting 读取：
- * - independent: 每个显示器独立壁纸
- * - mirror: 所有显示器使用同一壁纸（数据由 Rust 保证一致，窗口正常创建）
- * - extend: 一张壁纸横跨所有显示器，每个窗口通过 availableMonitors() 自行计算裁剪区域
- */
-async function syncWallpaperWindows(
-  configs: MonitorConfig[],
-  monitors: Monitor[],
-) {
-  // 先从 Rust 端查询已有壁纸窗口，恢复前端跟踪集合（解决页面刷新后状态丢失问题）
-  try {
-    const existingWindows = await getActiveWallpaperWindows();
-    for (const mid of existingWindows) {
-      _activeWallpaperWindows.add(mid);
-    }
-  } catch (e) {
-    console.warn("[syncWallpaperWindows] Failed to query existing windows:", e);
-  }
-
-  const monitorMap = new Map(
-    monitors.map((m) => [m.name ?? `monitor_${monitors.indexOf(m)}`, m]),
-  );
-
-  const activeIds = new Set<string>();
-
-  for (const config of configs) {
-    if (!config.active || !config.wallpaper_id) continue;
-
-    const monitor = monitorMap.get(config.monitor_id);
-    if (!monitor) continue;
-
-    activeIds.add(config.monitor_id);
-
-    // 已创建则跳过
-    if (_activeWallpaperWindows.has(config.monitor_id)) continue;
-
-    try {
-      const pos = monitor.position;
-      const size = monitor.size;
-
-      await createWallpaperWindow(
-        config.monitor_id,
-        pos.x,
-        pos.y,
-        size.width,
-        size.height,
-      );
-      _activeWallpaperWindows.add(config.monitor_id);
-      console.log(`[syncWallpaperWindows] Created window for ${config.monitor_id}`);
-    } catch (e) {
-      console.error(`[syncWallpaperWindows] Failed to create window for ${config.monitor_id}:`, e);
-    }
-  }
-
-  // 销毁不再 active 的壁纸窗口
-  for (const monitorId of _activeWallpaperWindows) {
-    if (!activeIds.has(monitorId)) {
-      try {
-        await destroyWallpaperWindow(monitorId);
-        _activeWallpaperWindows.delete(monitorId);
-        console.log(`[syncWallpaperWindows] Destroyed window for ${monitorId}`);
-      } catch (e) {
-        console.error(`[syncWallpaperWindows] Failed to destroy window for ${monitorId}:`, e);
-      }
-    }
-  }
-}
-
-/** 核心同步逻辑：检测物理显示器 → 比对 DB → upsert → 同步壁纸窗口 → 刷新 store */
-async function doSyncMonitors(set: (partial: Partial<MonitorConfigState>) => void) {
-  // 1. 检测当前物理显示器
-  const monitors = await availableMonitors();
-  const activeMonitorIds = new Set(
-    monitors.map((m) => m.name ?? `monitor_${monitors.indexOf(m)}`),
-  );
-
-  // 2. 获取现有 configs
-  const existingConfigs = await getMonitorConfigs();
-  const existingIds = new Set(existingConfigs.map((c) => c.monitor_id));
-
-  // 3. 批量 upsert：激活匹配的、关闭不匹配的、新增不存在的
-  const upsertPromises: Promise<MonitorConfig>[] = [];
-
-  for (const config of existingConfigs) {
-    const shouldBeActive = activeMonitorIds.has(config.monitor_id);
-    if (config.active !== shouldBeActive) {
-      upsertPromises.push(
-        upsertMonitorConfig({
-          monitorId: config.monitor_id,
-          active: shouldBeActive,
-        }),
-      );
-    }
-  }
-
-  for (const mid of activeMonitorIds) {
-    if (!existingIds.has(mid)) {
-      upsertPromises.push(
-        upsertMonitorConfig({
-          monitorId: mid,
-          active: true,
-        }),
-      );
-    }
-  }
-
-  if (upsertPromises.length > 0) {
-    await Promise.all(upsertPromises);
-  }
-
-  // 4. 重新获取最新 configs
-  const configs = await getMonitorConfigs();
-  set({ configs });
-
-  // 5. 同步壁纸窗口（创建/销毁）
-  await syncWallpaperWindows(configs, monitors);
-}
 
 export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
   configs: [],
@@ -315,7 +187,7 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       return { configs: updated };
     });
 
-    // 同步壁纸窗口（source 有 wallpaper_id 时，其他显示器也需要创建窗口）
+    // 同步壁纸窗口
     if (source.wallpaper_id) {
       const monitors = await availableMonitors();
       const configs = useMonitorConfigStore.getState().configs;
@@ -345,7 +217,7 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       return { configs: updated };
     });
 
-    // 设置了 wallpaperId 时，触发壁纸窗口同步（按需创建尚未存在的窗口）
+    // 设置了 wallpaperId 时，触发壁纸窗口同步
     if (params.wallpaperId) {
       const monitors = await availableMonitors();
       const configs = useMonitorConfigStore.getState().configs;

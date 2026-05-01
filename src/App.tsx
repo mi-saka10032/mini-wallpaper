@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, lazy, Suspense } from "react";
+import { useCallback, useEffect, useState, useRef, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Toolbar from "@/components/layout/Toolbar";
@@ -61,22 +61,15 @@ export const AppShell: React.FC = () => {
     init();
   }, [fetchSettings, fetchWallpapers, initMonitors]);
 
-  return (
-    <>
-      {/* Loading 与 App 同时挂载，通过显隐切换避免白屏 */}
-      {!loadingExited && <AppLoading finished={initDone} onExited={() => setLoadingExited(true)} />}
-      <div
-        className={`transition-opacity duration-300 ${
-          loadingExited ? "opacity-100" : "invisible opacity-0"
-        }`}
-      >
-        <App hideBorder={!loadingExited} />
-      </div>
-    </>
-  );
+  // 互斥渲染：Loading 退出后才挂载 App，避免 App 加载抢占主线程导致动画卡顿
+  if (!loadingExited) {
+    return <AppLoading finished={initDone} onExited={() => setLoadingExited(true)} />;
+  }
+
+  return <App />;
 };
 
-const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
+const App: React.FC = () => {
   const { t } = useTranslation();
   useShortcuts();
   useMonitorHotPlug();
@@ -98,16 +91,28 @@ const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
   // 管理模式状态（用于蒙层遮挡）
   const [manageMode, setManageMode] = useState(false);
 
-  // DB 中 language 变化时同步 i18n
+  // 跳过首次执行的标记（AppShell 已完成初始化，无需重复）
+  const langInitRef = useRef(true);
+  const wpInitRef = useRef(true);
+
+  // DB 中 language 变化时同步 i18n（跳过首次：AppShell 已同步）
   useEffect(() => {
+    if (langInitRef.current) {
+      langInitRef.current = false;
+      return;
+    }
     if (language) {
       changeLanguage(language);
     }
   }, [language]);
 
   // viewWallpapers 数据源切换：本地壁纸 or 收藏夹
-  // 拆分为两个 effect，避免收藏夹视图下 wallpapers 变化触发无意义的网络请求
+  // 跳过首次：useState 初始值已从 store 取得，无需重复 set
   useEffect(() => {
+    if (wpInitRef.current) {
+      wpInitRef.current = false;
+      return;
+    }
     if (activeId === 0) {
       setViewWallpapers(wallpapers);
     }
@@ -141,9 +146,7 @@ const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
   return (
     <TooltipProvider>
       <div
-        className={`relative h-screen w-screen overflow-hidden rounded-xl ${
-          hideBorder ? "" : "border border-border"
-        } bg-background text-foreground shadow-2xl`}
+        className="relative h-screen w-screen overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl"
       >
         {/* 顶部工具栏 */}
         <div className="relative">

@@ -9,12 +9,35 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
+  # ─────────────────────────────────────────────
+  # Job 1: Checkout source code
+  # ─────────────────────────────────────────────
+  checkout:
+    name: 📥 Checkout
     runs-on: windows-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: .
+          retention-days: 1
+
+  # ─────────────────────────────────────────────
+  # Job 2: Setup frontend & install dependencies
+  # ─────────────────────────────────────────────
+  setup-frontend:
+    name: 🌐 Frontend Setup
+    runs-on: windows-latest
+    needs: checkout
+    steps:
+      - name: Download source
+        uses: actions/download-artifact@v4
+        with:
+          name: source
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -43,10 +66,74 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      - name: Upload workspace with node_modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-workspace
+          path: .
+          retention-days: 1
+
+  # ─────────────────────────────────────────────
+  # Job 3: Setup Rust toolchain & cache
+  # ─────────────────────────────────────────────
+  setup-rust:
+    name: 🦀 Rust Setup
+    runs-on: windows-latest
+    needs: checkout
+    steps:
+      - name: Download source
+        uses: actions/download-artifact@v4
+        with:
+          name: source
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Pre-fetch Rust dependencies
+        run: cargo fetch
+        working-directory: src-tauri
+
+  # ─────────────────────────────────────────────
+  # Job 4: Build Tauri application & Release
+  # ─────────────────────────────────────────────
+  build:
+    name: 🔨 Build & Release
+    runs-on: windows-latest
+    needs: [setup-frontend, setup-rust]
+    steps:
+      - name: Download frontend workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-workspace
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+          run_install: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
         uses: actions/cache@v4
         with:
           path: |
@@ -64,8 +151,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: ${{ github.ref_type == 'tag' && format('Mini Wallpaper {0}', github.ref_name) || '' }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "Mini Wallpaper ${{ github.ref_name }}"
           releaseBody: "See the assets to download and install this version."
-          releaseDraft: ${{ github.ref_type == 'tag' }}
+          releaseDraft: true
           prerelease: false

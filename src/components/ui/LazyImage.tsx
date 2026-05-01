@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ImageOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,15 +17,29 @@ interface LazyImageProps {
  * - 加载中：shimmer 骨架动画
  * - 加载完成：fade-in 过渡
  * - 加载失败：友好的 fallback UI
+ * - 修复：src 变化时正确处理缓存命中场景，避免 onLoad 与 useEffect 的竞态条件
  */
 const LazyImage: React.FC<LazyImageProps> = ({ src, alt, className, fallback }) => {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const srcRef = useRef(src);
 
-  // src 变化时重置加载状态，避免旧状态残留
+  // src 变化时重置加载状态
+  if (srcRef.current !== src) {
+    srcRef.current = src;
+    // 同步重置，避免 useEffect 异步执行导致的竞态
+    if (loaded) setLoaded(false);
+    if (error) setError(false);
+  }
+
+  // 在 DOM 更新后检查图片是否已经加载完成（缓存命中场景）
+  // useEffect 在 commit 后执行，此时 img.src 已经更新
   useEffect(() => {
-    setLoaded(false);
-    setError(false);
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0 && img.src) {
+      setLoaded(true);
+    }
   }, [src]);
 
   const handleLoad = useCallback(() => {
@@ -56,9 +70,9 @@ const LazyImage: React.FC<LazyImageProps> = ({ src, alt, className, fallback }) 
       )}
       {/* 实际图片 */}
       <img
+        ref={imgRef}
         src={src}
         alt={alt}
-        loading="lazy"
         onLoad={handleLoad}
         onError={handleError}
         className={cn(

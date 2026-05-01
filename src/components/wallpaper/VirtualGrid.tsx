@@ -114,10 +114,11 @@ function virtualRowAreEqual<T>(prev: VirtualRowProps<T>, next: VirtualRowProps<T
   if (ps.height !== ns.height || ps.transform !== ns.transform) {
     return false;
   }
-  // 比较 rowItems：长度相同且每项 key 相同即认为相等
+  // 比较 rowItems：长度相同且每项 key 相同、引用相同即认为相等
+  // 引用比较确保 wallpaper 对象内容变化（如 thumb_path 更新）时能正确重渲染
   if (prev.rowItems.length !== next.rowItems.length) return false;
   for (let i = 0; i < prev.rowItems.length; i++) {
-    if (prev.getKey(prev.rowItems[i]) !== next.getKey(next.rowItems[i])) {
+    if (prev.rowItems[i] !== next.rowItems[i]) {
       return false;
     }
   }

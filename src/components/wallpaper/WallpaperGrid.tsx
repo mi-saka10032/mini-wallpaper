@@ -1,9 +1,8 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, Film, Image } from "lucide-react";
+import { Check } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import LazyImage from "@/components/ui/LazyImage";
+import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import type { Wallpaper } from "@/api/config";
 import VirtualGrid from "./VirtualGrid";
 import { FilterBar } from "./FilterBar";
@@ -87,72 +86,62 @@ const SelectableCard: React.FC<SelectableCardProps> = ({
   onClick,
 }) => {
   const { t } = useTranslation();
-  const TypeIcon = wallpaper.type === "video" ? Film : Image;
+
+  // 左上角叠加层
+  const overlayTopLeft = useMemo(() => {
+    if (selected && !disabled) {
+      return (
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
+          <Check className="size-3" />
+        </div>
+      );
+    }
+    if (!selected && !disabled) {
+      return (
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
+      );
+    }
+    if (disabled) {
+      return (
+        <div className="absolute left-1.5 top-1.5 z-10 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+          {t("grid.alreadyAdded")}
+        </div>
+      );
+    }
+    return null;
+  }, [selected, disabled, t]);
 
   return (
-    <div
+    <ThumbnailCard
+      wallpaper={wallpaper}
+      disabled={disabled}
       className={cn(
-        "group relative cursor-pointer overflow-hidden rounded-lg border bg-muted/30 transition-all",
         disabled
-          ? "cursor-not-allowed border-border opacity-50"
+          ? "border-border opacity-50"
           : selected
             ? "border-primary ring-2 ring-primary"
             : "border-border hover:ring-2 hover:ring-primary/50",
       )}
-      onClick={() => !disabled && onClick()}
-    >
-      {/* 选中指示器 */}
-      {selected && !disabled && (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
-          <Check className="size-3" />
-        </div>
-      )}
+      onClick={() => onClick()}
+      overlayTopLeft={overlayTopLeft}
+    />
+  );
+};
 
-      {/* 未选中时的空圆圈（hover 显示） */}
-      {!selected && !disabled && (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
-      )}
+// ============ BrowseCard 组件（browse 模式下的默认卡片） ============
 
-      {/* 已在收藏夹标签 */}
-      {disabled && (
-        <div className="absolute left-1.5 top-1.5 z-10 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("grid.alreadyAdded")}
-        </div>
-      )}
+interface BrowseCardProps {
+  wallpaper: Wallpaper;
+  onClick: () => void;
+}
 
-      {/* 缩略图 */}
-      <div className="aspect-video">
-        {wallpaper.thumb_path ? (
-          <LazyImage
-            src={convertFileSrc(wallpaper.thumb_path)}
-            alt={wallpaper.name}
-            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center bg-muted">
-            <TypeIcon className="size-8 text-muted-foreground/40" />
-          </div>
-        )}
-      </div>
-
-      {/* 文件信息 */}
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <TypeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate text-xs text-foreground/80">{wallpaper.name}</span>
-      </div>
-
-      {/* 类型角标 */}
-      {wallpaper.type === "video" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.video")}
-        </div>
-      )}
-      {wallpaper.type === "gif" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.gif")}
-        </div>
-      )}
-    </div>
+const BrowseCard: React.FC<BrowseCardProps> = ({ wallpaper, onClick }) => {
+  return (
+    <ThumbnailCard
+      wallpaper={wallpaper}
+      className="border-border hover:ring-2 hover:ring-primary/50"
+      onClick={onClick}
+    />
   );
 };
 
@@ -288,55 +277,6 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
           />
         )}
       </div>
-    </div>
-  );
-};
-
-// ============ BrowseCard 组件（browse 模式下的默认卡片） ============
-
-interface BrowseCardProps {
-  wallpaper: Wallpaper;
-  onClick: () => void;
-}
-
-const BrowseCard: React.FC<BrowseCardProps> = ({ wallpaper, onClick }) => {
-  const { t } = useTranslation();
-  const TypeIcon = wallpaper.type === "video" ? Film : Image;
-
-  return (
-    <div
-      className="group relative cursor-pointer overflow-hidden rounded-lg border border-border bg-muted/30 transition-all hover:ring-2 hover:ring-primary/50"
-      onClick={onClick}
-    >
-      <div className="aspect-video">
-        {wallpaper.thumb_path ? (
-          <LazyImage
-            src={convertFileSrc(wallpaper.thumb_path)}
-            alt={wallpaper.name}
-            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center bg-muted">
-            <TypeIcon className="size-8 text-muted-foreground/40" />
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <TypeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate text-xs text-foreground/80">{wallpaper.name}</span>
-      </div>
-
-      {wallpaper.type === "video" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.video")}
-        </div>
-      )}
-      {wallpaper.type === "gif" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.gif")}
-        </div>
-      )}
     </div>
   );
 };

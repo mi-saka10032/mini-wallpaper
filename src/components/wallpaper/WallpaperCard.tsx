@@ -1,10 +1,7 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Check,
-  Film,
   FolderPlus,
   GripVertical,
-  Image,
   Monitor,
   Star,
   Trash2,
@@ -28,7 +25,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import LazyImage from "@/components/ui/LazyImage";
+import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import type { Wallpaper } from "@/api/config";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 
@@ -159,78 +156,59 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   const collections = useCollectionStore((s) => s.collections);
   const configs = useMonitorConfigStore((s) => s.configs);
   const { t } = useTranslation();
-  const TypeIcon = wallpaper.type === "video" ? Film : Image;
 
   // 有效（active）的显示器配置列表
   const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
 
   const handleSetAsWallpaper = useSetAsWallpaper(wallpaper.id, activeId);
 
+  // 左上角叠加层：选中指示器
+  const overlayTopLeft = useMemo(() => {
+    if (manageMode && selected) {
+      return (
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <Check className="size-3" />
+        </div>
+      );
+    }
+    if (manageMode && !selected) {
+      return (
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
+      );
+    }
+    return null;
+  }, [manageMode, selected]);
+
+  // 右下角叠加层：拖拽手柄
+  const overlayBottomRight = useMemo(() => {
+    if (!dragHandleProps) return null;
+    return (
+      <div
+        {...dragHandleProps}
+        onClick={(e) => e.stopPropagation()}
+        className="absolute right-1.5 bottom-8 z-20 flex size-6 cursor-grab items-center justify-center rounded bg-black/40 text-white opacity-0 transition-opacity active:cursor-grabbing group-hover:opacity-100"
+      >
+        <GripVertical className="size-3.5" />
+      </div>
+    );
+  }, [dragHandleProps]);
+
   const card = (
-    <div
+    <ThumbnailCard
+      wallpaper={wallpaper}
+      style={style}
       className={cn(
-        "group relative cursor-pointer overflow-hidden rounded-lg border bg-muted/30 transition-all",
         manageMode && selected
           ? "border-primary ring-2 ring-primary"
           : "border-border hover:ring-2 hover:ring-primary/50",
         isDragging && "opacity-50 shadow-lg ring-2 ring-primary",
       )}
-      style={style}
       onClick={(e) => {
         if (!isDragging) onClick(wallpaper, index, e);
       }}
-    >
-      {/* 拖拽手柄（排序模式下显示），阻止点击冒泡以避免触发选中 */}
-      {dragHandleProps && (
-        <div
-          {...dragHandleProps}
-          onClick={(e) => e.stopPropagation()}
-          className="absolute right-1.5 bottom-8 z-20 flex size-6 cursor-grab items-center justify-center rounded bg-black/40 text-white opacity-0 transition-opacity active:cursor-grabbing group-hover:opacity-100"
-        >
-          <GripVertical className="size-3.5" />
-        </div>
-      )}
-
-      {manageMode && selected && (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <Check className="size-3" />
-        </div>
-      )}
-
-      {manageMode && !selected && (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
-      )}
-
-      <div className="aspect-video">
-        {wallpaper.thumb_path ? (
-          <LazyImage
-            src={convertFileSrc(wallpaper.thumb_path)}
-            alt={wallpaper.name}
-            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center bg-muted">
-            <TypeIcon className="size-8 text-muted-foreground/40" />
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <TypeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate text-xs text-foreground/80">{wallpaper.name}</span>
-      </div>
-
-      {wallpaper.type === "video" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.video")}
-        </div>
-      )}
-      {wallpaper.type === "gif" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.gif")}
-        </div>
-      )}
-    </div>
+      overlayTopLeft={overlayTopLeft}
+      overlayBottomRight={overlayBottomRight}
+    />
   );
 
   return (

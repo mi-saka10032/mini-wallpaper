@@ -13,9 +13,6 @@ import { FilterBar } from "./FilterBar";
 
 export type GridMode = "browse" | "select";
 
-// re-export 排序类型，保持向后兼容
-export type { SortField, SortOrder } from "@/utils/sort";
-
 export interface WallpaperGridProps {
   /** 壁纸数据源 */
   wallpapers: Wallpaper[];
@@ -40,12 +37,6 @@ export interface WallpaperGridProps {
   /** 额外的 className */
   className?: string;
 }
-
-// re-export sortWallpapers 保持向后兼容
-export { sortWallpapers } from "@/utils/sort";
-
-// FilterBar 已拆分至 ./FilterBar.tsx
-export { FilterBar } from "./FilterBar";
 
 // ============ SelectableCard 组件（select 模式下的卡片） ============
 

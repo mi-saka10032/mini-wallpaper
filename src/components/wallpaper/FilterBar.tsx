@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { SortField, SortOrder } from "./WallpaperGrid";
+import type { SortField, SortOrder } from "@/utils/sort";
 
 // ============ 类型定义 ============
 

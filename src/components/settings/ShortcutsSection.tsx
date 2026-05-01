@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { SETTING_KEYS } from "@/stores/settingStore";
 import { DEFAULT_SHORTCUTS } from "@/hooks/useShortcuts";
-import { useShortcutRecorder } from "@/hooks/useGlobalSettings";
+import { useShortcutRecorder } from "@/hooks/useShortcutRecorder";
 
 interface ShortcutsSectionProps {
   shortcutNext: string;

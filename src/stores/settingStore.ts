@@ -60,3 +60,18 @@ export const useSettingStore = create<SettingState>((set, get) => ({
     return get().settings[key] ?? defaultValue;
   },
 }));
+
+/**
+ * 细粒度 selector hook：只订阅单个 setting key 的值变化
+ * 使用自定义 equality 比较，避免 settings 对象引用变化导致无关组件重渲染
+ */
+export function useSetting(key: string, defaultValue = ""): string {
+  return useSettingStore((s) => s.settings[key] ?? defaultValue);
+}
+
+/**
+ * 获取 updateSetting action（引用稳定，不会触发重渲染）
+ */
+export function useUpdateSetting() {
+  return useSettingStore((s) => s.updateSetting);
+}

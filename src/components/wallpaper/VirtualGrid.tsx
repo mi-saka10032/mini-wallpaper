@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // ============ 断点配置 ============
 
@@ -51,6 +51,49 @@ export interface VirtualGridProps<T> {
   /** 容器 className */
   className?: string;
 }
+
+// ============ 虚拟行组件（memo 化避免滚动时不必要的重渲染） ============
+
+interface VirtualRowProps<T> {
+  rowItems: T[];
+  cols: number;
+  rowIndex: number;
+  getKey: (item: T) => string | number;
+  renderItem: (item: T, index: number) => React.ReactNode;
+  style: React.CSSProperties;
+  gap: number;
+}
+
+function VirtualRowInner<T>({
+  rowItems,
+  cols,
+  rowIndex,
+  getKey,
+  renderItem,
+  style,
+  gap,
+}: VirtualRowProps<T>) {
+  return (
+    <div style={style}>
+      <div
+        className="grid"
+        style={{
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          gap: `${gap}px`,
+        }}
+      >
+        {rowItems.map((item, colIndex) => {
+          const originalIndex = rowIndex * cols + colIndex;
+          return (
+            <div key={getKey(item)}>{renderItem(item, originalIndex)}</div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const VirtualRow = React.memo(VirtualRowInner) as typeof VirtualRowInner;
 
 // ============ VirtualGrid 组件 ============
 
@@ -116,12 +159,6 @@ function VirtualGrid<T>({
     }
   }, [cols, rowHeight, enableVirtual, virtualizer]);
 
-  // 计算原始 index
-  const getOriginalIndex = useCallback(
-    (rowIndex: number, colIndex: number) => rowIndex * cols + colIndex,
-    [cols],
-  );
-
   // ===== 非虚拟模式：直接渲染 =====
   if (!enableVirtual) {
     return (
@@ -159,8 +196,14 @@ function VirtualGrid<T>({
         {virtualRows.map((virtualRow) => {
           const rowItems = rows[virtualRow.index];
           return (
-            <div
+            <VirtualRow
               key={virtualRow.key}
+              rowItems={rowItems}
+              cols={cols}
+              rowIndex={virtualRow.index}
+              getKey={getKey}
+              renderItem={renderItem}
+              gap={GAP}
               style={{
                 position: "absolute",
                 top: 0,
@@ -169,19 +212,7 @@ function VirtualGrid<T>({
                 height: `${virtualRow.size - GAP}px`,
                 transform: `translateY(${virtualRow.start}px)`,
               }}
-            >
-              <div
-                className="grid gap-3"
-                style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
-              >
-                {rowItems.map((item, colIndex) => {
-                  const originalIndex = getOriginalIndex(virtualRow.index, colIndex);
-                  return (
-                    <div key={getKey(item)}>{renderItem(item, originalIndex)}</div>
-                  );
-                })}
-              </div>
-            </div>
+            />
           );
         })}
       </div>

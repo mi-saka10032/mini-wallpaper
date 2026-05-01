@@ -31,13 +31,14 @@ import {
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCollectionStore, type Collection } from "@/stores/collectionStore";
+import React from "react";
 
 interface SidebarProps {
   activeId: number;
   onActiveIdChange: (id: number) => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeId, onActiveIdChange }) => {
+const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange }) => {
   const { t } = useTranslation();
   const collections = useCollectionStore((s) => s.collections);
   const fetchCollections = useCollectionStore((s) => s.fetchCollections);
@@ -250,6 +251,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeId, onActiveIdChange }) => {
       </AlertDialog>
     </div>
   );
-};
+});
+
+Sidebar.displayName = "Sidebar";
 
 export default Sidebar;

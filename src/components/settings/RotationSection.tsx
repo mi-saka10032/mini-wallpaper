@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { formatInterval, INTERVAL_PRESETS } from "@/hooks/useMonitorSettings";
+import { formatInterval, INTERVAL_PRESETS } from "@/hooks/useMonitorConfig";
 
 interface RotationSectionProps {
   isEnabled: boolean;

@@ -28,16 +28,6 @@ const WallpaperRenderer: React.FC = () => {
   const [searchParams] = useSearchParams();
   const monitorId = searchParams.get("monitorId");
 
-  // ===== 壁纸窗口 body 透明 =====
-  // 全局 CSS 中 body 有 bg-background（不透明），壁纸窗口需要透明背景
-  // 挂载时添加 wallpaper-body class 覆盖为 transparent
-  useEffect(() => {
-    document.body.classList.add("wallpaper-body");
-    return () => {
-      document.body.classList.remove("wallpaper-body");
-    };
-  }, []);
-
   const [wallpaper, setWallpaper] = useState<Wallpaper | null>(null);
   const [fitMode, setFitMode] = useState<string>("cover");
   const [displayMode, setDisplayMode] = useState<string>("independent");
@@ -51,54 +41,30 @@ const WallpaperRenderer: React.FC = () => {
   } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-
-  // ===== 音量状态 =====
-  // 初始化时从 DB 读取，后续通过 volume-changed 事件实时更新
   const [volume, setVolume] = useState<number>(0);
 
-  // 初始化读取全局音量设置
+  // ===== Effect 1: 壁纸窗口 body 透明 =====
   useEffect(() => {
-    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }, { silent: true }).then((val) => {
-      const v = Number(val ?? "0");
-      setVolume(Math.min(Math.max(v, 0), 100));
-    }).catch(() => {});
+    document.body.classList.add("wallpaper-body");
+    return () => {
+      document.body.classList.remove("wallpaper-body");
+    };
   }, []);
 
-  // 监听音量变更事件（后端 setting effect 广播）
-  useEffect(() => {
-    const unlisten = listen(EVENTS.VOLUME_CHANGED, (payload) => {
-      setVolume(Math.min(Math.max(payload.volume, 0), 100));
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, []);
-
-  // 音量变化时同步到 video 元素
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.volume = volume / 100;
-    video.muted = volume === 0;
-  }, [volume, wallpaper]);
-
-  // ===== 禁用所有用户输入事件 =====
-  // 壁纸窗口是纯展示层，不需要任何交互，直接一刀切禁用全部鼠标和键盘事件
+  // ===== Effect 2: 禁用所有用户输入事件 =====
   useEffect(() => {
     const blockAll = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
     };
 
-    // 鼠标类事件
     const mouseEvents = [
       "contextmenu", "click", "dblclick", "mousedown", "mouseup",
       "mousemove", "mouseover", "mouseout", "mouseenter", "mouseleave",
       "wheel", "auxclick",
     ];
-    // 键盘类事件
     const keyEvents = ["keydown", "keyup", "keypress"];
-    // 拖拽类事件
     const dragEvents = ["dragover", "dragenter", "dragleave", "drop", "drag", "dragstart", "dragend"];
-    // 其他交互事件
     const otherEvents = ["selectstart", "copy", "cut", "paste", "focus", "blur"];
 
     const allEvents = [...mouseEvents, ...keyEvents, ...dragEvents, ...otherEvents];
@@ -117,7 +83,6 @@ const WallpaperRenderer: React.FC = () => {
   // 根据 config 获取壁纸并更新状态
   const loadFromConfig = useCallback(async (config: MonitorConfig) => {
     setFitMode(config.fit_mode || "cover");
-    // display_mode 不再从 config 读取，由全局 app_setting 控制
 
     if (!config.wallpaper_id) {
       setWallpaper(null);
@@ -135,7 +100,6 @@ const WallpaperRenderer: React.FC = () => {
 
   /**
    * 通过 Tauri availableMonitors() API 计算 extend 模式下的视口参数
-   * 每个窗口根据自己的 monitorId 确定在虚拟画布中的裁剪区域
    */
   const computeExtendViewport = useCallback(async () => {
     if (!monitorId) return;
@@ -144,12 +108,8 @@ const WallpaperRenderer: React.FC = () => {
       const monitors = await availableMonitors();
       if (monitors.length === 0) return;
 
-      // 获取当前窗口的 scaleFactor，用于将物理像素转换为 CSS 逻辑像素
-      // availableMonitors() 返回的 size/position 均为物理像素，
-      // 而 CSS 中 width/left 等属性使用逻辑像素，两者在高 DPI 下不一致
       const scaleFactor = await getCurrentWindow().scaleFactor();
 
-      // 计算虚拟画布的 bounding box（所有显示器组成的最小矩形，物理像素）
       let minX = Infinity, minY = Infinity;
       let maxX = -Infinity, maxY = -Infinity;
 
@@ -164,11 +124,9 @@ const WallpaperRenderer: React.FC = () => {
         maxY = Math.max(maxY, y + h);
       }
 
-      // 物理像素 → CSS 逻辑像素（除以 scaleFactor）
       const totalWidth = (maxX - minX) / scaleFactor;
       const totalHeight = (maxY - minY) / scaleFactor;
 
-      // 找到当前窗口所属的显示器
       const currentMonitor = monitors.find(
         (m) => (m.name ?? `monitor_${monitors.indexOf(m)}`) === monitorId
       );
@@ -178,7 +136,6 @@ const WallpaperRenderer: React.FC = () => {
         return;
       }
 
-      // 当前显示器相对于虚拟画布左上角的偏移量（物理像素 → 逻辑像素）
       const offsetX = (currentMonitor.position.x - minX) / scaleFactor;
       const offsetY = (currentMonitor.position.y - minY) / scaleFactor;
       const myWidth = currentMonitor.size.width / scaleFactor;
@@ -198,74 +155,86 @@ const WallpaperRenderer: React.FC = () => {
     }
   }, [monitorId]);
 
-  // 初始化
+  // ===== Effect 3: 初始化（加载 config + 音量 + displayMode） =====
   useEffect(() => {
     if (!monitorId) return;
 
-    // 从 app_setting 读取全局 display_mode
+    // 读取全局 display_mode
     invoke(COMMANDS.GET_SETTING, { key: "display_mode" }, { silent: true }).then((val) => {
       if (val) setDisplayMode(val);
     }).catch(() => {});
 
+    // 读取 monitor config
     invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
       if (config) loadFromConfig(config);
     });
+
+    // 读取全局音量
+    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }, { silent: true }).then((val) => {
+      const v = Number(val ?? "0");
+      setVolume(Math.min(Math.max(v, 0), 100));
+    }).catch(() => {});
   }, [monitorId, loadFromConfig]);
 
-  // 监听壁纸切换事件
+  // ===== Effect 4: 统一事件监听（壁纸变更、清空、fitMode、displayMode、音量） =====
   useEffect(() => {
     if (!monitorId) return;
-    const unlisten = listen(EVENTS.WALLPAPER_CHANGED, (payload) => {
-      if (payload.monitor_id === monitorId) {
-        invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
-          if (config) loadFromConfig(config);
-        });
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [monitorId, loadFromConfig]);
 
-  // 监听壁纸清空事件（壁纸被删除且无后续壁纸可切换时，清空显示）
-  useEffect(() => {
-    if (!monitorId) return;
-    const unlisten = listen(EVENTS.WALLPAPER_CLEARED, (payload) => {
-      if (payload.monitor_id === monitorId) {
-        setWallpaper(null);
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [monitorId]);
+    const unlisteners: Promise<() => void>[] = [];
 
-  // 监听 fitMode 变更事件（直接更新 objectFit 样式，无需重新加载壁纸）
-  useEffect(() => {
-    if (!monitorId) return;
-    const unlisten = listen(EVENTS.FIT_MODE_CHANGED, (payload) => {
-      if (payload.monitor_id === monitorId) {
-        setFitMode(payload.fit_mode);
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [monitorId]);
-
-  // 监听 displayMode 变更事件（切换渲染模式：independent / mirror / extend）
-  useEffect(() => {
-    if (!monitorId) return;
-    const unlisten = listen(EVENTS.DISPLAY_MODE_CHANGED, (payload) => {
-      if (payload.monitor_id === monitorId) {
-        setDisplayMode(payload.display_mode);
-
-        // extend 模式下，通过 availableMonitors() 自行计算视口
-        if (payload.display_mode === "extend") {
-          computeExtendViewport();
-        } else {
-          setExtendViewport(null);
+    // 壁纸切换事件
+    unlisteners.push(
+      listen(EVENTS.WALLPAPER_CHANGED, (payload) => {
+        if (payload.monitor_id === monitorId) {
+          invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
+            if (config) loadFromConfig(config);
+          });
         }
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [monitorId, computeExtendViewport]);
+      })
+    );
 
-  // extend 模式初始化：首次加载时如果已是 extend 模式，计算视口
+    // 壁纸清空事件
+    unlisteners.push(
+      listen(EVENTS.WALLPAPER_CLEARED, (payload) => {
+        if (payload.monitor_id === monitorId) {
+          setWallpaper(null);
+        }
+      })
+    );
+
+    // fitMode 变更事件
+    unlisteners.push(
+      listen(EVENTS.FIT_MODE_CHANGED, (payload) => {
+        if (payload.monitor_id === monitorId) {
+          setFitMode(payload.fit_mode);
+        }
+      })
+    );
+
+    // displayMode 变更事件
+    unlisteners.push(
+      listen(EVENTS.DISPLAY_MODE_CHANGED, (payload) => {
+        if (payload.monitor_id === monitorId) {
+          setDisplayMode(payload.display_mode);
+        }
+      })
+    );
+
+    // 音量变更事件
+    unlisteners.push(
+      listen(EVENTS.VOLUME_CHANGED, (payload) => {
+        setVolume(Math.min(Math.max(payload.volume, 0), 100));
+      })
+    );
+
+    return () => {
+      for (const p of unlisteners) {
+        p.then((fn) => fn());
+      }
+    };
+  }, [monitorId, loadFromConfig]);
+
+  // ===== Effect 5: displayMode 变化时计算/清除 extend viewport =====
   useEffect(() => {
     if (displayMode === "extend") {
       computeExtendViewport();
@@ -274,11 +243,19 @@ const WallpaperRenderer: React.FC = () => {
     }
   }, [displayMode, computeExtendViewport]);
 
+  // ===== Effect 6: 音量同步到 video 元素 =====
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = volume / 100;
+    video.muted = volume === 0;
+  }, [volume, wallpaper]);
+
   // ===== 视频同步逻辑（extend + video）=====
   const isMaster = displayMode === "extend" && extendViewport?.offsetX === 0;
   const isSlave = displayMode === "extend" && extendViewport != null && extendViewport.offsetX > 0;
 
-  // Master：每 5s 广播 currentTime
+  // ===== Effect 7a: Master 每 5s 广播 currentTime =====
   useEffect(() => {
     if (!isMaster || wallpaper?.type !== "video") return;
 
@@ -292,7 +269,7 @@ const WallpaperRenderer: React.FC = () => {
     return () => clearInterval(interval);
   }, [isMaster, wallpaper?.type]);
 
-  // Slave：监听同步事件，漂移 > 0.1s 时校准
+  // ===== Effect 7b: Slave 监听同步事件 =====
   useEffect(() => {
     if (!isSlave || wallpaper?.type !== "video") return;
 
@@ -309,6 +286,8 @@ const WallpaperRenderer: React.FC = () => {
     return () => { unlisten.then((fn) => fn()); };
   }, [isSlave, wallpaper?.type]);
 
+  // ===== 渲染逻辑 =====
+
   // 无数据时透明
   if (!wallpaper) {
     return (
@@ -322,15 +301,9 @@ const WallpaperRenderer: React.FC = () => {
   const src = convertFileSrc(wallpaper.file_path);
 
   // extend 模式：裁剪渲染
-  // 原理：将图片/视频拉伸到整个虚拟画布大小（所有显示器组成的 bounding box），
-  // 然后通过 position:absolute + 负偏移，只显示当前显示器对应的区域。
-  // 容器 overflow:hidden 自动裁剪掉超出部分。
   if (displayMode === "extend" && extendViewport) {
     const { offsetX, offsetY, totalWidth, totalHeight } = extendViewport;
 
-    // 图片/视频的实际渲染尺寸 = 虚拟画布大小（逻辑像素）
-    // 偏移量 = 当前显示器在画布中的位置（取负值，向左上方移动）
-    // objectFit: "fill" 强制拉伸到指定宽高，不保持宽高比
     const extendStyle: React.CSSProperties = {
       position: "absolute",
       left: `-${offsetX}px`,

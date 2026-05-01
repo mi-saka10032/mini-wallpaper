@@ -1,6 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import type { Wallpaper } from "@/stores/wallpaperStore";
 
 interface PreviewDialogProps {
@@ -9,7 +9,7 @@ interface PreviewDialogProps {
   onClose: () => void;
 }
 
-const PreviewDialog: React.FC<PreviewDialogProps> = ({ wallpapers, initialIndex, onClose }) => {
+const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, initialIndex, onClose }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
 
   const wallpaper = wallpapers[currentIndex];
@@ -120,6 +120,8 @@ const PreviewDialog: React.FC<PreviewDialogProps> = ({ wallpapers, initialIndex,
       </div>
     </div>
   );
-};
+});
+
+PreviewDialog.displayName = "PreviewDialog";
 
 export default PreviewDialog;

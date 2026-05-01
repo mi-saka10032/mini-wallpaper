@@ -18,7 +18,8 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
-import { useGlobalSettings, useBackup } from "@/hooks/useGlobalSettings";
+import { useGlobalSettings } from "@/hooks/useGlobalSettings";
+import { useBackup } from "@/hooks/useBackup";
 import ShortcutsSection from "./ShortcutsSection";
 import BackupSection from "./BackupSection";
 

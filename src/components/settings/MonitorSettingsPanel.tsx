@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Monitor as MonitorIcon, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMonitorSettings } from "@/hooks/useMonitorSettings";
+import { useMonitorConfig } from "@/hooks/useMonitorConfig";
 import MonitorVisualizer from "./MonitorVisualizer";
 import DisplayModeSection from "./DisplayModeSection";
 import WallpaperSourceSection from "./WallpaperSourceSection";
@@ -24,25 +26,35 @@ const MonitorSettingsPanel: React.FC = () => {
     activeConfigs,
     selectedIndex,
     selectedConfig,
+    selectedMonitorId,
     displayMode,
     isSyncMode,
     collections,
     wallpapers,
-    collectionWarning,
-    sourceType,
     intervalSliderValue,
     setSelectedIndex,
     getWallpaperThumb,
+    handleDisplayModeChange,
+    handleRefresh,
+  } = useMonitorSettings();
+
+  const {
+    collectionWarning,
+    sourceType,
+    syncSourceType,
     handleSourceChange,
     handleWallpaperSelect,
     handleCollectionSelect,
     handleFitModeChange,
-    handleDisplayModeChange,
     handlePlayModeChange,
     handleIntervalChange,
     handleEnabledChange,
-    handleRefresh,
-  } = useMonitorSettings();
+  } = useMonitorConfig({ selectedMonitorId, isSyncMode });
+
+  // 当选中显示器或配置变化时同步 sourceType
+  useEffect(() => {
+    syncSourceType(!!selectedConfig?.collection_id);
+  }, [selectedConfig?.collection_id, selectedMonitorId, syncSourceType]);
 
   return (
     <div className="flex h-full flex-col">

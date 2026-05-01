@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
@@ -47,7 +47,7 @@ interface SelectableCardProps {
   onClick: () => void;
 }
 
-const SelectableCard: React.FC<SelectableCardProps> = ({
+const SelectableCard: React.FC<SelectableCardProps> = memo(({
   wallpaper,
   selected,
   disabled,
@@ -94,7 +94,8 @@ const SelectableCard: React.FC<SelectableCardProps> = ({
       overlayTopLeft={overlayTopLeft}
     />
   );
-};
+});
+SelectableCard.displayName = "SelectableCard";
 
 // ============ BrowseCard 组件（browse 模式下的默认卡片） ============
 
@@ -103,7 +104,7 @@ interface BrowseCardProps {
   onClick: () => void;
 }
 
-const BrowseCard: React.FC<BrowseCardProps> = ({ wallpaper, onClick }) => {
+const BrowseCard: React.FC<BrowseCardProps> = memo(({ wallpaper, onClick }) => {
   return (
     <ThumbnailCard
       wallpaper={wallpaper}
@@ -111,7 +112,8 @@ const BrowseCard: React.FC<BrowseCardProps> = ({ wallpaper, onClick }) => {
       onClick={onClick}
     />
   );
-};
+});
+BrowseCard.displayName = "BrowseCard";
 
 // ============ WallpaperGrid 主组件 ============
 

@@ -49,8 +49,10 @@ const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, in
   }, [onClose, goPrev, goNext]);
 
   useEffect(() => {
-    setCurrentIndex(initialIndex);
-  }, [initialIndex]);
+    // 确保 initialIndex 不越界
+    const safeIndex = Math.max(0, Math.min(initialIndex, wallpapers.length - 1));
+    setCurrentIndex(safeIndex);
+  }, [initialIndex, wallpapers.length]);
 
   // 预加载相邻图片
   usePreloadAdjacent(wallpapers, currentIndex);

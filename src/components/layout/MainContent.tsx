@@ -135,6 +135,12 @@ const MainContent: React.FC<MainContentProps> = ({
   const wallpapersRef = useRef(wallpapers);
   wallpapersRef.current = wallpapers;
 
+  // ===== 稳定的单个删除回调（避免内联函数导致 WallpaperCard memo 失效） =====
+  const handleSingleDelete = useCallback(
+    (id: number) => manage.handleDeleteRequest([id]),
+    [manage],
+  );
+
   // ===== 卡片点击 =====
   const handleCardClick = useCallback(
     (wp: Wallpaper, _index: number, _e: React.MouseEvent) => {
@@ -188,7 +194,7 @@ const MainContent: React.FC<MainContentProps> = ({
           collections={collections}
           displayMode={displayMode}
           onClick={handleCardClick}
-          onDelete={(id) => manage.handleDeleteRequest([id])}
+          onDelete={handleSingleDelete}
           onAddToCollection={manage.handleAddToCollection}
         />
       ))}
@@ -215,7 +221,7 @@ const MainContent: React.FC<MainContentProps> = ({
           collections={collections}
           displayMode={displayMode}
           onClick={handleCardClick}
-          onDelete={(id) => manage.handleDeleteRequest([id])}
+          onDelete={handleSingleDelete}
           onAddToCollection={manage.handleAddToCollection}
         />
       )}

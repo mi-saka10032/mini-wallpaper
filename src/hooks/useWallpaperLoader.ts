@@ -35,10 +35,11 @@ export function useWallpaperLoader(monitorId: string | null) {
       return;
     }
 
-    // store 中未找到（可能尚未加载），回退到后端查询
+    // store 中未找到（可能尚未加载），回退到刷新 store 后再查找
     try {
-      const all = await invoke(COMMANDS.GET_WALLPAPERS, { silent: true });
-      const fallback = all.find((w) => w.id === config.wallpaper_id) ?? null;
+      await useWallpaperStore.getState().fetchWallpapers();
+      const refreshed = useWallpaperStore.getState().wallpapers;
+      const fallback = refreshed.find((w) => w.id === config.wallpaper_id) ?? null;
       setWallpaper(fallback);
     } catch (e) {
       console.error("[useWallpaperLoader] fetch wallpaper failed:", e);

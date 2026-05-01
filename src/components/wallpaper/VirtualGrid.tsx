@@ -50,6 +50,8 @@ export interface VirtualGridProps<T> {
   trailingElement?: React.ReactNode;
   /** 容器 className */
   className?: string;
+  /** 当外部状态（如选中态）变化时递增此值，强制虚拟行重渲染 */
+  renderVersion?: number;
 }
 
 // ============ 虚拟行组件（memo 化避免滚动时不必要的重渲染） ============
@@ -62,6 +64,8 @@ interface VirtualRowProps<T> {
   renderItem: (item: T, index: number) => React.ReactNode;
   style: React.CSSProperties;
   gap: number;
+  /** 用于强制刷新的版本号 */
+  renderVersion?: number;
 }
 
 function VirtualRowInner<T>({
@@ -95,7 +99,8 @@ function VirtualRowInner<T>({
 
 /** 自定义比较函数：避免 rowItems 因 slice 产生新引用而导致 memo 失效 */
 function virtualRowAreEqual<T>(prev: VirtualRowProps<T>, next: VirtualRowProps<T>): boolean {
-  // 注：renderItem 和 getKey 通过稳定引用传入，无需比较
+  // renderVersion 变化时强制重渲染
+  if (prev.renderVersion !== next.renderVersion) return false;
   if (
     prev.cols !== next.cols ||
     prev.rowIndex !== next.rowIndex ||
@@ -130,6 +135,7 @@ function VirtualGrid<T>({
   forceDisable = false,
   trailingElement,
   className,
+  renderVersion,
 }: VirtualGridProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -240,6 +246,7 @@ function VirtualGrid<T>({
               getKey={getKey}
               renderItem={stableRenderItem}
               gap={GAP}
+              renderVersion={renderVersion}
               style={{
                 position: "absolute",
                 top: 0,

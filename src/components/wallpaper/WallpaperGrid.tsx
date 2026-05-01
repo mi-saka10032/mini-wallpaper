@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
@@ -167,6 +167,11 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
     [selectedIds, onSelectionChange],
   );
 
+  // 用于通知 VirtualGrid 选中状态变化的版本号
+  const renderVersionRef = useRef(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const renderVersion = useMemo(() => ++renderVersionRef.current, [selectedIds, disabledIds]);
+
   // 全选：选中所有可选的（排除 disabled 的）
   const selectableWallpapers = useMemo(
     () => filteredWallpapers.filter((w) => !disabledIds.has(w.id)),
@@ -220,6 +225,7 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
             items={filteredWallpapers}
             getKey={(wp) => wp.id}
             className="h-full"
+            renderVersion={renderVersion}
             renderItem={(wp, index) => {
               if (mode === "select") {
                 return (

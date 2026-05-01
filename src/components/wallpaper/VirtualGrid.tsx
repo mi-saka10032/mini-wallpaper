@@ -93,7 +93,34 @@ function VirtualRowInner<T>({
   );
 }
 
-const VirtualRow = React.memo(VirtualRowInner) as typeof VirtualRowInner;
+/** 自定义比较函数：避免 rowItems 因 slice 产生新引用而导致 memo 失效 */
+function virtualRowAreEqual<T>(prev: VirtualRowProps<T>, next: VirtualRowProps<T>): boolean {
+  if (
+    prev.cols !== next.cols ||
+    prev.rowIndex !== next.rowIndex ||
+    prev.gap !== next.gap ||
+    prev.renderItem !== next.renderItem ||
+    prev.getKey !== next.getKey
+  ) {
+    return false;
+  }
+  // 比较 style 对象的关键属性
+  const ps = prev.style as Record<string, unknown>;
+  const ns = next.style as Record<string, unknown>;
+  if (ps.height !== ns.height || ps.transform !== ns.transform) {
+    return false;
+  }
+  // 比较 rowItems：长度相同且每项 key 相同即认为相等
+  if (prev.rowItems.length !== next.rowItems.length) return false;
+  for (let i = 0; i < prev.rowItems.length; i++) {
+    if (prev.getKey(prev.rowItems[i]) !== next.getKey(next.rowItems[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const VirtualRow = React.memo(VirtualRowInner, virtualRowAreEqual) as typeof VirtualRowInner;
 
 // ============ VirtualGrid 组件 ============
 

@@ -13,6 +13,8 @@ import {
 import { ImagePlus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Wallpaper } from "@/stores/wallpaperStore";
+import { useCollectionStore } from "@/stores/collectionStore";
+import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -73,6 +75,11 @@ const MainContent: React.FC<MainContentProps> = ({
   });
 
   const search = useWallpaperSearch({ activeId });
+
+  // ===== 从 store 获取 collections 和 activeConfigs（提升到父组件层，避免每个卡片独立订阅） =====
+  const collections = useCollectionStore((s) => s.collections);
+  const configs = useMonitorConfigStore((s) => s.configs);
+  const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
 
   // 添加壁纸到收藏夹的 picker
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -171,6 +178,8 @@ const MainContent: React.FC<MainContentProps> = ({
           manageMode={manage.manageMode}
           selected={manage.selectedIds.has(wp.id)}
           isCollectionView={isCollectionView}
+          activeConfigs={activeConfigs}
+          collections={collections}
           onClick={handleCardClick}
           onDelete={(id) => manage.handleDeleteRequest([id])}
           onAddToCollection={manage.handleAddToCollection}
@@ -195,6 +204,8 @@ const MainContent: React.FC<MainContentProps> = ({
           manageMode={manage.manageMode}
           selected={manage.selectedIds.has(wp.id)}
           isCollectionView={isCollectionView}
+          activeConfigs={activeConfigs}
+          collections={collections}
           onClick={handleCardClick}
           onDelete={(id) => manage.handleDeleteRequest([id])}
           onAddToCollection={manage.handleAddToCollection}

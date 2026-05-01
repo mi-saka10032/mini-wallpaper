@@ -11,7 +11,8 @@ import { memo, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useCollectionStore } from "@/stores/collectionStore";
+import type { Collection } from "@/stores/collectionStore";
+import type { MonitorConfig } from "@/api/config";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import {
@@ -38,6 +39,10 @@ export interface WallpaperCardProps {
   manageMode: boolean;
   selected: boolean;
   isCollectionView: boolean;
+  /** 从父组件传入的活跃显示器配置列表 */
+  activeConfigs: MonitorConfig[];
+  /** 从父组件传入的收藏夹列表 */
+  collections: Collection[];
   isDragging?: boolean;
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
   onClick: (wp: Wallpaper, index: number, e: React.MouseEvent) => void;
@@ -51,8 +56,7 @@ export interface WallpaperCardProps {
  * 处理"设置为 X 显示器的壁纸"的逻辑
  * 根据 activeId（0=本地壁纸栏, >0=收藏夹栏）和目标显示器的 config 状态，分 6 种场景处理
  */
-function useSetAsWallpaper(wallpaperId: number, activeId: number) {
-  const configs = useMonitorConfigStore((s) => s.configs);
+function useSetAsWallpaper(wallpaperId: number, activeId: number, configs: MonitorConfig[]) {
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
   const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
@@ -146,6 +150,8 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   manageMode,
   selected,
   isCollectionView,
+  activeConfigs,
+  collections,
   isDragging = false,
   dragHandleProps,
   onClick,
@@ -153,14 +159,9 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   onAddToCollection,
   style,
 }) => {
-  const collections = useCollectionStore((s) => s.collections);
-  const configs = useMonitorConfigStore((s) => s.configs);
   const { t } = useTranslation();
 
-  // 有效（active）的显示器配置列表
-  const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
-
-  const handleSetAsWallpaper = useSetAsWallpaper(wallpaper.id, activeId);
+  const handleSetAsWallpaper = useSetAsWallpaper(wallpaper.id, activeId, activeConfigs);
 
   // 左上角叠加层：选中指示器
   const overlayTopLeft = useMemo(() => {
@@ -313,6 +314,8 @@ export const WallpaperCard = memo(
       prev.manageMode === next.manageMode &&
       prev.selected === next.selected &&
       prev.isCollectionView === next.isCollectionView &&
+      prev.activeConfigs === next.activeConfigs &&
+      prev.collections === next.collections &&
       prev.onClick === next.onClick &&
       prev.onDelete === next.onDelete &&
       prev.onAddToCollection === next.onAddToCollection

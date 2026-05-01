@@ -40,6 +40,7 @@ import NormalToolbar from "./NormalToolbar";
 import StatusBar from "./StatusBar";
 
 interface MainContentProps {
+  className: string;
   activeId: number;
   wallpapers: Wallpaper[];
   onPreview: (index: number) => void;
@@ -47,7 +48,9 @@ interface MainContentProps {
   onManageModeChange?: (active: boolean) => void;
 }
 
+
 const MainContent: React.FC<MainContentProps> = ({
+  className,
   activeId,
   wallpapers,
   onPreview,
@@ -262,7 +265,7 @@ const MainContent: React.FC<MainContentProps> = ({
   );
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div className={cn('flex flex-1 flex-col overflow-hidden', className)}>
       {/* 操作栏 */}
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-4">
         {sort.sortMode ? (

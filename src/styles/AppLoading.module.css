@@ -1,0 +1,125 @@
+.rippleCenter {
+  background: radial-gradient(
+    circle at 35% 35%,
+
+    #a8d4ff 0%,
+
+    #4da6ff 40%,
+
+    #1a7de6 70%,
+
+    #0d5bb5 100%
+  );
+
+  box-shadow:
+    0 0 8px 3px rgba(77, 166, 255, 0.8),
+    0 0 20px 6px rgba(26, 125, 230, 0.5),
+    0 0 40px 10px rgba(13, 91, 181, 0.3);
+
+  animation: center-breathe 2.4s ease-in-out infinite;
+
+  z-index: 10;
+}
+
+.rippleWave {
+  position: absolute;
+
+  top: 50%;
+
+  left: 50%;
+
+  width: 16px;
+
+  height: 16px;
+
+  margin-top: -6px;
+
+  margin-left: -6px;
+
+  border-radius: 50%;
+
+  border: 2.5px solid rgba(77, 166, 255, 0.85);
+
+  background: transparent;
+
+  animation: wave-spread 2.4s cubic-bezier(0.15, 0.6, 0.35, 1) infinite;
+
+  opacity: 0;
+}
+
+@keyframes center-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+
+    box-shadow:
+      0 0 8px 3px rgba(77, 166, 255, 0.8),
+      0 0 20px 6px rgba(26, 125, 230, 0.5),
+      0 0 40px 10px rgba(13, 91, 181, 0.3);
+  }
+
+  50% {
+    transform: scale(1.2);
+
+    box-shadow:
+      0 0 12px 5px rgba(100, 180, 255, 0.9),
+      0 0 28px 10px rgba(50, 140, 240, 0.6),
+      0 0 50px 14px rgba(20, 100, 200, 0.35);
+  }
+}
+
+@keyframes wave-spread {
+  0% {
+    transform: scale(1);
+
+    opacity: 0.85;
+
+    border-color: rgba(100, 180, 255, 0.9);
+
+    box-shadow:
+      0 0 4px 1px rgba(77, 166, 255, 0.6),
+      0 0 8px 2px rgba(26, 125, 230, 0.3),
+      inset 0 0 3px 1px rgba(100, 180, 255, 0.2);
+  }
+
+  20% {
+    opacity: 0.75;
+
+    border-color: rgba(77, 166, 255, 0.8);
+
+    box-shadow:
+      0 0 6px 2px rgba(77, 166, 255, 0.5),
+      0 0 12px 3px rgba(26, 125, 230, 0.25),
+      inset 0 0 4px 1px rgba(100, 180, 255, 0.15);
+  }
+
+  50% {
+    opacity: 0.45;
+
+    border-color: rgba(60, 150, 240, 0.55);
+
+    box-shadow:
+      0 0 10px 3px rgba(60, 150, 240, 0.3),
+      0 0 16px 4px rgba(20, 100, 200, 0.15),
+      inset 0 0 5px 1px rgba(80, 160, 250, 0.08);
+  }
+
+  75% {
+    opacity: 0.2;
+
+    border-color: rgba(40, 130, 220, 0.3);
+  }
+
+  100% {
+    transform: scale(16);
+
+    opacity: 0;
+
+    border-color: rgba(30, 110, 200, 0);
+
+    box-shadow:
+      0 0 0 0 rgba(60, 150, 240, 0),
+      0 0 0 0 rgba(20, 100, 200, 0),
+      inset 0 0 0 0 rgba(80, 160, 250, 0);
+  }
+}

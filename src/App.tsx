@@ -20,6 +20,7 @@ import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
 import { getCollectionWallpapers } from "@/api/collection";
 import AppLoading from "@/components/ui/AppLoading";
+import { cn } from "./lib/utils";
 
 // 非首屏组件懒加载
 const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
@@ -63,9 +64,7 @@ export const AppShell: React.FC = () => {
   return (
     <>
       {/* Loading 与 App 同时挂载，通过显隐切换避免白屏 */}
-      {!loadingExited && (
-        <AppLoading finished={initDone} onExited={() => setLoadingExited(true)} />
-      )}
+      {!loadingExited && <AppLoading finished={initDone} onExited={() => setLoadingExited(true)} />}
       <div
         className={`transition-opacity duration-300 ${
           loadingExited ? "opacity-100" : "invisible opacity-0"
@@ -141,16 +140,16 @@ const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
 
   return (
     <TooltipProvider>
-      <div className={`relative h-screen w-screen overflow-hidden rounded-xl ${
-        hideBorder ? "" : "border border-border"
-      } bg-background text-foreground shadow-2xl`}>
+      <div
+        className={`relative h-screen w-screen overflow-hidden rounded-xl ${
+          hideBorder ? "" : "border border-border"
+        } bg-background text-foreground shadow-2xl`}
+      >
         {/* 顶部工具栏 */}
         <div className="relative">
           <Toolbar onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
           {/* 管理模式蒙层 - 覆盖 Toolbar */}
-          {manageMode && (
-            <div className="absolute inset-0 z-40 rounded-t-xl bg-black/30" />
-          )}
+          {manageMode && <div className="absolute inset-0 z-40 rounded-t-xl bg-black/30" />}
         </div>
 
         <main className="flex h-[calc(100vh-48px)]">
@@ -158,28 +157,22 @@ const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
           <div className="relative h-full shrink-0">
             <Sidebar activeId={activeId} onActiveIdChange={setActiveId} />
             {/* 管理模式蒙层 - 覆盖 Sidebar */}
-            {manageMode && (
-              <div className="absolute inset-0 z-40 bg-black/30" />
-            )}
+            {manageMode && <div className="absolute inset-0 z-40 bg-black/30" />}
           </div>
 
-          {activeId === -1 ? (
-            <div className="flex-1 overflow-hidden">
-              <ErrorBoundary>
-                <MonitorSettingsPanel />
-              </ErrorBoundary>
+          <ErrorBoundary>
+            <div className={cn("flex-1 overflow-hidden", activeId === -1 ? "block" : "hidden")}>
+              <MonitorSettingsPanel />
             </div>
-          ) : (
-            <ErrorBoundary>
-              <MainContent
-                activeId={activeId}
-                wallpapers={viewWallpapers}
-                onPreview={openPreview}
-                onCollectionChanged={refreshCollectionView}
-                onManageModeChange={setManageMode}
-              />
-            </ErrorBoundary>
-          )}
+            <MainContent
+              className={activeId !== -1 ? "block" : "hidden"}
+              activeId={activeId}
+              wallpapers={viewWallpapers}
+              onPreview={openPreview}
+              onCollectionChanged={refreshCollectionView}
+              onManageModeChange={setManageMode}
+            />
+          </ErrorBoundary>
         </main>
 
         {previewIndex !== null && (

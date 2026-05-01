@@ -1,17 +1,3 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  rectSortingStrategy,
-} from "@dnd-kit/sortable";
-import { ImagePlus, Search } from "lucide-react";
-import { useTranslation } from "react-i18next";
 import type { Wallpaper } from "@/api/config";
 import {
   AlertDialog,
@@ -23,18 +9,32 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { cn } from "@/lib/utils";
-import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog";
 import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
-import { WallpaperCard, SortableWallpaperCard } from "@/components/wallpaper/WallpaperCard";
+import { SortableWallpaperCard, WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
+import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
-import SortToolbar from "./SortToolbar";
+import { cn } from "@/lib/utils";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
+import { ImagePlus, Search } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import ManageToolbar from "./ManageToolbar";
 import NormalToolbar from "./NormalToolbar";
+import SortToolbar from "./SortToolbar";
 import StatusBar from "./StatusBar";
 
 interface MainContentProps {

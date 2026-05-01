@@ -59,7 +59,7 @@ const MonitorSettingsPanel: React.FC = () => {
   return (
     <div className="flex h-full flex-col">
       {/* 标题栏 */}
-      <div className="flex items-center justify-between border-b border-border/40 px-6 py-4">
+      <div className="flex items-center justify-between border-b border-border/40 px-6 py-1">
         <div className="flex items-center gap-2">
           <MonitorIcon className="size-5 text-foreground/50" />
           <h2 className="text-base font-semibold">{t("monitor.title")}</h2>

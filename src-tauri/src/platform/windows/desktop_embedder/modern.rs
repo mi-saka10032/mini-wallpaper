@@ -17,8 +17,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, SetParent};
 
 use super::encode_wide;
 use super::strategy::{EmbedStrategy, MonitorRect};
-use super::workerw::find_workerw_classic;
 use super::wndproc::{register_subclass, subclass_wndproc};
+use super::workerw::find_workerw_classic;
 
 // ============================================================
 // NC 偏移测量（仅 ModernStrategy 使用）
@@ -97,14 +97,10 @@ impl EmbedStrategy for ModernStrategy {
 
     fn embed(&self, hwnd: HWND, workerw: HWND, rect: MonitorRect) -> Result<()> {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, MoveWindow,
-            SetWindowLongPtrW, SetWindowPos,
-            GWL_EXSTYLE, GWL_STYLE, GWL_WNDPROC,
-            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME,
-            WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
-            WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE,
-            WS_THICKFRAME, WS_VISIBLE,
+            GetWindowLongPtrW, MoveWindow, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
+            GWL_WNDPROC, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
+            WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_THICKFRAME, WS_VISIBLE,
         };
 
         unsafe {
@@ -112,9 +108,12 @@ impl EmbedStrategy for ModernStrategy {
             let original_proc = GetWindowLongPtrW(hwnd, GWL_WNDPROC);
             if original_proc != 0 {
                 register_subclass(hwnd, original_proc);
-                let new_proc = subclass_wndproc as isize;
+                let new_proc = subclass_wndproc as *const () as isize;
                 SetWindowLongPtrW(hwnd, GWL_WNDPROC, new_proc);
-                debug!("WndProc 已替换: orig=0x{:X}, new=0x{:X}", original_proc, new_proc);
+                debug!(
+                    "WndProc 已替换: orig=0x{:X}, new=0x{:X}",
+                    original_proc, new_proc
+                );
             } else {
                 warn!("GetWindowLongPtrW(GWL_WNDPROC) 返回 0，跳过子类化");
             }
@@ -142,7 +141,12 @@ impl EmbedStrategy for ModernStrategy {
 
             // 4. SWP_FRAMECHANGED 触发 WM_NCCALCSIZE（被我们的 WndProc 拦截返回 0）
             SetWindowPos(
-                hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
             );
 
@@ -156,7 +160,12 @@ impl EmbedStrategy for ModernStrategy {
 
             // 7. 嵌入后再次 FRAMECHANGED
             SetWindowPos(
-                hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
             );
 
@@ -167,8 +176,14 @@ impl EmbedStrategy for ModernStrategy {
             let nc = measure_nc_offset(hwnd);
             info!(
                 "NC 偏移验证: L={} T={} R={} B={}, client={}x{}, target={}x{}",
-                nc.left, nc.top, nc.right, nc.bottom,
-                nc.client_w, nc.client_h, rect.width, rect.height
+                nc.left,
+                nc.top,
+                nc.right,
+                nc.bottom,
+                nc.client_w,
+                nc.client_h,
+                rect.width,
+                rect.height
             );
 
             if nc.has_offset() {
@@ -178,7 +193,10 @@ impl EmbedStrategy for ModernStrategy {
                 let comp_w = rect.width + nc.left + nc.right;
                 let comp_h = rect.height + nc.top + nc.bottom;
                 MoveWindow(hwnd, comp_x, comp_y, comp_w, comp_h, 1);
-                info!("NC 补偿完成: pos=({}, {}), size={}x{}", comp_x, comp_y, comp_w, comp_h);
+                info!(
+                    "NC 补偿完成: pos=({}, {}), size={}x{}",
+                    comp_x, comp_y, comp_w, comp_h
+                );
             } else {
                 info!("WM_NCCALCSIZE 拦截成功，NC 偏移已消除");
             }

@@ -20,7 +20,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange, onOpenSettings }) =
   return (
     <div
       data-tauri-drag-region
-      className="flex h-11 shrink-0 items-center border-b border-border/50 bg-surface px-3"
+      className="flex h-12 shrink-0 items-center border-b border-border/50 bg-surface px-3"
     >
       {/* 左侧操作按钮 */}
       <div className="flex items-center gap-1">

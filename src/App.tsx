@@ -145,7 +145,7 @@ const App: React.FC = () => {
 
   return (
     <TooltipProvider>
-      <div className="relative h-screen w-screen overflow-hidden rounded-lg border border-border/60 bg-background text-foreground fluent-shadow-lg">
+      <div className="relative h-screen w-screen overflow-hidden rounded-xl bg-background text-foreground">
         {/* 顶部工具栏 */}
         <div className="relative">
           <Toolbar onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />

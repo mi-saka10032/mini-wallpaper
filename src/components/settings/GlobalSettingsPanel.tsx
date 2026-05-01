@@ -76,7 +76,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="max-w-[680px] gap-0 overflow-hidden rounded-xl border-border/40 p-0 sm:max-h-[520px] fluent-shadow-lg"
+        className="sm:max-w-160 gap-0 overflow-hidden rounded-xl border-border/40 p-0 fluent-shadow-lg"
       >
         <DialogTitle className="sr-only">{t("settings.title")}</DialogTitle>
         <div className="flex h-[520px]">

@@ -113,9 +113,9 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
 
   return (
     <div className="flex h-full w-52 shrink-0 flex-col overflow-hidden border-r border-border/50 bg-sidebar-background">
-      <div className="flex-1 overflow-y-auto px-2 py-2">
+      <div className="flex-1 overflow-y-auto p-1">
         {/* 壁纸库 */}
-        <div className="mb-1">
+        <div className="h-8">
           <button
             type="button"
             onClick={() => onActiveIdChange(0)}
@@ -131,7 +131,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
           </button>
         </div>
 
-        <Separator className="my-2" />
+        <Separator className="my-1" />
 
         {/* 收藏夹标题 + 新建按钮 */}
         <div className="mb-1 flex items-center justify-between px-3">

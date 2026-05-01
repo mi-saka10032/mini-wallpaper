@@ -123,6 +123,7 @@
   html,
   #root {
     background: transparent !important;
+    border-radius: 0.75rem;
   }
 
   * {

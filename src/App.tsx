@@ -162,7 +162,7 @@ const App: React.FC = () => {
           </div>
 
           <ErrorBoundary>
-            <div className="relative flex-1 overflow-hidden">
+            <div className="relative flex flex-1 flex-col overflow-hidden">
               {/* 显示器设置面板 - 懒加载覆盖层，不影响首屏加载 */}
               <Suspense fallback={null}>
                 <div

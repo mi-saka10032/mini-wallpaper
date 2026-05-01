@@ -95,12 +95,11 @@ function VirtualRowInner<T>({
 
 /** 自定义比较函数：避免 rowItems 因 slice 产生新引用而导致 memo 失效 */
 function virtualRowAreEqual<T>(prev: VirtualRowProps<T>, next: VirtualRowProps<T>): boolean {
+  // 注：renderItem 和 getKey 通过稳定引用传入，无需比较
   if (
     prev.cols !== next.cols ||
     prev.rowIndex !== next.rowIndex ||
-    prev.gap !== next.gap ||
-    prev.renderItem !== next.renderItem ||
-    prev.getKey !== next.getKey
+    prev.gap !== next.gap
   ) {
     return false;
   }

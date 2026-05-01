@@ -327,7 +327,7 @@ export const WallpaperCard = memo(
 WallpaperCard.displayName = "WallpaperCard";
 
 /** 可排序壁纸卡片（dnd-kit sortable） */
-export const SortableWallpaperCard: React.FC<WallpaperCardProps> = memo((props) => {
+const SortableWallpaperCardInner: React.FC<WallpaperCardProps> = (props) => {
   const {
     attributes,
     listeners,
@@ -353,5 +353,23 @@ export const SortableWallpaperCard: React.FC<WallpaperCardProps> = memo((props) 
       />
     </div>
   );
-});
+};
+
+export const SortableWallpaperCard = memo(
+  SortableWallpaperCardInner,
+  (prev, next) => {
+    // 排序模式下仅关注数据变化，跳过回调引用比较
+    return (
+      prev.wallpaper === next.wallpaper &&
+      prev.index === next.index &&
+      prev.activeId === next.activeId &&
+      prev.manageMode === next.manageMode &&
+      prev.selected === next.selected &&
+      prev.isCollectionView === next.isCollectionView &&
+      prev.activeConfigs === next.activeConfigs &&
+      prev.collections === next.collections &&
+      prev.displayMode === next.displayMode
+    );
+  },
+);
 SortableWallpaperCard.displayName = "SortableWallpaperCard";

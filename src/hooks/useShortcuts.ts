@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   register,
   unregister,
-  isRegistered,
+  unregisterAll,
 } from "@tauri-apps/plugin-global-shortcut";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
@@ -60,14 +60,13 @@ export function useShortcuts() {
 
   // 注册所有快捷键
   const registerAll = useCallback(async () => {
-    // 先注销旧的
-    for (const shortcut of registeredRef.current) {
-      try {
-        if (await isRegistered(shortcut)) {
-          await unregister(shortcut);
-        }
-      } catch {
-        // ignore
+    // 先注销所有已注册的快捷键（包括 webview 刷新后后端残留的注册）
+    try {
+      await unregisterAll();
+    } catch {
+      // 如果 unregisterAll 失败，尝试逐个注销
+      for (const shortcut of registeredRef.current) {
+        try { await unregister(shortcut); } catch { /* ignore */ }
       }
     }
     registeredRef.current = [];
@@ -87,21 +86,31 @@ export function useShortcuts() {
         invoke(COMMANDS.SWITCH_WALLPAPER, { direction }),
       );
 
-      try {
-        if (await isRegistered(binding)) {
-          await unregister(binding);
+      // 注册快捷键，带重试机制
+      let registered = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await register(binding, handler);
+          registeredRef.current.push(binding);
+          registered = true;
+          break;
+        } catch {
+          // 首次失败后等待一小段时间再重试（给系统释放快捷键的时间）
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 100));
+            // 再次尝试注销
+            try { await unregister(binding); } catch { /* ignore */ }
+          }
         }
-        await register(binding, handler);
-        registeredRef.current.push(binding);
-      } catch {
-        // 注册失败：DB 里的值是坏的，回退到默认值重试
+      }
+
+      // 重试仍失败：回退到默认值
+      if (!registered) {
         const fallback = DEFAULT_SHORTCUTS[action];
         if (binding !== fallback) {
           console.warn(`[useShortcuts] "${binding}" unavailable, falling back to "${fallback}"`);
           try {
-            if (await isRegistered(fallback)) {
-              await unregister(fallback);
-            }
+            try { await unregister(fallback); } catch { /* ignore */ }
             await register(fallback, handler);
             registeredRef.current.push(fallback);
             // 把坏值修正回默认

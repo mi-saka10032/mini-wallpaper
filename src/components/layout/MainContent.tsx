@@ -82,7 +82,24 @@ const MainContent: React.FC<MainContentProps> = ({
   const configs = useMonitorConfigStore((s) => s.configs);
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
-  const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
+  // 稳定化 activeConfigs 引用：仅当活跃配置的 id/wallpaper_id 实际变化时才更新引用
+  const activeConfigsRaw = useMemo(() => configs.filter((c) => c.active), [configs]);
+  const activeConfigsRef = useRef(activeConfigsRaw);
+  const activeConfigs = useMemo(() => {
+    const prev = activeConfigsRef.current;
+    if (
+      prev.length === activeConfigsRaw.length &&
+      prev.every((c, i) =>
+        c.monitor_id === activeConfigsRaw[i].monitor_id &&
+        c.wallpaper_id === activeConfigsRaw[i].wallpaper_id &&
+        c.collection_id === activeConfigsRaw[i].collection_id
+      )
+    ) {
+      return prev;
+    }
+    activeConfigsRef.current = activeConfigsRaw;
+    return activeConfigsRaw;
+  }, [activeConfigsRaw]);
   const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
 
   // 添加壁纸到收藏夹的 picker

@@ -95,9 +95,15 @@ export function useManageMode({
     setSelectedIds(new Set());
   }, []);
 
+  // 用 ref 持有 manageMode 和 isCollectionView，使 handleDeleteRequest 引用稳定
+  const manageModeRef = useRef(manageMode);
+  manageModeRef.current = manageMode;
+  const isCollectionViewRef = useRef(isCollectionView);
+  isCollectionViewRef.current = isCollectionView;
+
   const handleDeleteRequest = useCallback((ids: number[]) => {
-    if (manageMode) {
-      if (isCollectionView) {
+    if (manageModeRef.current) {
+      if (isCollectionViewRef.current) {
         setPendingRemovals((prev) => [...prev, ...ids]);
       } else {
         setPendingDeletions((prev) => [...prev, ...ids]);
@@ -111,7 +117,7 @@ export function useManageMode({
       setPendingDeleteIds(ids);
       setDeleteDialogOpen(true);
     }
-  }, [manageMode, isCollectionView]);
+  }, []);
 
   const handleDeleteConfirm = useCallback(async () => {
     if (isCollectionView && collectionId !== null) {

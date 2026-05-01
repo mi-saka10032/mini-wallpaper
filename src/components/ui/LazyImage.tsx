@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { ImageOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +21,12 @@ interface LazyImageProps {
 const LazyImage: React.FC<LazyImageProps> = ({ src, alt, className, fallback }) => {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
+
+  // src 变化时重置加载状态，避免旧状态残留
+  useEffect(() => {
+    setLoaded(false);
+    setError(false);
+  }, [src]);
 
   const handleLoad = useCallback(() => {
     setLoaded(true);

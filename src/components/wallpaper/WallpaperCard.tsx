@@ -14,7 +14,6 @@ import { CSS } from "@dnd-kit/utilities";
 import type { Collection } from "@/stores/collectionStore";
 import type { MonitorConfig } from "@/api/config";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
-import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -43,6 +42,8 @@ export interface WallpaperCardProps {
   activeConfigs: MonitorConfig[];
   /** 从父组件传入的收藏夹列表 */
   collections: Collection[];
+  /** 从父组件传入的显示模式（independent/mirror/extend） */
+  displayMode: string;
   isDragging?: boolean;
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
   onClick: (wp: Wallpaper, index: number, e: React.MouseEvent) => void;
@@ -56,10 +57,9 @@ export interface WallpaperCardProps {
  * 处理"设置为 X 显示器的壁纸"的逻辑
  * 根据 activeId（0=本地壁纸栏, >0=收藏夹栏）和目标显示器的 config 状态，分 6 种场景处理
  */
-function useSetAsWallpaper(wallpaperId: number, activeId: number, configs: MonitorConfig[]) {
+function useSetAsWallpaper(wallpaperId: number, activeId: number, configs: MonitorConfig[], displayMode: string) {
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
-  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
 
   const isSyncMode = displayMode === "mirror" || displayMode === "extend";
 
@@ -152,6 +152,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   isCollectionView,
   activeConfigs,
   collections,
+  displayMode,
   isDragging = false,
   dragHandleProps,
   onClick,
@@ -161,7 +162,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
 }) => {
   const { t } = useTranslation();
 
-  const handleSetAsWallpaper = useSetAsWallpaper(wallpaper.id, activeId, activeConfigs);
+  const handleSetAsWallpaper = useSetAsWallpaper(wallpaper.id, activeId, activeConfigs, displayMode);
 
   // 左上角叠加层：选中指示器
   const overlayTopLeft = useMemo(() => {
@@ -316,6 +317,7 @@ export const WallpaperCard = memo(
       prev.isCollectionView === next.isCollectionView &&
       prev.activeConfigs === next.activeConfigs &&
       prev.collections === next.collections &&
+      prev.displayMode === next.displayMode &&
       prev.onClick === next.onClick &&
       prev.onDelete === next.onDelete &&
       prev.onAddToCollection === next.onAddToCollection

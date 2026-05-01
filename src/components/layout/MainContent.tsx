@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import type { Wallpaper } from "@/api/config";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
+import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -80,6 +81,7 @@ const MainContent: React.FC<MainContentProps> = ({
   const collections = useCollectionStore((s) => s.collections);
   const configs = useMonitorConfigStore((s) => s.configs);
   const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
+  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
 
   // 添加壁纸到收藏夹的 picker
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -180,6 +182,7 @@ const MainContent: React.FC<MainContentProps> = ({
           isCollectionView={isCollectionView}
           activeConfigs={activeConfigs}
           collections={collections}
+          displayMode={displayMode}
           onClick={handleCardClick}
           onDelete={(id) => manage.handleDeleteRequest([id])}
           onAddToCollection={manage.handleAddToCollection}
@@ -206,6 +209,7 @@ const MainContent: React.FC<MainContentProps> = ({
           isCollectionView={isCollectionView}
           activeConfigs={activeConfigs}
           collections={collections}
+          displayMode={displayMode}
           onClick={handleCardClick}
           onDelete={(id) => manage.handleDeleteRequest([id])}
           onAddToCollection={manage.handleAddToCollection}

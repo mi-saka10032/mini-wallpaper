@@ -35,6 +35,7 @@ export function useManageMode({
     setSelectedIds(new Set());
     setPendingRemovals([]);
     setPendingDeletions([]);
+    document.body.setAttribute("data-manage-mode", "");
     onManageModeChange?.(true);
   }, [onManageModeChange]);
 
@@ -58,6 +59,7 @@ export function useManageMode({
     setSelectedIds(new Set());
     setPendingRemovals([]);
     setPendingDeletions([]);
+    document.body.removeAttribute("data-manage-mode");
     onManageModeChange?.(false);
   }, [isCollectionView, collectionId, pendingRemovals, pendingDeletions, deleteWallpapers, onCollectionChanged, onManageModeChange]);
 
@@ -66,6 +68,7 @@ export function useManageMode({
     setSelectedIds(new Set());
     setPendingRemovals([]);
     setPendingDeletions([]);
+    document.body.removeAttribute("data-manage-mode");
     onManageModeChange?.(false);
   }, [onManageModeChange]);
 

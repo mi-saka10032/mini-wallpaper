@@ -86,14 +86,9 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
       </div>
 
       {/* 类型角标 */}
-      {wallpaper.type === "video" && (
+      {(wallpaper.type === "video" || wallpaper.type === "gif") && (
         <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.video")}
-        </div>
-      )}
-      {wallpaper.type === "gif" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.gif")}
+          {t(`preview.${wallpaper.type}`)}
         </div>
       )}
     </div>

@@ -9,6 +9,20 @@ interface PreviewDialogProps {
   onClose: () => void;
 }
 
+/** 预加载相邻图片（前后各 1 张），减少切换时白屏 */
+function usePreloadAdjacent(wallpapers: Wallpaper[], currentIndex: number) {
+  useEffect(() => {
+    const indices = [currentIndex - 1, currentIndex + 1];
+    for (const idx of indices) {
+      if (idx < 0 || idx >= wallpapers.length) continue;
+      const wp = wallpapers[idx];
+      if (wp.type === "video") continue; // 视频不预加载
+      const img = new Image();
+      img.src = convertFileSrc(wp.file_path);
+    }
+  }, [wallpapers, currentIndex]);
+}
+
 const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, initialIndex, onClose }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
 
@@ -37,6 +51,9 @@ const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, in
   useEffect(() => {
     setCurrentIndex(initialIndex);
   }, [initialIndex]);
+
+  // 预加载相邻图片
+  usePreloadAdjacent(wallpapers, currentIndex);
 
   if (!wallpaper) return null;
 

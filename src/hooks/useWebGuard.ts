@@ -82,6 +82,10 @@ export function useWebGuard() {
           if (isEditable && rule.ctrl && rule.key.toLowerCase() === "a") {
             return;
           }
+          // 管理模式下放行 Ctrl+A（全选卡片）
+          if (rule.ctrl && rule.key.toLowerCase() === "a" && document.body.hasAttribute("data-manage-mode")) {
+            return;
+          }
           e.preventDefault();
           e.stopPropagation();
           return;

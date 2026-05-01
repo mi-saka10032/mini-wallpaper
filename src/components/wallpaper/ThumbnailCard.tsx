@@ -13,6 +13,8 @@ export interface ThumbnailCardProps {
   wallpaper: Wallpaper;
   /** 点击回调 */
   onClick?: (e: React.MouseEvent) => void;
+  /** 右键菜单回调 */
+  onContextMenu?: (e: React.MouseEvent) => void;
   /** 外层容器额外 className（用于控制边框、ring 等状态样式） */
   className?: string;
   /** 外层容器 style */
@@ -39,6 +41,7 @@ export interface ThumbnailCardProps {
 const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
   wallpaper,
   onClick,
+  onContextMenu,
   className,
   style,
   overlayTopLeft,
@@ -58,6 +61,7 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
       )}
       style={style}
       onClick={disabled ? undefined : onClick}
+      onContextMenu={disabled ? undefined : onContextMenu}
     >
       {/* 左上角叠加层插槽 */}
       {overlayTopLeft}

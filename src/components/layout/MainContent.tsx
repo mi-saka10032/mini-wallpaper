@@ -13,9 +13,6 @@ import {
 import { ImagePlus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Wallpaper } from "@/api/config";
-import { useCollectionStore } from "@/stores/collectionStore";
-import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
-import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +28,7 @@ import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog"
 import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { WallpaperCard, SortableWallpaperCard } from "@/components/wallpaper/WallpaperCard";
+import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
@@ -47,7 +45,6 @@ interface MainContentProps {
   onCollectionChanged?: () => void;
   onManageModeChange?: (active: boolean) => void;
 }
-
 
 const MainContent: React.FC<MainContentProps> = ({
   className,
@@ -79,31 +76,6 @@ const MainContent: React.FC<MainContentProps> = ({
   });
 
   const search = useWallpaperSearch({ activeId });
-
-  // ===== 从 store 获取 collections 和 activeConfigs（提升到父组件层，避免每个卡片独立订阅） =====
-  const collections = useCollectionStore((s) => s.collections);
-  const configs = useMonitorConfigStore((s) => s.configs);
-  const upsert = useMonitorConfigStore((s) => s.upsert);
-  const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
-  // 稳定化 activeConfigs 引用：仅当活跃配置的 id/wallpaper_id 实际变化时才更新引用
-  const activeConfigsRaw = useMemo(() => configs.filter((c) => c.active), [configs]);
-  const activeConfigsRef = useRef(activeConfigsRaw);
-  const activeConfigs = useMemo(() => {
-    const prev = activeConfigsRef.current;
-    if (
-      prev.length === activeConfigsRaw.length &&
-      prev.every((c, i) =>
-        c.monitor_id === activeConfigsRaw[i].monitor_id &&
-        c.wallpaper_id === activeConfigsRaw[i].wallpaper_id &&
-        c.collection_id === activeConfigsRaw[i].collection_id
-      )
-    ) {
-      return prev;
-    }
-    activeConfigsRef.current = activeConfigsRaw;
-    return activeConfigsRaw;
-  }, [activeConfigsRaw]);
-  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
 
   // 添加壁纸到收藏夹的 picker
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -221,11 +193,6 @@ const MainContent: React.FC<MainContentProps> = ({
           manageMode={manage.manageMode}
           selected={manage.selectedIds.has(wp.id)}
           isCollectionView={isCollectionView}
-          activeConfigs={activeConfigs}
-          collections={collections}
-          displayMode={displayMode}
-          upsert={upsert}
-          upsertAll={upsertAll}
           onClick={handleCardClick}
           onDelete={handleSingleDelete}
           onAddToCollection={manage.handleAddToCollection}
@@ -251,11 +218,6 @@ const MainContent: React.FC<MainContentProps> = ({
           manageMode={manage.manageMode}
           selected={manage.selectedIds.has(wp.id)}
           isCollectionView={isCollectionView}
-          activeConfigs={activeConfigs}
-          collections={collections}
-          displayMode={displayMode}
-          upsert={upsert}
-          upsertAll={upsertAll}
           onClick={handleCardClick}
           onDelete={handleSingleDelete}
           onAddToCollection={manage.handleAddToCollection}
@@ -265,140 +227,142 @@ const MainContent: React.FC<MainContentProps> = ({
   );
 
   return (
-    <div className={cn('flex flex-1 flex-col overflow-hidden', className)}>
-      {/* 操作栏 */}
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/40 px-4">
-        {sort.sortMode ? (
-          <SortToolbar
-            orderDirty={sort.orderDirty}
-            onCancel={sort.cancelSortMode}
-            onSave={sort.exitSortMode}
-          />
-        ) : manage.manageMode ? (
-          <ManageToolbar
-            selectedCount={manage.selectedIds.size}
-            keyword={search.keyword}
-            sortField={search.sortField}
-            sortOrder={search.sortOrder}
-            isCollectionView={isCollectionView}
-            onSelectAll={() => manage.selectAll(displayWallpapers)}
-            onClearSelection={manage.clearSelection}
-            onKeywordChange={search.setKeyword}
-            onSortFieldChange={search.setSortField}
-            onSortOrderToggle={() => search.setSortOrder(search.sortOrder === "asc" ? "desc" : "asc")}
-            onDeleteSelected={() => manage.handleDeleteRequest(Array.from(manage.selectedIds))}
-            onCancel={manage.cancelManageMode}
-            onDone={exitManageMode}
-          />
-        ) : (
-          <NormalToolbar
-            isCollectionView={isCollectionView}
-            isEmpty={isEmpty}
-            searchExpanded={search.searchExpanded}
-            normalKeyword={search.normalKeyword}
-            onOpenPicker={() => setPickerOpen(true)}
-            onSearchExpand={() => search.setSearchExpanded(true)}
-            onSearchCollapse={() => search.setSearchExpanded(false)}
-            onNormalKeywordChange={search.setNormalKeyword}
-            onEnterSortMode={enterSortMode}
-            onEnterManageMode={enterManageMode}
-          />
-        )}
-      </div>
+    <WallpaperCardContextMenuProvider>
+      <div className={cn('flex flex-1 flex-col overflow-hidden', className)}>
+        {/* 操作栏 */}
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/40 px-4">
+          {sort.sortMode ? (
+            <SortToolbar
+              orderDirty={sort.orderDirty}
+              onCancel={sort.cancelSortMode}
+              onSave={sort.exitSortMode}
+            />
+          ) : manage.manageMode ? (
+            <ManageToolbar
+              selectedCount={manage.selectedIds.size}
+              keyword={search.keyword}
+              sortField={search.sortField}
+              sortOrder={search.sortOrder}
+              isCollectionView={isCollectionView}
+              onSelectAll={() => manage.selectAll(displayWallpapers)}
+              onClearSelection={manage.clearSelection}
+              onKeywordChange={search.setKeyword}
+              onSortFieldChange={search.setSortField}
+              onSortOrderToggle={() => search.setSortOrder(search.sortOrder === "asc" ? "desc" : "asc")}
+              onDeleteSelected={() => manage.handleDeleteRequest(Array.from(manage.selectedIds))}
+              onCancel={manage.cancelManageMode}
+              onDone={exitManageMode}
+            />
+          ) : (
+            <NormalToolbar
+              isCollectionView={isCollectionView}
+              isEmpty={isEmpty}
+              searchExpanded={search.searchExpanded}
+              normalKeyword={search.normalKeyword}
+              onOpenPicker={() => setPickerOpen(true)}
+              onSearchExpand={() => search.setSearchExpanded(true)}
+              onSearchCollapse={() => search.setSearchExpanded(false)}
+              onNormalKeywordChange={search.setNormalKeyword}
+              onEnterSortMode={enterSortMode}
+              onEnterManageMode={enterManageMode}
+            />
+          )}
+        </div>
 
-      {/* 内容区 */}
-      <div className={cn(
-        "min-h-0 flex-1",
-        (search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled)
-          ? "overflow-y-auto p-4"
-          : "overflow-hidden",
-      )}>
-        {search.loading ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-foreground/50">{t("main.importing")}</p>
-          </div>
-        ) : isEmpty ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="flex flex-col items-center gap-3 text-foreground/30">
-              <ImagePlus className="size-12" strokeWidth={1} />
-              <p className="text-sm">
-                {isCollectionView ? t("main.emptyCollection") : t("main.emptyAll")}
-              </p>
+        {/* 内容区 */}
+        <div className={cn(
+          "min-h-0 flex-1",
+          (search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled)
+            ? "overflow-y-auto p-4"
+            : "overflow-hidden",
+        )}>
+          {search.loading ? (
+            <div className="flex h-full items-center justify-center">
+              <p className="text-sm text-foreground/50">{t("main.importing")}</p>
             </div>
-          </div>
-        ) : displayWallpapers.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="flex flex-col items-center gap-3 text-foreground/30">
-              <Search className="size-10" strokeWidth={1} />
-              <p className="text-sm">{t("grid.noResults")}</p>
+          ) : isEmpty ? (
+            <div className="flex h-full items-center justify-center">
+              <div className="flex flex-col items-center gap-3 text-foreground/30">
+                <ImagePlus className="size-12" strokeWidth={1} />
+                <p className="text-sm">
+                  {isCollectionView ? t("main.emptyCollection") : t("main.emptyAll")}
+                </p>
+              </div>
             </div>
-          </div>
-        ) : sort.isDragEnabled ? (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={sort.handleDragEnd}
-          >
-            <SortableContext items={wallpaperIds} strategy={rectSortingStrategy}>
-              {sortableGridContent}
-            </SortableContext>
-          </DndContext>
-        ) : (
-          virtualGridContent
-        )}
-      </div>
-
-      {/* 底部状态栏 */}
-      <StatusBar
-        manageMode={manage.manageMode}
-        sortMode={sort.sortMode}
-        selectedCount={manage.selectedIds.size}
-        displayCount={displayWallpapers.length}
-        totalCount={wallpapers.length}
-        keyword={search.keyword}
-        normalKeyword={search.normalKeyword}
-        pendingRemovalsCount={manage.pendingRemovals.length}
-        pendingDeletionsCount={manage.pendingDeletions.length}
-      />
-
-      {/* 删除确认 */}
-      <AlertDialog open={manage.deleteDialogOpen} onOpenChange={manage.setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{isCollectionView ? t("main.removeConfirmTitle") : t("main.deleteConfirmTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {isCollectionView
-                ? t("main.removeConfirmDesc", { count: manage.pendingDeleteIds.length })
-                : t("main.deleteConfirmDesc", { count: manage.pendingDeleteIds.length })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("main.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={manage.handleDeleteConfirm}
-              className={
-                isCollectionView
-                  ? ""
-                  : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              }
+          ) : displayWallpapers.length === 0 ? (
+            <div className="flex h-full items-center justify-center">
+              <div className="flex flex-col items-center gap-3 text-foreground/30">
+                <Search className="size-10" strokeWidth={1} />
+                <p className="text-sm">{t("grid.noResults")}</p>
+              </div>
+            </div>
+          ) : sort.isDragEnabled ? (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={sort.handleDragEnd}
             >
-              {isCollectionView ? t("main.remove") : t("main.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              <SortableContext items={wallpaperIds} strategy={rectSortingStrategy}>
+                {sortableGridContent}
+              </SortableContext>
+            </DndContext>
+          ) : (
+            virtualGridContent
+          )}
+        </div>
 
-      {/* 壁纸选择器 Dialog */}
-      {isCollectionView && collectionId !== null && (
-        <WallpaperPickerDialog
-          open={pickerOpen}
-          collectionId={collectionId}
-          existingWallpaperIds={existingWallpaperIds}
-          onClose={() => setPickerOpen(false)}
-          onConfirm={handlePickerConfirm}
+        {/* 底部状态栏 */}
+        <StatusBar
+          manageMode={manage.manageMode}
+          sortMode={sort.sortMode}
+          selectedCount={manage.selectedIds.size}
+          displayCount={displayWallpapers.length}
+          totalCount={wallpapers.length}
+          keyword={search.keyword}
+          normalKeyword={search.normalKeyword}
+          pendingRemovalsCount={manage.pendingRemovals.length}
+          pendingDeletionsCount={manage.pendingDeletions.length}
         />
-      )}
-    </div>
+
+        {/* 删除确认 */}
+        <AlertDialog open={manage.deleteDialogOpen} onOpenChange={manage.setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{isCollectionView ? t("main.removeConfirmTitle") : t("main.deleteConfirmTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {isCollectionView
+                  ? t("main.removeConfirmDesc", { count: manage.pendingDeleteIds.length })
+                  : t("main.deleteConfirmDesc", { count: manage.pendingDeleteIds.length })}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("main.cancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={manage.handleDeleteConfirm}
+                className={
+                  isCollectionView
+                    ? ""
+                    : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                }
+              >
+                {isCollectionView ? t("main.remove") : t("main.delete")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* 壁纸选择器 Dialog */}
+        {isCollectionView && collectionId !== null && (
+          <WallpaperPickerDialog
+            open={pickerOpen}
+            collectionId={collectionId}
+            existingWallpaperIds={existingWallpaperIds}
+            onClose={() => setPickerOpen(false)}
+            onConfirm={handlePickerConfirm}
+          />
+        )}
+      </div>
+    </WallpaperCardContextMenuProvider>
   );
 };
 

@@ -120,6 +120,11 @@
 }
 
 @layer base {
+  html,
+  #root {
+    background: transparent !important;
+  }
+
   * {
     @apply border-border;
     scrollbar-width: thin;
@@ -160,8 +165,9 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
     font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: transparent !important;
   }
   /* Loading 阶段：body 背景透明，让 Tauri transparent 窗口穿透可见桌面 */
   body.loading-transparent {

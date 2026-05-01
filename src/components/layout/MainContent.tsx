@@ -153,6 +153,12 @@ const MainContent: React.FC<MainContentProps> = ({
   // 导入拖拽卡片：暂时隐藏
   const showImportCard = false;
 
+  // 已存在于收藏夹中的壁纸 ID 集合（用于 picker 禁用已添加项）
+  const existingWallpaperIds = useMemo(
+    () => new Set(wallpapers.map((w) => w.id)),
+    [wallpapers],
+  );
+
   // 排序模式下的网格内容（dnd-kit 需要所有 DOM 在文档中，不能虚拟化）
   const sortableGridContent = (
     <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">
@@ -324,7 +330,7 @@ const MainContent: React.FC<MainContentProps> = ({
         <WallpaperPickerDialog
           open={pickerOpen}
           collectionId={collectionId}
-          existingWallpaperIds={new Set(wallpapers.map((w) => w.id))}
+          existingWallpaperIds={existingWallpaperIds}
           onClose={() => setPickerOpen(false)}
           onConfirm={handlePickerConfirm}
         />

@@ -118,7 +118,7 @@ export default {
     image: "图片",
   },
 
-  // WallpaperPickerDrawer
+  // WallpaperPicker (shared keys)
   picker: {
     title: "添加壁纸",
     selectAll: "全选",

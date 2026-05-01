@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Wallpaper } from "@/stores/wallpaperStore";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
-import { sortWallpapers } from "@/components/wallpaper/WallpaperGrid";
-import type { SortField, SortOrder } from "@/components/wallpaper/WallpaperGrid";
+import { sortWallpapers } from "@/utils/sort";
+import type { SortField, SortOrder } from "@/utils/sort";
 
 export interface UseWallpaperSearchOptions {
   activeId: number;

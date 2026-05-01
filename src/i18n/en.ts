@@ -118,7 +118,7 @@ export default {
     image: "Image",
   },
 
-  // WallpaperPickerDrawer
+  // WallpaperPicker (shared keys)
   picker: {
     title: "Add Wallpapers",
     selectAll: "All",

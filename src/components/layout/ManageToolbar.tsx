@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { SortField, SortOrder } from "@/components/wallpaper/WallpaperGrid";
+import type { SortField, SortOrder } from "@/utils/sort";
 
 interface ManageToolbarProps {
   selectedCount: number;

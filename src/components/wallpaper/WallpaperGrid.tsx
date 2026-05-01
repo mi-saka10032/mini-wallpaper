@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import type { Wallpaper } from "@/api/config";
+import { sortWallpapers } from "@/utils/sort";
+import type { SortField, SortOrder } from "@/utils/sort";
 import VirtualGrid from "./VirtualGrid";
 import { FilterBar } from "./FilterBar";
 
@@ -11,8 +13,8 @@ import { FilterBar } from "./FilterBar";
 
 export type GridMode = "browse" | "select";
 
-export type SortField = "name" | "created_at" | "file_size" | "type";
-export type SortOrder = "asc" | "desc";
+// re-export 排序类型，保持向后兼容
+export type { SortField, SortOrder } from "@/utils/sort";
 
 export interface WallpaperGridProps {
   /** 壁纸数据源 */
@@ -39,33 +41,8 @@ export interface WallpaperGridProps {
   className?: string;
 }
 
-// ============ 排序逻辑 ============
-
-export function sortWallpapers(
-  wallpapers: Wallpaper[],
-  field: SortField,
-  order: SortOrder,
-): Wallpaper[] {
-  const sorted = [...wallpapers].sort((a, b) => {
-    let cmp = 0;
-    switch (field) {
-      case "name":
-        cmp = a.name.localeCompare(b.name, undefined, { numeric: true });
-        break;
-      case "created_at":
-        cmp = a.created_at.localeCompare(b.created_at);
-        break;
-      case "file_size":
-        cmp = (a.file_size ?? 0) - (b.file_size ?? 0);
-        break;
-      case "type":
-        cmp = a.type.localeCompare(b.type);
-        break;
-    }
-    return order === "asc" ? cmp : -cmp;
-  });
-  return sorted;
-}
+// re-export sortWallpapers 保持向后兼容
+export { sortWallpapers } from "@/utils/sort";
 
 // FilterBar 已拆分至 ./FilterBar.tsx
 export { FilterBar } from "./FilterBar";

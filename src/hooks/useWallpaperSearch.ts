@@ -23,10 +23,7 @@ function filterWallpapers(
   }
 
   if (sortField && sortOrder) {
-    const isDefault = sortField === "created_at" && sortOrder === "desc";
-    if (!isDefault) {
-      result = sortWallpapers(result, sortField, sortOrder);
-    }
+    result = sortWallpapers(result, sortField, sortOrder);
   }
 
   return result;
@@ -77,9 +74,6 @@ export function useWallpaperSearch({ activeId }: UseWallpaperSearchOptions) {
    */
   const getFilteredWallpapers = useCallback(
     (source: Wallpaper[]): Wallpaper[] => {
-      const hasKeyword = keyword.trim().length > 0;
-      const isDefault = sortField === "created_at" && sortOrder === "desc";
-      if (!hasKeyword && isDefault) return source;
       return filterWallpapers(source, keyword, sortField, sortOrder);
     },
     [keyword, sortField, sortOrder],

@@ -47,6 +47,17 @@ let _eventUnlisten: (() => void) | null = null;
 let _configRefreshUnlisten: (() => void) | null = null;
 let _initialized = false;
 
+// HMR 安全：开发环境下模块热替换时清理事件监听器
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    _eventUnlisten?.();
+    _eventUnlisten = null;
+    _configRefreshUnlisten?.();
+    _configRefreshUnlisten = null;
+    _initialized = false;
+  });
+}
+
 export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
   configs: [],
   loading: false,

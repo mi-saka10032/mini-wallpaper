@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
-import type { Wallpaper } from "@/stores/wallpaperStore";
+import type { Wallpaper } from "@/api/config";
 import { addWallpapers, removeWallpapers } from "@/api/collectionWallpaper";
 
 export interface UseManageModeOptions {

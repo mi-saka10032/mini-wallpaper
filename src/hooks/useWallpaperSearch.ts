@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Wallpaper } from "@/stores/wallpaperStore";
+import type { Wallpaper } from "@/api/config";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { sortWallpapers } from "@/utils/sort";
 import type { SortField, SortOrder } from "@/utils/sort";

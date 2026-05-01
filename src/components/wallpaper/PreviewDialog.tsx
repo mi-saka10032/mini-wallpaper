@@ -1,7 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
-import type { Wallpaper } from "@/stores/wallpaperStore";
+import type { Wallpaper } from "@/api/config";
 
 interface PreviewDialogProps {
   wallpapers: Wallpaper[];

@@ -13,6 +13,13 @@ import {
 /** 已创建壁纸窗口的 monitor_id 集合（前端侧跟踪，防止重复创建） */
 export const activeWallpaperWindows = new Set<string>();
 
+// HMR 安全：开发环境下模块热替换时清理窗口跟踪集合
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    activeWallpaperWindows.clear();
+  });
+}
+
 /**
  * 为 active 且有 wallpaper_id 的显示器创建壁纸窗口
  * display_mode 从全局 app_setting 读取：

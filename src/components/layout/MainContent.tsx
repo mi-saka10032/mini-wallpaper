@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/sortable";
 import { ImagePlus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Wallpaper } from "@/stores/wallpaperStore";
+import type { Wallpaper } from "@/api/config";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import {

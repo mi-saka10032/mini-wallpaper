@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
-import type { Wallpaper } from "@/stores/wallpaperStore";
+import type { Wallpaper } from "@/api/config";
 import { reorderWallpapers } from "@/api/collectionWallpaper";
 
 export interface UseSortModeOptions {

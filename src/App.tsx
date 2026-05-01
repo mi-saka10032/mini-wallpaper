@@ -1,13 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Toolbar from "@/components/layout/Toolbar";
 import Sidebar from "@/components/layout/Sidebar";
 import MainContent from "@/components/layout/MainContent";
 import MonitorSettingsPanel from "@/components/settings/MonitorSettingsPanel";
-import GlobalSettingsDialog from "@/components/settings/GlobalSettingsPanel";
-import PreviewDialog from "@/components/wallpaper/PreviewDialog";
 import { Toaster } from "@/components/ui/toast";
+import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useShortcuts } from "@/hooks/useShortcuts";
@@ -21,6 +20,10 @@ import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 import AppLoading from "@/components/ui/AppLoading";
+
+// 非首屏组件懒加载
+const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
+const PreviewDialog = lazy(() => import("@/components/wallpaper/PreviewDialog"));
 
 /**
  * AppShell - 外层容器，负责初始化逻辑
@@ -160,29 +163,41 @@ const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
 
           {activeId === -1 ? (
             <div className="flex-1 overflow-hidden">
-              <MonitorSettingsPanel />
+              <ErrorBoundary>
+                <MonitorSettingsPanel />
+              </ErrorBoundary>
             </div>
           ) : (
-            <MainContent
-              activeId={activeId}
-              wallpapers={viewWallpapers}
-              onPreview={openPreview}
-              onCollectionChanged={refreshCollectionView}
-              onManageModeChange={setManageMode}
-            />
+            <ErrorBoundary>
+              <MainContent
+                activeId={activeId}
+                wallpapers={viewWallpapers}
+                onPreview={openPreview}
+                onCollectionChanged={refreshCollectionView}
+                onManageModeChange={setManageMode}
+              />
+            </ErrorBoundary>
           )}
         </main>
 
         {previewIndex !== null && (
-          <PreviewDialog
-            wallpapers={viewWallpapers}
-            initialIndex={previewIndex}
-            onClose={closePreview}
-          />
+          <ErrorBoundary>
+            <Suspense fallback={null}>
+              <PreviewDialog
+                wallpapers={viewWallpapers}
+                initialIndex={previewIndex}
+                onClose={closePreview}
+              />
+            </Suspense>
+          </ErrorBoundary>
         )}
 
         {/* 全局设置 Dialog */}
-        <GlobalSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+        <ErrorBoundary>
+          <Suspense fallback={null}>
+            <GlobalSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+          </Suspense>
+        </ErrorBoundary>
 
         {/* 导入中全局蒙层 */}
         {importing && (

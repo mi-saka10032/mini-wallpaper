@@ -9,36 +9,19 @@ permissions:
   contents: write
 
 jobs:
-  # ─────────────────────────────────────────────
-  # Job 1: Checkout source code
-  # ─────────────────────────────────────────────
-  checkout:
-    name: 📥 Checkout
+  build:
+    name: 🔨 Build & Release
     runs-on: windows-latest
     steps:
+      # ─────────────────────────────────────────
+      # 📥 Checkout
+      # ─────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Upload source
-        uses: actions/upload-artifact@v4
-        with:
-          name: source
-          path: .
-          retention-days: 1
-
-  # ─────────────────────────────────────────────
-  # Job 2: Setup frontend & install dependencies
-  # ─────────────────────────────────────────────
-  setup-frontend:
-    name: 🌐 Frontend Setup
-    runs-on: windows-latest
-    needs: checkout
-    steps:
-      - name: Download source
-        uses: actions/download-artifact@v4
-        with:
-          name: source
-
+      # ─────────────────────────────────────────
+      # 🌐 Frontend Setup
+      # ─────────────────────────────────────────
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -66,26 +49,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Upload workspace with node_modules
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-workspace
-          path: .
-          retention-days: 1
-
-  # ─────────────────────────────────────────────
-  # Job 3: Setup Rust toolchain & cache
-  # ─────────────────────────────────────────────
-  setup-rust:
-    name: 🦀 Rust Setup
-    runs-on: windows-latest
-    needs: checkout
-    steps:
-      - name: Download source
-        uses: actions/download-artifact@v4
-        with:
-          name: source
-
+      # ─────────────────────────────────────────
+      # 🦀 Rust Setup
+      # ─────────────────────────────────────────
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -102,50 +68,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Pre-fetch Rust dependencies
-        run: cargo fetch
-        working-directory: src-tauri
-
-  # ─────────────────────────────────────────────
-  # Job 4: Build Tauri application & Release
-  # ─────────────────────────────────────────────
-  build:
-    name: 🔨 Build & Release
-    runs-on: windows-latest
-    needs: [setup-frontend, setup-rust]
-    steps:
-      - name: Download frontend workspace
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-workspace
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: latest
-          run_install: false
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Rust cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            src-tauri/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
+      # ─────────────────────────────────────────
+      # 🔨 Build & Release
+      # ─────────────────────────────────────────
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:

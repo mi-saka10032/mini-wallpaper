@@ -13,6 +13,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import LazyImage from "@/components/ui/LazyImage";
 import { cn } from "@/lib/utils";
 
 interface WallpaperPickerDrawerProps {
@@ -171,16 +172,15 @@ const PickerRow: React.FC<{
       </div>
 
       {/* 缩略图 */}
-      <div className="relative size-10 shrink-0 overflow-hidden rounded bg-muted">
+      <div className="relative size-10 shrink-0 overflow-hidden rounded">
         {wallpaper.thumb_path ? (
-          <img
+          <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
             alt={wallpaper.name}
-            className="size-full object-cover"
-            loading="lazy"
+            fallback={<TypeIcon className="size-4 text-muted-foreground/40" />}
           />
         ) : (
-          <div className="flex size-full items-center justify-center">
+          <div className="flex size-full items-center justify-center bg-muted">
             <TypeIcon className="size-4 text-muted-foreground/40" />
           </div>
         )}

@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import LazyImage from "@/components/ui/LazyImage";
 import type { Wallpaper } from "@/api/config";
 import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 
@@ -200,16 +201,15 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
         <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
       )}
 
-      <div className="aspect-video bg-muted">
+      <div className="aspect-video">
         {wallpaper.thumb_path ? (
-          <img
+          <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
             alt={wallpaper.name}
-            className="size-full object-cover"
-            loading="lazy"
+            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
           />
         ) : (
-          <div className="flex size-full items-center justify-center">
+          <div className="flex size-full items-center justify-center bg-muted">
             <TypeIcon className="size-8 text-muted-foreground/40" />
           </div>
         )}

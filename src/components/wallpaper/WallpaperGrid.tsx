@@ -3,6 +3,7 @@ import { Check, Film, Image } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import LazyImage from "@/components/ui/LazyImage";
 import type { Wallpaper } from "@/api/config";
 import VirtualGrid from "./VirtualGrid";
 import { FilterBar } from "./FilterBar";
@@ -120,16 +121,15 @@ const SelectableCard: React.FC<SelectableCardProps> = ({
       )}
 
       {/* 缩略图 */}
-      <div className="aspect-video bg-muted">
+      <div className="aspect-video">
         {wallpaper.thumb_path ? (
-          <img
+          <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
             alt={wallpaper.name}
-            className="size-full object-cover"
-            loading="lazy"
+            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
           />
         ) : (
-          <div className="flex size-full items-center justify-center">
+          <div className="flex size-full items-center justify-center bg-muted">
             <TypeIcon className="size-8 text-muted-foreground/40" />
           </div>
         )}
@@ -308,16 +308,15 @@ const BrowseCard: React.FC<BrowseCardProps> = ({ wallpaper, onClick }) => {
       className="group relative cursor-pointer overflow-hidden rounded-lg border border-border bg-muted/30 transition-all hover:ring-2 hover:ring-primary/50"
       onClick={onClick}
     >
-      <div className="aspect-video bg-muted">
+      <div className="aspect-video">
         {wallpaper.thumb_path ? (
-          <img
+          <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
             alt={wallpaper.name}
-            className="size-full object-cover"
-            loading="lazy"
+            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
           />
         ) : (
-          <div className="flex size-full items-center justify-center">
+          <div className="flex size-full items-center justify-center bg-muted">
             <TypeIcon className="size-8 text-muted-foreground/40" />
           </div>
         )}

@@ -4,7 +4,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Toolbar from "@/components/layout/Toolbar";
 import Sidebar from "@/components/layout/Sidebar";
 import MainContent from "@/components/layout/MainContent";
-import MonitorSettingsPanel from "@/components/settings/MonitorSettingsPanel";
 import { Toaster } from "@/components/ui/toast";
 import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
@@ -20,11 +19,11 @@ import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
 import { getCollectionWallpapers } from "@/api/collection";
 import AppLoading from "@/components/ui/AppLoading";
-import { cn } from "./lib/utils";
 
 // 非首屏组件懒加载
 const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
 const PreviewDialog = lazy(() => import("@/components/wallpaper/PreviewDialog"));
+const MonitorSettingsPanel = lazy(() => import("@/components/settings/MonitorSettingsPanel"));
 
 /**
  * AppShell - 外层容器，负责初始化逻辑
@@ -164,17 +163,23 @@ const App: React.FC = () => {
           </div>
 
           <ErrorBoundary>
-            <div className={cn("flex-1 overflow-hidden", activeId === -1 ? "block" : "hidden")}>
-              <MonitorSettingsPanel />
+            <div className="relative flex-1 overflow-hidden">
+              {/* 显示器设置面板 - 懒加载覆盖层，不影响首屏加载 */}
+              {activeId === -1 && (
+                <Suspense fallback={null}>
+                  <div className="absolute inset-0 z-30 overflow-hidden bg-background">
+                    <MonitorSettingsPanel />
+                  </div>
+                </Suspense>
+              )}
+              <MainContent
+                activeId={activeId}
+                wallpapers={viewWallpapers}
+                onPreview={openPreview}
+                onCollectionChanged={refreshCollectionView}
+                onManageModeChange={setManageMode}
+              />
             </div>
-            <MainContent
-              className={activeId !== -1 ? "block" : "hidden"}
-              activeId={activeId}
-              wallpapers={viewWallpapers}
-              onPreview={openPreview}
-              onCollectionChanged={refreshCollectionView}
-              onManageModeChange={setManageMode}
-            />
           </ErrorBoundary>
         </main>
 

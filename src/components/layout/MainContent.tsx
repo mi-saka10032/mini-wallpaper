@@ -40,7 +40,7 @@ import NormalToolbar from "./NormalToolbar";
 import StatusBar from "./StatusBar";
 
 interface MainContentProps {
-  className: string;
+  className?: string;
   activeId: number;
   wallpapers: Wallpaper[];
   onPreview: (index: number) => void;

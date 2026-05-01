@@ -98,7 +98,8 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
     }
 
     closeDialog();
-  }, [dialogMode, dialogValue, dialogTarget, createCollection, renameCollection, closeDialog]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dialogMode, dialogValue, dialogTarget, createCollection, renameCollection]);
 
   // 删除确认
   const handleDelete = useCallback(async () => {

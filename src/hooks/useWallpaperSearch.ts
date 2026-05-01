@@ -8,6 +8,30 @@ export interface UseWallpaperSearchOptions {
   activeId: number;
 }
 
+/** 通用壁纸过滤工具函数：关键词过滤 + 可选排序 */
+function filterWallpapers(
+  source: Wallpaper[],
+  keyword: string,
+  sortField?: SortField,
+  sortOrder?: SortOrder,
+): Wallpaper[] {
+  let result = source;
+
+  const kw = keyword.trim().toLowerCase();
+  if (kw) {
+    result = result.filter((w) => w.name.toLowerCase().includes(kw));
+  }
+
+  if (sortField && sortOrder) {
+    const isDefault = sortField === "created_at" && sortOrder === "desc";
+    if (!isDefault) {
+      result = sortWallpapers(result, sortField, sortOrder);
+    }
+  }
+
+  return result;
+}
+
 export function useWallpaperSearch({ activeId }: UseWallpaperSearchOptions) {
   const loading = useWallpaperStore((s) => s.loading);
 
@@ -56,16 +80,7 @@ export function useWallpaperSearch({ activeId }: UseWallpaperSearchOptions) {
       const hasKeyword = keyword.trim().length > 0;
       const isDefault = sortField === "created_at" && sortOrder === "desc";
       if (!hasKeyword && isDefault) return source;
-
-      let result = source;
-      if (hasKeyword) {
-        const kw = keyword.trim().toLowerCase();
-        result = result.filter((w) => w.name.toLowerCase().includes(kw));
-      }
-      if (!isDefault) {
-        result = sortWallpapers(result, sortField, sortOrder);
-      }
-      return result;
+      return filterWallpapers(source, keyword, sortField, sortOrder);
     },
     [keyword, sortField, sortOrder],
   );
@@ -75,9 +90,8 @@ export function useWallpaperSearch({ activeId }: UseWallpaperSearchOptions) {
    */
   const getNormalFilteredWallpapers = useCallback(
     (wallpapers: Wallpaper[]): Wallpaper[] => {
-      const kw = normalKeyword.trim().toLowerCase();
-      if (!kw) return wallpapers;
-      return wallpapers.filter((w) => w.name.toLowerCase().includes(kw));
+      if (!normalKeyword.trim()) return wallpapers;
+      return filterWallpapers(wallpapers, normalKeyword);
     },
     [normalKeyword],
   );

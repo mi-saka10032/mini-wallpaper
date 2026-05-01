@@ -27,7 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import type { Wallpaper } from "@/api/config";
-import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
+import { getCollectionWallpapers } from "@/api/collection";
 
 // ============ 类型定义 ============
 

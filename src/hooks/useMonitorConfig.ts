@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
-import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
+import { getCollectionWallpapers } from "@/api/collection";
 
 export interface UseMonitorConfigOptions {
   selectedMonitorId: string | null;

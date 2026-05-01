@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import type { Wallpaper } from "@/api/config";
 import { addWallpapers, removeWallpapers } from "@/api/collectionWallpaper";
@@ -30,6 +30,12 @@ export function useManageMode({
   // 本地壁纸管理模式下延迟删除的壁纸 ID 列表（退出时批量持久化）
   const [pendingDeletions, setPendingDeletions] = useState<number[]>([]);
 
+  // 用 ref 持有 pending 数据，使 exitManageMode 引用稳定
+  const pendingRemovalsRef = useRef(pendingRemovals);
+  pendingRemovalsRef.current = pendingRemovals;
+  const pendingDeletionsRef = useRef(pendingDeletions);
+  pendingDeletionsRef.current = pendingDeletions;
+
   const enterManageMode = useCallback(() => {
     setManageMode(true);
     setSelectedIds(new Set());
@@ -40,17 +46,17 @@ export function useManageMode({
   }, [onManageModeChange]);
 
   const exitManageMode = useCallback(async () => {
-    if (isCollectionView && collectionId !== null && pendingRemovals.length > 0) {
+    if (isCollectionView && collectionId !== null && pendingRemovalsRef.current.length > 0) {
       try {
-        await removeWallpapers(collectionId, pendingRemovals);
+        await removeWallpapers(collectionId, pendingRemovalsRef.current);
         onCollectionChanged?.();
       } catch (e) {
         console.error("[exitManageMode]", e);
       }
     }
-    if (!isCollectionView && pendingDeletions.length > 0) {
+    if (!isCollectionView && pendingDeletionsRef.current.length > 0) {
       try {
-        await deleteWallpapers(pendingDeletions);
+        await deleteWallpapers(pendingDeletionsRef.current);
       } catch (e) {
         console.error("[exitManageMode] delete wallpapers failed:", e);
       }
@@ -61,7 +67,7 @@ export function useManageMode({
     setPendingDeletions([]);
     document.body.removeAttribute("data-manage-mode");
     onManageModeChange?.(false);
-  }, [isCollectionView, collectionId, pendingRemovals, pendingDeletions, deleteWallpapers, onCollectionChanged, onManageModeChange]);
+  }, [isCollectionView, collectionId, deleteWallpapers, onCollectionChanged, onManageModeChange]);
 
   const cancelManageMode = useCallback(() => {
     setManageMode(false);

@@ -18,7 +18,7 @@ import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
-import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
+import { getCollectionWallpapers } from "@/api/collection";
 import AppLoading from "@/components/ui/AppLoading";
 
 // 非首屏组件懒加载

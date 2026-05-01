@@ -22,6 +22,9 @@ export async function remove(id: number): Promise<void> {
 }
 
 /** 获取收藏夹内的壁纸列表 */
-export async function getWallpapers(collectionId: number): Promise<Wallpaper[]> {
+export async function getCollectionWallpapers(collectionId: number): Promise<Wallpaper[]> {
   return invoke(COMMANDS.GET_COLLECTION_WALLPAPERS, { collectionId });
 }
+
+/** @deprecated 使用 getCollectionWallpapers 代替 */
+export const getWallpapers = getCollectionWallpapers;

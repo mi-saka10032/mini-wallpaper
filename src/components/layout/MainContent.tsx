@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -131,6 +131,10 @@ const MainContent: React.FC<MainContentProps> = ({
 
   const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
 
+  // 用 ref 持有 wallpapers，避免 handleCardClick 依赖数组引用变化
+  const wallpapersRef = useRef(wallpapers);
+  wallpapersRef.current = wallpapers;
+
   // ===== 卡片点击 =====
   const handleCardClick = useCallback(
     (wp: Wallpaper, _index: number, _e: React.MouseEvent) => {
@@ -138,11 +142,11 @@ const MainContent: React.FC<MainContentProps> = ({
       if (manage.manageMode) {
         manage.toggleSelect(wp.id);
       } else {
-        const realIndex = wallpapers.findIndex((w) => w.id === wp.id);
+        const realIndex = wallpapersRef.current.findIndex((w) => w.id === wp.id);
         onPreview(realIndex !== -1 ? realIndex : _index);
       }
     },
-    [sort.sortMode, manage, wallpapers, onPreview],
+    [sort.sortMode, manage, onPreview],
   );
 
   // ===== picker 确认 =====

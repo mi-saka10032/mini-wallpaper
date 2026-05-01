@@ -135,6 +135,16 @@ function VirtualGrid<T>({
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
 
+  // 用 ref 持有 renderItem，避免内联函数引用变化导致 VirtualRow memo 失效
+  const renderItemRef = useRef(renderItem);
+  renderItemRef.current = renderItem;
+
+  // 稳定引用的 renderItem wrapper
+  const stableRenderItem = useMemo(
+    () => (item: T, index: number) => renderItemRef.current(item, index),
+    [],
+  );
+
   // 监听容器宽度变化
   useEffect(() => {
     const el = containerRef.current;
@@ -195,7 +205,7 @@ function VirtualGrid<T>({
           style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
         >
           {items.map((item, index) => (
-            <div key={getKey(item)}>{renderItem(item, index)}</div>
+            <div key={getKey(item)}>{stableRenderItem(item, index)}</div>
           ))}
           {trailingElement}
         </div>
@@ -229,7 +239,7 @@ function VirtualGrid<T>({
               cols={cols}
               rowIndex={virtualRow.index}
               getKey={getKey}
-              renderItem={renderItem}
+              renderItem={stableRenderItem}
               gap={GAP}
               style={{
                 position: "absolute",

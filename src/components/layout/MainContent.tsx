@@ -1,4 +1,3 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   DndContext,
   closestCenter,
@@ -9,23 +8,15 @@ import {
 import type { DragEndEvent } from "@dnd-kit/core";
 import {
   SortableContext,
-  useSortable,
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import {
-  Check,
-  Film,
-  FolderPlus,
   GripVertical,
-  Image,
   ImagePlus,
-  Monitor,
   Plus,
   Search,
   Settings2,
   SortAsc,
-  Star,
   Trash2,
   Unlink,
   X,
@@ -34,16 +25,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import type { Wallpaper } from "@/stores/wallpaperStore";
-import { useCollectionStore } from "@/stores/collectionStore";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -63,17 +44,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog";
 import { sortWallpapers } from "@/components/wallpaper/WallpaperGrid";
 import type { SortField, SortOrder } from "@/components/wallpaper/WallpaperGrid";
 import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
+import { WallpaperCard, SortableWallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { addWallpapers, removeWallpapers, reorderWallpapers } from "@/api/collectionWallpaper";
-import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
-import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
-import { getWallpapers as getCollectionWallpapers } from "@/api/collection";
 
 interface MainContentProps {
   activeId: number;
@@ -132,8 +110,6 @@ const MainContent: React.FC<MainContentProps> = ({
   // 搜索 + 排序后的壁纸列表（仅管理模式下使用）
   const filteredWallpapers = useMemo(() => {
     if (!manageMode) return wallpapers;
-    // 管理模式下基于 wallpapers 进行过滤排序
-    // 收藏夹视图需要排除已标记移除的项；本地壁纸视图需要排除已标记删除的项
     let source = wallpapers;
     if (isCollectionView && pendingRemovals.length > 0) {
       source = source.filter((w) => !pendingRemovals.includes(w.id));
@@ -142,18 +118,15 @@ const MainContent: React.FC<MainContentProps> = ({
       source = source.filter((w) => !pendingDeletions.includes(w.id));
     }
 
-    // 无搜索且默认排序时，直接返回源列表
     const hasKeyword = keyword.trim().length > 0;
     const isDefault = sortField === "created_at" && sortOrder === "desc";
     if (!hasKeyword && isDefault) return source;
 
-    // 关键词过滤
     let result = source;
     if (hasKeyword) {
       const kw = keyword.trim().toLowerCase();
       result = result.filter((w) => w.name.toLowerCase().includes(kw));
     }
-    // 排序（复用 WallpaperGrid 的排序逻辑）
     if (!isDefault) {
       result = sortWallpapers(result, sortField, sortOrder);
     }
@@ -262,27 +235,23 @@ const MainContent: React.FC<MainContentProps> = ({
 
   const handleDeleteRequest = useCallback((ids: number[]) => {
     if (manageMode) {
-      // 管理模式下：不弹确认框，直接加入 pending 列表
       if (isCollectionView) {
         setPendingRemovals((prev) => [...prev, ...ids]);
       } else {
         setPendingDeletions((prev) => [...prev, ...ids]);
       }
-      // 清除已选中的项（如果是通过选中后点击删除按钮触发的）
       setSelectedIds((prev) => {
         const next = new Set(prev);
         ids.forEach((id) => next.delete(id));
         return next;
       });
     } else {
-      // 常态模式下：弹出确认对话框
       setPendingDeleteIds(ids);
       setDeleteDialogOpen(true);
     }
   }, [manageMode, isCollectionView]);
 
   const handleDeleteConfirm = useCallback(async () => {
-    // 仅常态模式下使用：确认后立即执行 API
     if (isCollectionView && collectionId !== null) {
       await removeWallpapers(collectionId, pendingDeleteIds);
       onCollectionChanged?.();
@@ -296,15 +265,10 @@ const MainContent: React.FC<MainContentProps> = ({
 
   const handleCardClick = useCallback(
     (wp: Wallpaper, _index: number, _e: React.MouseEvent) => {
-      if (sortMode) {
-        // 排序模式下点击不做任何操作（仅拖拽有效）
-        return;
-      }
+      if (sortMode) return;
       if (manageMode) {
-        // 管理模式下点击即 toggle 选中状态（多选）
         toggleSelect(wp.id);
       } else {
-        // 常态模式：如果有搜索过滤，需要找到壁纸在原始列表中的真实索引
         const realIndex = wallpapers.findIndex((w) => w.id === wp.id);
         onPreview(realIndex !== -1 ? realIndex : _index);
       }
@@ -334,7 +298,7 @@ const MainContent: React.FC<MainContentProps> = ({
     setOrderDirty(false);
     setNormalKeyword("");
     setSearchExpanded(false);
-    onManageModeChange?.(true); // 通知外部进入特殊模式
+    onManageModeChange?.(true);
   }, [wallpapers, onManageModeChange]);
 
   const exitSortMode = useCallback(async () => {
@@ -381,8 +345,7 @@ const MainContent: React.FC<MainContentProps> = ({
   // 是否启用拖拽排序（仅排序模式下启用）
   const isDragEnabled = sortMode && localOrder !== null;
 
-  // 导入拖拽卡片：暂时隐藏，等待 Tauri 拖拽事件在 Win11 下的兼容性修复后再启用
-  // 原始条件：activeId === 0 && !manageMode
+  // 导入拖拽卡片：暂时隐藏
   const showImportCard = false;
 
   // 排序模式下的网格内容（dnd-kit 需要所有 DOM 在文档中，不能虚拟化）
@@ -639,7 +602,6 @@ const MainContent: React.FC<MainContentProps> = ({
       {/* 内容区 */}
       <div className={cn(
         "flex-1 overflow-hidden",
-        // 非虚拟滚动场景（loading/空状态/排序模式）需要自身滚动 + padding
         (loading || isEmpty || displayWallpapers.length === 0 || isDragEnabled) && "overflow-y-auto p-4",
       )}>
         {loading ? (
@@ -743,317 +705,6 @@ const MainContent: React.FC<MainContentProps> = ({
           onConfirm={handlePickerConfirm}
         />
       )}
-    </div>
-  );
-};
-
-/** 壁纸卡片 Props */
-interface WallpaperCardProps {
-  wallpaper: Wallpaper;
-  index: number;
-  activeId: number;
-  manageMode: boolean;
-  selected: boolean;
-  isCollectionView: boolean;
-  isDragging?: boolean;
-  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
-  onClick: (wp: Wallpaper, index: number, e: React.MouseEvent) => void;
-  onDelete: (id: number) => void;
-  onAddToCollection: (wallpaperId: number, collectionId: number) => void;
-}
-
-/** 单个壁纸卡片（内容渲染） */
-const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSProperties }> = ({
-  wallpaper,
-  index,
-  activeId,
-  manageMode,
-  selected,
-  isCollectionView,
-  isDragging = false,
-  dragHandleProps,
-  onClick,
-  onDelete,
-  onAddToCollection,
-  style,
-}) => {
-  const collections = useCollectionStore((s) => s.collections);
-  const configs = useMonitorConfigStore((s) => s.configs);
-  const upsert = useMonitorConfigStore((s) => s.upsert);
-  const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
-  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
-  const { t } = useTranslation();
-  const TypeIcon = wallpaper.type === "video" ? Film : Image;
-
-  // 有效（active）的显示器配置列表
-  const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
-  const isSyncMode = displayMode === "mirror" || displayMode === "extend";
-
-  /**
-   * 处理"设置为 X 显示器的壁纸"
-   * 根据 activeId（0=本地壁纸栏, >0=收藏夹栏）和目标显示器的 config 状态，分 6 种场景处理
-   */
-  const handleSetAsWallpaper = useCallback(
-    async (monitorId: string) => {
-      const targetConfig = configs.find((c) => c.monitor_id === monitorId);
-      const wallpaperId = wallpaper.id;
-      const collectionId = activeId > 0 ? activeId : null; // 当前所在收藏夹 id
-
-      if (activeId === 0) {
-        // ===== 本地壁纸栏（activeId === 0）=====
-        if (!targetConfig?.collection_id) {
-          // 场景 1a：显示器无收藏夹，直接更新壁纸 id
-          if (isSyncMode) {
-            await upsertAll({ wallpaperId });
-          } else {
-            await upsert({ monitorId, wallpaperId });
-          }
-        } else {
-          // 显示器有收藏夹，需查询壁纸是否在该收藏夹中
-          try {
-            const wallpapersInCollection = await getCollectionWallpapers(targetConfig.collection_id);
-            const isInCollection = wallpapersInCollection.some((w) => w.id === wallpaperId);
-
-            if (isInCollection) {
-              // 场景 1b：壁纸在收藏夹中，直接更新壁纸 id
-              if (isSyncMode) {
-                await upsertAll({ wallpaperId });
-              } else {
-                await upsert({ monitorId, wallpaperId });
-              }
-            } else {
-              // 场景 1c：壁纸不在收藏夹中，强制切换至单张壁纸播放
-              if (isSyncMode) {
-                await upsertAll({ wallpaperId, clearCollection: true, isEnabled: false });
-              } else {
-                await upsert({ monitorId, wallpaperId, clearCollection: true, isEnabled: false });
-              }
-            }
-          } catch (e) {
-            console.error("[handleSetAsWallpaper] query collection wallpapers failed:", e);
-            // 查询失败时保守处理：强制切换至单张
-            if (isSyncMode) {
-              await upsertAll({ wallpaperId, clearCollection: true, isEnabled: false });
-            } else {
-              await upsert({ monitorId, wallpaperId, clearCollection: true, isEnabled: false });
-            }
-          }
-        }
-      } else {
-        // ===== 收藏夹栏（activeId > 0）=====
-        if (!targetConfig?.collection_id) {
-          // 场景 2a：显示器无收藏夹，设置收藏夹播放（默认不启用轮播）
-          if (isSyncMode) {
-            await upsertAll({ wallpaperId, collectionId });
-          } else {
-            await upsert({ monitorId, wallpaperId, collectionId });
-          }
-        } else if (targetConfig.collection_id === collectionId) {
-          // 场景 2b：同一收藏夹，切换壁纸 id
-          if (isSyncMode) {
-            await upsertAll({ wallpaperId });
-          } else {
-            await upsert({ monitorId, wallpaperId });
-          }
-        } else {
-          // 场景 2c：不同收藏夹，切换收藏夹播放
-          if (isSyncMode) {
-            await upsertAll({ wallpaperId, collectionId });
-          } else {
-            await upsert({ monitorId, wallpaperId, collectionId });
-          }
-        }
-      }
-    },
-    [wallpaper.id, activeId, configs, isSyncMode, upsert, upsertAll],
-  );
-
-  const card = (
-    <div
-      className={cn(
-        "group relative cursor-pointer overflow-hidden rounded-lg border bg-muted/30 transition-all",
-        manageMode && selected
-          ? "border-primary ring-2 ring-primary"
-          : "border-border hover:ring-2 hover:ring-primary/50",
-        isDragging && "opacity-50 shadow-lg ring-2 ring-primary",
-      )}
-      style={style}
-      onClick={(e) => {
-        if (!isDragging) onClick(wallpaper, index, e);
-      }}
-    >
-      {/* 拖拽手柄（排序模式下显示），阻止点击冒泡以避免触发选中 */}
-      {dragHandleProps && (
-        <div
-          {...dragHandleProps}
-          onClick={(e) => e.stopPropagation()}
-          className="absolute right-1.5 bottom-8 z-20 flex size-6 cursor-grab items-center justify-center rounded bg-black/40 text-white opacity-0 transition-opacity active:cursor-grabbing group-hover:opacity-100"
-        >
-          <GripVertical className="size-3.5" />
-        </div>
-      )}
-
-      {manageMode && selected && (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <Check className="size-3" />
-        </div>
-      )}
-
-      {manageMode && !selected && (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
-      )}
-
-      <div className="aspect-video bg-muted">
-        {wallpaper.thumb_path ? (
-          <img
-            src={convertFileSrc(wallpaper.thumb_path)}
-            alt={wallpaper.name}
-            className="size-full object-cover"
-            loading="lazy"
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center">
-            <TypeIcon className="size-8 text-muted-foreground/40" />
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <TypeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate text-xs text-foreground/80">{wallpaper.name}</span>
-      </div>
-
-      {wallpaper.type === "video" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.video")}
-        </div>
-      )}
-      {wallpaper.type === "gif" && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("preview.gif")}
-        </div>
-      )}
-    </div>
-  );
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger>{card}</ContextMenuTrigger>
-      <ContextMenuContent>
-        {/* 设置为：选择显示器 */}
-        <ContextMenuSub>
-          <ContextMenuSubTrigger
-            disabled={activeConfigs.length === 0}
-            className={activeConfigs.length === 0 ? "opacity-50" : ""}
-          >
-            <Monitor className="mr-2 size-4" />
-            {t("main.setAs")}
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {activeConfigs.map((config) => {
-              const isCurrent = config.wallpaper_id === wallpaper.id;
-              return (
-                <ContextMenuItem
-                  key={config.monitor_id}
-                  disabled={isCurrent}
-                  onClick={() => !isCurrent && handleSetAsWallpaper(config.monitor_id)}
-                  className={cn(isCurrent && "opacity-50")}
-                >
-                  <Monitor className="mr-2 size-4 shrink-0" />
-                  <span className="max-w-40 truncate">
-                    {t("main.wallpaperOf", { name: config.monitor_id })}
-                  </span>
-                  {isCurrent && (
-                    <span className="ml-auto pl-2 text-xs text-muted-foreground">
-                      {t("main.currentWallpaper")}
-                    </span>
-                  )}
-                </ContextMenuItem>
-              );
-            })}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-
-        {/* 全部壁纸视图：添加到收藏夹 */}
-        {!isCollectionView && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger
-              disabled={collections.length === 0}
-              className={collections.length === 0 ? "opacity-50" : ""}
-            >
-              <FolderPlus className="mr-2 size-4" />
-              {t("main.addTo")}
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {collections.map((col) => (
-                <Tooltip key={col.id}>
-                  <TooltipTrigger asChild>
-                    <ContextMenuItem onClick={() => onAddToCollection(wallpaper.id, col.id)}>
-                      <Star className="mr-2 size-4 shrink-0" />
-                      <span className="max-w-32 truncate">{col.name}</span>
-                    </ContextMenuItem>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    {col.name}
-                  </TooltipContent>
-                </Tooltip>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
-
-        {/* 删除/移除 */}
-        <ContextMenuItem
-          onClick={() => onDelete(wallpaper.id)}
-          className={isCollectionView ? "" : "text-destructive focus:text-destructive"}
-        >
-          {isCollectionView ? (
-            <>
-              <Unlink className="mr-2 size-4" />
-              {t("main.removeFromCollection")}
-            </>
-          ) : (
-            <>
-              <Trash2 className="mr-2 size-4" />
-              {t("main.delete")}
-            </>
-          )}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-};
-
-/** 普通壁纸卡片（无拖拽） */
-const WallpaperCard: React.FC<WallpaperCardProps> = (props) => {
-  return <WallpaperCardContent {...props} />;
-};
-
-/** 可排序壁纸卡片（dnd-kit sortable） */
-const SortableWallpaperCard: React.FC<WallpaperCardProps> = (props) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: props.wallpaper.id });
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 50 : undefined,
-    position: "relative" as const,
-  };
-
-  return (
-    <div ref={setNodeRef} style={style} {...attributes}>
-      <WallpaperCardContent
-        {...props}
-        isDragging={isDragging}
-        dragHandleProps={listeners}
-      />
     </div>
   );
 };

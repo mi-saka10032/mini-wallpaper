@@ -103,16 +103,21 @@ const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
     }
   }, [language]);
 
-  // 切换视图时加载对应壁纸
+  // 本地壁纸视图：wallpapers 变化时同步到 viewWallpapers
   useEffect(() => {
     if (activeId === 0) {
       setViewWallpapers(wallpapers);
-    } else if (activeId > 0) {
+    }
+  }, [activeId, wallpapers]);
+
+  // 收藏夹视图：仅在 activeId 切换时加载收藏夹壁纸（不响应 wallpapers 变化）
+  useEffect(() => {
+    if (activeId > 0) {
       getCollectionWallpapers(activeId)
         .then(setViewWallpapers)
         .catch((e) => console.error("[getCollectionWallpapers]", e));
     }
-  }, [activeId, wallpapers]);
+  }, [activeId]);
 
   const openPreview = useCallback((index: number) => {
     setPreviewIndex(index);

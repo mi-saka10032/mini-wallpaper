@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 
 /**
@@ -149,22 +149,18 @@ function isDarkMode(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
+/**
+ * useAccentColor hook
+ *
+ * 优化：消除冗余的 useState，直接从 store 派生 accentValue，
+ * 避免 store ↔ state 双源同步问题和多余的 re-render。
+ */
 export function useAccentColor() {
-  const storedAccent = useSettingStore(
-    (s) => s.settings[SETTING_KEYS.ACCENT_COLOR] as string | undefined,
+  // 直接从 store 精确订阅 accent_color 值，不再维护本地 state
+  const accentValue = useSettingStore(
+    (s) => s.settings[SETTING_KEYS.ACCENT_COLOR] || "default",
   );
   const updateSetting = useSettingStore((s) => s.updateSetting);
-
-  const [accentValue, setAccentValueState] = useState<string>(
-    storedAccent || "default",
-  );
-
-  // 同步 store 变化
-  useEffect(() => {
-    if (storedAccent) {
-      setAccentValueState(storedAccent);
-    }
-  }, [storedAccent]);
 
   // 应用 accent color（监听 accentValue 变化 + 明暗模式变化）
   useEffect(() => {
@@ -188,7 +184,6 @@ export function useAccentColor() {
 
   const setAccentColor = useCallback(
     (value: string) => {
-      setAccentValueState(value);
       updateSetting(SETTING_KEYS.ACCENT_COLOR, value);
     },
     [updateSetting],

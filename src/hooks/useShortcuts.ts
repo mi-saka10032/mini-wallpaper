@@ -28,10 +28,20 @@ const THROTTLE_MS = 500;
  *
  * 在 App 根组件调用一次。读取 app_settings 中保存的快捷键绑定，
  * 注册到系统全局快捷键。窗口隐藏/托盘常驻时仍然生效。
+ *
+ * 优化：仅精确订阅快捷键相关的两个 setting key，避免其他设置
+ * （如音量、主题等）变化时触发不必要的快捷键重注册。
  */
 export function useShortcuts() {
-  const settings = useSettingStore((s) => s.settings);
+  // 精确订阅：仅监听快捷键相关的 setting 值
+  const shortcutNext = useSettingStore(
+    (s) => s.settings[SETTING_KEYS.SHORTCUT_NEXT] || DEFAULT_SHORTCUTS.nextWallpaper,
+  );
+  const shortcutPrev = useSettingStore(
+    (s) => s.settings[SETTING_KEYS.SHORTCUT_PREV] || DEFAULT_SHORTCUTS.prevWallpaper,
+  );
   const updateSetting = useSettingStore((s) => s.updateSetting);
+
   const registeredRef = useRef<string[]>([]);
   const lastFireRef = useRef<Record<string, number>>({});
 
@@ -62,8 +72,13 @@ export function useShortcuts() {
     }
     registeredRef.current = [];
 
-    for (const { action, settingKey, direction } of ACTIONS) {
-      const binding = settings[settingKey] || DEFAULT_SHORTCUTS[action];
+    // 构建当前绑定映射
+    const bindings: { binding: string; action: keyof typeof DEFAULT_SHORTCUTS; direction: "next" | "prev" }[] = [
+      { binding: shortcutNext, action: "nextWallpaper", direction: "next" },
+      { binding: shortcutPrev, action: "prevWallpaper", direction: "prev" },
+    ];
+
+    for (const { binding, action, direction } of bindings) {
       if (!binding) continue;
       // 跳过重复
       if (registeredRef.current.includes(binding)) continue;
@@ -90,16 +105,17 @@ export function useShortcuts() {
             await register(fallback, handler);
             registeredRef.current.push(fallback);
             // 把坏值修正回默认
-            updateSetting(settingKey, fallback);
+            const settingKey = ACTIONS.find((a) => a.action === action)?.settingKey;
+            if (settingKey) updateSetting(settingKey, fallback);
           } catch (e2) {
             console.warn(`[useShortcuts] Fallback "${fallback}" also failed:`, e2);
           }
         }
       }
     }
-  }, [settings, throttled, updateSetting]);
+  }, [shortcutNext, shortcutPrev, throttled, updateSetting]);
 
-  // 设置变化时重新注册
+  // 快捷键绑定变化时重新注册
   useEffect(() => {
     registerAll();
     return () => {

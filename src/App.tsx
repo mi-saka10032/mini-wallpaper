@@ -19,6 +19,7 @@ import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
 import { getCollectionWallpapers } from "@/api/collection";
 import AppLoading from "@/components/ui/AppLoading";
+import { cn } from "./lib/utils";
 
 // 非首屏组件懒加载
 const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
@@ -144,9 +145,7 @@ const App: React.FC = () => {
 
   return (
     <TooltipProvider>
-      <div
-        className="relative h-screen w-screen overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl"
-      >
+      <div className="relative h-screen w-screen overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl">
         {/* 顶部工具栏 */}
         <div className="relative">
           <Toolbar onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
@@ -165,13 +164,17 @@ const App: React.FC = () => {
           <ErrorBoundary>
             <div className="relative flex-1 overflow-hidden">
               {/* 显示器设置面板 - 懒加载覆盖层，不影响首屏加载 */}
-              {activeId === -1 && (
-                <Suspense fallback={null}>
-                  <div className="absolute inset-0 z-30 overflow-hidden bg-background">
-                    <MonitorSettingsPanel />
-                  </div>
-                </Suspense>
-              )}
+              <Suspense fallback={null}>
+                <div
+                  className={cn(
+                    "absolute inset-0 z-30 overflow-hidden bg-background",
+                    activeId === -1 ? "block" : "hidden",
+                  )}
+                >
+                  <MonitorSettingsPanel />
+                </div>
+              </Suspense>
+
               <MainContent
                 activeId={activeId}
                 wallpapers={viewWallpapers}

@@ -40,9 +40,9 @@
 
 <!-- 在此处添加应用截图 -->
 
-| 主界面 | 壁纸详情 |
+| 主界面 | 壁纸管理 |
 |:---:|:---:|
-| ![主界面](screenshots/main.png) | ![详情](screenshots/detail.png) |
+| ![主界面](screenshots/main.png) | ![详情](screenshots/manage.png) |
 
 | 收藏夹 | 设置 |
 |:---:|:---:|

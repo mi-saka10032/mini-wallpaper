@@ -9,7 +9,7 @@ import {
   getSupportedExtensions as fetchSupportedExtensions,
   saveVideoThumbnail,
 } from "@/api/wallpaper";
-import { batchExtractVideoThumbnails } from "@/utils/videoThumbnail";
+import { batchExtractVideoThumbnails } from "@/lib/videoThumbnail";
 
 // 从 config 中 re-export Wallpaper 类型，方便外部使用
 export type { Wallpaper } from "@/api/config";

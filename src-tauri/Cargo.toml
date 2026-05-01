@@ -1,8 +1,10 @@
 [package]
 name = "mini-wallpaper"
 version = "1.0.0"
-description = "A Tauri App"
+description = "Mini Wallpaper"
 authors = ["you"]
+license = "mit"
+repository = "https://github.com/mi-saka10032/mini-wallpaper.git"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

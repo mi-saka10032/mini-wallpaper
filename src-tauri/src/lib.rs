@@ -76,7 +76,7 @@ pub fn run() {
         })
         .invoke_handler(commands::all_handlers!())
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
+        .expect("error while building Mini Wallpaper")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = &event {
                 // 统一停止调度器内所有后台任务（轮播 + 全屏检测等）

@@ -13,6 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
+        "title": "Mini Wallpaper",
         "hiddenTitle": true,
         "titleBarStyle": "Transparent",
         "width": 1260,
@@ -37,6 +38,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "mi-saka10032",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,12 +46,26 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "licenseFile": "../LICENSE",
+    "shortDescription": "Mini Wallpaper",
     "windows": {
-      "nsis": {
-        "installMode": "both",
-        "languages": ["SimpChinese", "English"],
-        "displayLanguageSelector": false
+        "allowDowngrades": true,
+        "certificateThumbprint": null,
+        "digestAlgorithm": null,
+        "timestampUrl": null,
+        "tsp": false,
+        "webviewInstallMode": {
+          "silent": true,
+          "type": "downloadBootstrapper"
+        },
+        "nsis": {
+          "languages": [
+            "English",
+            "SimpChinese"
+          ],
+          "displayLanguageSelector": true,
+          "installerIcon": "icons/icon.ico"
+        }
       }
-    }
   }
 }

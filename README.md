@@ -40,9 +40,9 @@
 
 <!-- Add your screenshots here -->
 
-| Main View | Detail View |
+| Main View | Manage View |
 |:---:|:---:|
-| ![Main](screenshots/main.png) | ![Detail](screenshots/detail.png) |
+| ![Main](screenshots/main.png) | ![Detail](screenshots/manage.png) |
 
 | Favorites | Settings |
 |:---:|:---:|

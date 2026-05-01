@@ -4,8 +4,8 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import type { Wallpaper } from "@/api/config";
-import { sortWallpapers } from "@/utils/sort";
-import type { SortField, SortOrder } from "@/utils/sort";
+import { sortWallpapers } from "@/lib/sort";
+import type { SortField, SortOrder } from "@/lib/sort";
 import VirtualGrid from "./VirtualGrid";
 import { FilterBar } from "./FilterBar";
 

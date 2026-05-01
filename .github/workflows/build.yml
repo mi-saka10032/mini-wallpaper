@@ -71,7 +71,7 @@ jobs:
       # ─────────────────────────────────────────
       # 🔨 Build & Release
       # ─────────────────────────────────────────
-      - name: Build Tauri app
+      - name: Build Mini Wallpaper
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

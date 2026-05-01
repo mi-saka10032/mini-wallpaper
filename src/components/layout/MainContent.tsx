@@ -308,8 +308,10 @@ const MainContent: React.FC<MainContentProps> = ({
 
       {/* 内容区 */}
       <div className={cn(
-        "flex-1 overflow-hidden",
-        (search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled) && "overflow-y-auto p-4",
+        "min-h-0 flex-1",
+        (search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled)
+          ? "overflow-y-auto p-4"
+          : "overflow-hidden",
       )}>
         {search.loading ? (
           <div className="flex h-full items-center justify-center">

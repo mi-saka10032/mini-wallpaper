@@ -201,10 +201,10 @@ function VirtualGrid<T>({
     }
   }, [cols, rowHeight, enableVirtual, virtualizer]);
 
-  // ===== 非虚拟模式：直接渲染 =====
+  // ===== 非虚拟模式：直接渲染（仍需支持滚动） =====
   if (!enableVirtual) {
     return (
-      <div ref={containerRef} className={className}>
+      <div ref={containerRef} className={className} style={{ overflow: "auto" }}>
         <div
           className="grid gap-3"
           style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}

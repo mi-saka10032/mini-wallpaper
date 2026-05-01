@@ -107,18 +107,20 @@ const App: React.FC<{ hideBorder?: boolean }> = ({ hideBorder }) => {
   }, [language]);
 
   // viewWallpapers 数据源切换：本地壁纸 or 收藏夹
-  // 合并为单一 effect，避免 activeId 切换时的中间状态闪烁
+  // 拆分为两个 effect，避免收藏夹视图下 wallpapers 变化触发无意义的网络请求
   useEffect(() => {
     if (activeId === 0) {
-      // 本地壁纸：直接同步 store 数据
       setViewWallpapers(wallpapers);
-    } else if (activeId > 0) {
-      // 收藏夹：异步加载
+    }
+  }, [activeId, wallpapers]);
+
+  useEffect(() => {
+    if (activeId > 0) {
       getCollectionWallpapers(activeId)
         .then(setViewWallpapers)
         .catch((e) => console.error("[getCollectionWallpapers]", e));
     }
-  }, [activeId, wallpapers]);
+  }, [activeId]);
 
   const openPreview = useCallback((index: number) => {
     setPreviewIndex(index);

@@ -116,6 +116,7 @@ const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, in
             src={src}
             controls
             autoPlay
+            muted
             className="max-h-[80vh] max-w-[80vw] rounded-lg"
           />
         ) : (

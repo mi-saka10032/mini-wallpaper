@@ -80,6 +80,8 @@ const MainContent: React.FC<MainContentProps> = ({
   // ===== 从 store 获取 collections 和 activeConfigs（提升到父组件层，避免每个卡片独立订阅） =====
   const collections = useCollectionStore((s) => s.collections);
   const configs = useMonitorConfigStore((s) => s.configs);
+  const upsert = useMonitorConfigStore((s) => s.upsert);
+  const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
   const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
   const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
 
@@ -193,6 +195,8 @@ const MainContent: React.FC<MainContentProps> = ({
           activeConfigs={activeConfigs}
           collections={collections}
           displayMode={displayMode}
+          upsert={upsert}
+          upsertAll={upsertAll}
           onClick={handleCardClick}
           onDelete={handleSingleDelete}
           onAddToCollection={manage.handleAddToCollection}
@@ -220,6 +224,8 @@ const MainContent: React.FC<MainContentProps> = ({
           activeConfigs={activeConfigs}
           collections={collections}
           displayMode={displayMode}
+          upsert={upsert}
+          upsertAll={upsertAll}
           onClick={handleCardClick}
           onDelete={handleSingleDelete}
           onAddToCollection={manage.handleAddToCollection}

@@ -13,7 +13,7 @@ interface BackupSectionProps {
   onImport: () => void;
 }
 
-/** 备份/导出设置区块 */
+/** 备份/导出设置区块 - Win11 Fluent 风格 */
 const BackupSection: React.FC<BackupSectionProps> = React.memo(({
   backupBusy,
   backupMsg,
@@ -26,69 +26,77 @@ const BackupSection: React.FC<BackupSectionProps> = React.memo(({
   const { t } = useTranslation();
 
   return (
-    <div className="space-y-6">
-      <h3 className="text-base font-semibold">{t("settings.navBackup")}</h3>
-
-      {/* 数据大小 */}
-      {dataSize !== null && (
-        <div className="rounded-md bg-foreground/3 px-4 py-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-foreground/50">{t("settings.dataSize")}</span>
-            <span className="text-sm font-medium">{formatSize(dataSize)}</span>
-          </div>
-        </div>
-      )}
-
-      <p className="text-xs text-foreground/50">
-        {t("settings.backupDesc")}
-      </p>
-
-      {/* 导出/导入 */}
-      <div className="flex items-center gap-3">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={backupBusy}
-          onClick={onExport}
-          className="gap-1.5"
-        >
-          <Upload className="size-3.5" />
-          {t("settings.export")}
-        </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={backupBusy}
-          onClick={onImport}
-          className="gap-1.5"
-        >
-          <Download className="size-3.5" />
-          {t("settings.import")}
-        </Button>
+    <section className="space-y-5">
+      <div>
+        <h3 className="text-[15px] font-semibold text-foreground">
+          {t("settings.navBackup")}
+        </h3>
+        <p className="mt-1 text-[11px] leading-relaxed text-foreground/45">
+          {t("settings.backupDesc")}
+        </p>
       </div>
 
-      {/* 进度条 */}
-      {backupBusy && progress && progress.total > 0 && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-foreground/50">
-            <span>{progress.current} / {progress.total}</span>
-            <span>{Math.round((progress.current / progress.total) * 100)}%</span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-foreground/5">
-            <div
-              className="h-full rounded-full bg-primary transition-all duration-200"
-              style={{ width: `${(progress.current / progress.total) * 100}%` }}
-            />
+      {/* 数据概览卡片 */}
+      {dataSize !== null && (
+        <div className="rounded-lg border border-border/50 bg-card">
+          <div className="flex items-center justify-between px-4 py-3">
+            <span className="text-[13px] text-foreground/60">{t("settings.dataSize")}</span>
+            <span className="text-[13px] font-medium tabular-nums">{formatSize(dataSize)}</span>
           </div>
         </div>
       )}
+
+      {/* 操作卡片 */}
+      <div className="rounded-lg border border-border/50 bg-card">
+        <div className="flex items-center gap-3 px-4 py-3.5">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={backupBusy}
+            onClick={onExport}
+            className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-foreground/4"
+          >
+            <Upload className="size-3.5" />
+            {t("settings.export")}
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={backupBusy}
+            onClick={onImport}
+            className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-foreground/4"
+          >
+            <Download className="size-3.5" />
+            {t("settings.import")}
+          </Button>
+        </div>
+
+        {/* 进度条 */}
+        {backupBusy && progress && progress.total > 0 && (
+          <>
+            <div className="mx-4 h-px bg-border/30" />
+            <div className="px-4 py-3 space-y-2">
+              <div className="flex items-center justify-between text-[11px] text-foreground/45">
+                <span>{progress.current} / {progress.total}</span>
+                <span className="tabular-nums">{Math.round((progress.current / progress.total) * 100)}%</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/5">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
+                  style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
 
       {/* 状态消息 */}
       {backupMsg && (
-        <p className="text-xs text-foreground/50">{backupMsg}</p>
+        <p className="text-[11px] text-foreground/50 px-1">{backupMsg}</p>
       )}
-    </div>
+    </section>
   );
 });
 

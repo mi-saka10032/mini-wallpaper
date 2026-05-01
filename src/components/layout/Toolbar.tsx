@@ -1,4 +1,4 @@
-import { Monitor, Plus, Sliders } from "lucide-react";
+import { Monitor, Plus, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -45,7 +45,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange, onOpenSettings }) =
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon" className="size-8 text-foreground/70 hover:text-foreground hover:bg-foreground/5" onClick={onOpenSettings}>
-              <Sliders className="size-4" />
+              <Settings className="size-4" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>{t("sidebar.globalSettings")}</TooltipContent>

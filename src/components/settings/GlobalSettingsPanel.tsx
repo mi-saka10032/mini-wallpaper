@@ -14,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
@@ -75,84 +74,107 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 sm:max-h-[520px]">
+      <DialogContent
+        showCloseButton={false}
+        className="max-w-[680px] gap-0 overflow-hidden rounded-xl border-border/40 p-0 sm:max-h-[520px] fluent-shadow-lg"
+      >
         <DialogTitle className="sr-only">{t("settings.title")}</DialogTitle>
         <div className="flex h-[520px]">
-          {/* ===== 左侧导航栏 ===== */}
-          <nav className="flex w-44 shrink-0 flex-col border-r border-border/40 bg-surface px-2 py-4">
-            <h2 className="mb-3 px-2 text-sm font-semibold text-foreground">
+          {/* ===== 左侧导航栏 - Win11 Settings 风格 ===== */}
+          <nav className="flex w-[180px] shrink-0 flex-col bg-surface/80 py-5">
+            <h2 className="mb-4 px-5 text-[13px] font-semibold tracking-wide text-foreground/80 uppercase">
               {t("settings.title")}
             </h2>
-            <div className="space-y-0.5">
+            <div className="flex flex-col gap-0.5 px-3">
               {navItems.map(({ id, icon: Icon, labelKey }) => (
                 <button
                   key={id}
                   type="button"
                   onClick={() => setActiveSection(id)}
                   className={cn(
-                    "fluent-indicator flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-all duration-150",
+                    "relative flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-[13px] transition-all duration-100",
                     activeSection === id
-                      ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
-                      : "text-foreground/60 hover:bg-foreground/4 hover:text-foreground",
+                      ? "bg-foreground/7 text-foreground font-medium"
+                      : "text-foreground/60 hover:bg-foreground/4 hover:text-foreground/80",
                   )}
                 >
-                  <Icon className="size-4" />
+                  {/* Win11 左侧指示条 */}
+                  <span
+                    className={cn(
+                      "absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-primary transition-all duration-200",
+                      activeSection === id ? "opacity-100 scale-y-100" : "opacity-0 scale-y-50",
+                    )}
+                  />
+                  <Icon className="size-[15px] shrink-0" />
                   <span>{t(labelKey)}</span>
                 </button>
               ))}
             </div>
           </nav>
 
-          {/* ===== 右侧设置面板 ===== */}
-          <div className="flex-1 overflow-y-auto">
-            <div className="px-6 py-5">
+          {/* ===== 分隔线 ===== */}
+          <div className="w-px bg-border/40" />
+
+          {/* ===== 右侧设置面板 - Win11 卡片式布局 ===== */}
+          <div className="flex-1 overflow-y-auto bg-background">
+            <div className="px-7 py-6">
               {activeSection === "startup" && (
-                <div className="space-y-6">
-                  <h3 className="text-base font-semibold">{t("settings.navStartup")}</h3>
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1">
-                      <Label className="text-sm font-medium">{t("settings.autoStart")}</Label>
-                      <p className="text-xs text-foreground/50">
-                        {t("settings.autoStartDesc")}
-                      </p>
+                <section className="space-y-5">
+                  <h3 className="text-[15px] font-semibold text-foreground">
+                    {t("settings.navStartup")}
+                  </h3>
+                  {/* 设置卡片 */}
+                  <div className="rounded-lg border border-border/50 bg-card">
+                    <div className="flex items-center justify-between px-4 py-3.5">
+                      <div className="space-y-0.5">
+                        <Label className="text-[13px] font-medium">{t("settings.autoStart")}</Label>
+                        <p className="text-[11px] leading-relaxed text-foreground/45">
+                          {t("settings.autoStartDesc")}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={autoStartEnabled}
+                        onCheckedChange={toggleAutoStart}
+                      />
                     </div>
-                    <Switch
-                      checked={autoStartEnabled}
-                      onCheckedChange={toggleAutoStart}
-                    />
                   </div>
-                </div>
+                </section>
               )}
 
               {activeSection === "tray" && (
-                <div className="space-y-6">
-                  <h3 className="text-base font-semibold">{t("settings.navTray")}</h3>
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1">
-                      <Label className="text-sm font-medium">{t("settings.closeToTray")}</Label>
-                      <p className="text-xs text-foreground/50">
-                        {t("settings.closeToTrayDesc")}
-                      </p>
+                <section className="space-y-5">
+                  <h3 className="text-[15px] font-semibold text-foreground">
+                    {t("settings.navTray")}
+                  </h3>
+                  {/* 设置卡片 - 多项合并 */}
+                  <div className="rounded-lg border border-border/50 bg-card">
+                    <div className="flex items-center justify-between px-4 py-3.5">
+                      <div className="space-y-0.5">
+                        <Label className="text-[13px] font-medium">{t("settings.closeToTray")}</Label>
+                        <p className="text-[11px] leading-relaxed text-foreground/45">
+                          {t("settings.closeToTrayDesc")}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={isCloseToTray}
+                        onCheckedChange={toggleCloseToTray}
+                      />
                     </div>
-                    <Switch
-                      checked={isCloseToTray}
-                      onCheckedChange={toggleCloseToTray}
-                    />
-                  </div>
-                  <Separator />
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1">
-                      <Label className="text-sm font-medium">{t("settings.pauseOnFullscreen")}</Label>
-                      <p className="text-xs text-foreground/50">
-                        {t("settings.pauseOnFullscreenDesc")}
-                      </p>
+                    <div className="mx-4 h-px bg-border/30" />
+                    <div className="flex items-center justify-between px-4 py-3.5">
+                      <div className="space-y-0.5">
+                        <Label className="text-[13px] font-medium">{t("settings.pauseOnFullscreen")}</Label>
+                        <p className="text-[11px] leading-relaxed text-foreground/45">
+                          {t("settings.pauseOnFullscreenDesc")}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={isPauseOnFullscreen}
+                        onCheckedChange={togglePauseOnFullscreen}
+                      />
                     </div>
-                    <Switch
-                      checked={isPauseOnFullscreen}
-                      onCheckedChange={togglePauseOnFullscreen}
-                    />
                   </div>
-                </div>
+                </section>
               )}
 
               {activeSection === "shortcuts" && (
@@ -164,43 +186,48 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
               )}
 
               {activeSection === "audio" && (
-                <div className="space-y-6">
-                  <h3 className="text-base font-semibold">{t("settings.navAudio")}</h3>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-sm font-medium">{t("settings.volume")}</Label>
-                      <span className="text-xs text-foreground/50">
-                        {isMuted ? t("settings.volumeMuted") : `${volume}%`}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={toggleMute}
-                        className={cn(
-                          "rounded-md p-1.5 transition-colors",
-                          isMuted
-                            ? "text-foreground/50 hover:bg-foreground/5"
-                            : "text-foreground hover:bg-foreground/5",
-                        )}
-                      >
-                        {isMuted ? (
-                          <VolumeX className="size-4" />
-                        ) : (
-                          <Volume2 className="size-4" />
-                        )}
-                      </button>
-                      <Slider
-                        value={[volume]}
-                        onValueChange={handleVolumeChange}
-                        min={0}
-                        max={100}
-                        step={1}
-                        className="max-w-xs flex-1"
-                      />
+                <section className="space-y-5">
+                  <h3 className="text-[15px] font-semibold text-foreground">
+                    {t("settings.navAudio")}
+                  </h3>
+                  {/* 音量卡片 */}
+                  <div className="rounded-lg border border-border/50 bg-card">
+                    <div className="px-4 py-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[13px] font-medium">{t("settings.volume")}</Label>
+                        <span className="text-[11px] tabular-nums text-foreground/45">
+                          {isMuted ? t("settings.volumeMuted") : `${volume}%`}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={toggleMute}
+                          className={cn(
+                            "rounded-md p-1.5 transition-colors",
+                            isMuted
+                              ? "text-foreground/40 hover:bg-foreground/5 hover:text-foreground/60"
+                              : "text-foreground/70 hover:bg-foreground/5 hover:text-foreground",
+                          )}
+                        >
+                          {isMuted ? (
+                            <VolumeX className="size-4" />
+                          ) : (
+                            <Volume2 className="size-4" />
+                          )}
+                        </button>
+                        <Slider
+                          value={[volume]}
+                          onValueChange={handleVolumeChange}
+                          min={0}
+                          max={100}
+                          step={1}
+                          className="flex-1"
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
+                </section>
               )}
 
               {activeSection === "backup" && (

@@ -68,17 +68,17 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
         className="flex h-[80vh] max-h-[800px] w-[80vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0"
       >
         {/* Header */}
-        <DialogHeader className="shrink-0 border-b border-border px-6 py-4">
+        <DialogHeader className="shrink-0 border-b border-border/40 px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <DialogTitle className="flex items-center gap-2">
-                <ImagePlus className="size-5" />
+                <ImagePlus className="size-5 text-foreground/60" />
                 {t("pickerDialog.title")}
               </DialogTitle>
               {selectedIds.size > 0 && (
-                <div className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1">
-                  <Check className="size-3.5 text-primary" />
-                  <span className="text-sm font-medium text-primary">
+                <div className="flex items-center gap-1.5 rounded-md bg-primary/8 px-2.5 py-1">
+                  <Check className="size-3.5 text-primary/80" />
+                  <span className="text-sm font-medium text-primary/80">
                     {t("pickerDialog.selectedCount", { count: selectedIds.size })}
                   </span>
                 </div>
@@ -103,7 +103,7 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
             className="h-full"
             emptyContent={
               availableCount === 0 ? (
-                <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
+                <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-foreground/50">
                   <ImagePlus className="size-10" strokeWidth={1} />
                   <p className="text-sm">{t("pickerDialog.allAdded")}</p>
                 </div>
@@ -113,8 +113,8 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
         </div>
 
         {/* Footer: 固定操作栏 */}
-        <div className="flex shrink-0 items-center justify-between border-t border-border px-6 py-3">
-          <span className="text-sm text-muted-foreground">
+        <div className="flex shrink-0 items-center justify-between border-t border-border/40 px-6 py-3">
+          <span className="text-sm text-foreground/50">
             {selectedIds.size > 0
               ? t("pickerDialog.selectedHint", { count: selectedIds.size })
               : t("pickerDialog.hint")}

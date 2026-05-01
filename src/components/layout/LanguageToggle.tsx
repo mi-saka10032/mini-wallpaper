@@ -29,13 +29,13 @@ const LanguageToggle: React.FC = () => {
       <DropdownMenuContent align="end">
         <DropdownMenuItem
           onClick={() => handleChange("zh")}
-          className={i18n.language === "zh" ? "bg-accent" : ""}
+          className={i18n.language === "zh" ? "bg-foreground/6 font-medium" : ""}
         >
           <span>{t("language.zh")}</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => handleChange("en")}
-          className={i18n.language === "en" ? "bg-accent" : ""}
+          className={i18n.language === "en" ? "bg-foreground/6 font-medium" : ""}
         >
           <span>{t("language.en")}</span>
         </DropdownMenuItem>

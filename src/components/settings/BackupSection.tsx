@@ -31,15 +31,15 @@ const BackupSection: React.FC<BackupSectionProps> = React.memo(({
 
       {/* 数据大小 */}
       {dataSize !== null && (
-        <div className="rounded-md bg-muted/50 px-4 py-3">
+        <div className="rounded-md bg-foreground/3 px-4 py-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">{t("settings.dataSize")}</span>
+            <span className="text-sm text-foreground/50">{t("settings.dataSize")}</span>
             <span className="text-sm font-medium">{formatSize(dataSize)}</span>
           </div>
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs text-foreground/50">
         {t("settings.backupDesc")}
       </p>
 
@@ -71,11 +71,11 @@ const BackupSection: React.FC<BackupSectionProps> = React.memo(({
       {/* 进度条 */}
       {backupBusy && progress && progress.total > 0 && (
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex items-center justify-between text-xs text-foreground/50">
             <span>{progress.current} / {progress.total}</span>
             <span>{Math.round((progress.current / progress.total) * 100)}%</span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-foreground/5">
             <div
               className="h-full rounded-full bg-primary transition-all duration-200"
               style={{ width: `${(progress.current / progress.total) * 100}%` }}
@@ -86,7 +86,7 @@ const BackupSection: React.FC<BackupSectionProps> = React.memo(({
 
       {/* 状态消息 */}
       {backupMsg && (
-        <p className="text-xs text-muted-foreground">{backupMsg}</p>
+        <p className="text-xs text-foreground/50">{backupMsg}</p>
       )}
     </div>
   );

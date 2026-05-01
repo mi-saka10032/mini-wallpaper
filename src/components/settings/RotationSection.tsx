@@ -34,7 +34,7 @@ const RotationSection: React.FC<RotationSectionProps> = React.memo(({
       <div className="flex items-center justify-between">
         <Label className="text-sm font-medium">{t("monitor.rotationSettings")}</Label>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-foreground/50">
             {isEnabled ? t("monitor.enabled") : t("monitor.paused")}
           </span>
           <Switch
@@ -46,7 +46,7 @@ const RotationSection: React.FC<RotationSectionProps> = React.memo(({
 
       {/* 播放模式 */}
       <div className="space-y-2">
-        <Label className="text-xs text-muted-foreground">{t("monitor.playMode")}</Label>
+        <Label className="text-xs text-foreground/50">{t("monitor.playMode")}</Label>
         <div className="flex gap-2">
           <Button
             variant={(playMode ?? "sequential") === "sequential" ? "default" : "outline"}
@@ -70,7 +70,7 @@ const RotationSection: React.FC<RotationSectionProps> = React.memo(({
       {/* 轮播间隔 */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label className="text-xs text-muted-foreground">{t("monitor.interval")}</Label>
+          <Label className="text-xs text-foreground/50">{t("monitor.interval")}</Label>
           <span className="text-xs font-medium text-foreground">
             {formatInterval(playInterval, t)}
           </span>
@@ -82,7 +82,7 @@ const RotationSection: React.FC<RotationSectionProps> = React.memo(({
           max={INTERVAL_PRESETS.length - 1}
           step={1}
         />
-        <div className="flex justify-between text-[10px] text-muted-foreground">
+        <div className="flex justify-between text-[10px] text-foreground/50">
           <span>{t("time.seconds", { count: 10 })}</span>
           <span>{t("time.hours", { count: 2 })}</span>
         </div>

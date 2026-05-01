@@ -40,7 +40,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
           variant="ghost"
           size="sm"
           onClick={onOpenPicker}
-          className="gap-1.5 text-muted-foreground"
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-foreground/5"
         >
           <Plus className="size-3.5" />
           {t("main.addWallpaper")}
@@ -54,7 +54,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
         <div className="flex items-center">
           {searchExpanded ? (
             <div className="relative animate-in fade-in slide-in-from-right-2 duration-200">
-              <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-foreground/40" />
               <Input
                 autoFocus
                 value={normalKeyword}
@@ -78,7 +78,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
                     onNormalKeywordChange("");
                     onSearchCollapse();
                   }}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-foreground/40 hover:text-foreground"
                 >
                   <X className="size-3" />
                 </button>
@@ -89,7 +89,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
               variant="ghost"
               size="sm"
               onClick={onSearchExpand}
-              className="gap-1.5 text-muted-foreground"
+              className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-foreground/5"
             >
               <Search className="size-3.5" />
             </Button>
@@ -103,7 +103,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
           variant="ghost"
           size="sm"
           onClick={onEnterSortMode}
-          className="gap-1.5 text-muted-foreground"
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-foreground/5"
         >
           <GripVertical className="size-3.5" />
           {t("main.sortWallpapers")}
@@ -115,7 +115,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
           variant="ghost"
           size="sm"
           onClick={onEnterManageMode}
-          className="gap-1.5 text-muted-foreground"
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-foreground/5"
         >
           <Settings2 className="size-3.5" />
           {t("main.manageWallpapers")}

@@ -267,7 +267,7 @@ const MainContent: React.FC<MainContentProps> = ({
   return (
     <div className={cn('flex flex-1 flex-col overflow-hidden', className)}>
       {/* 操作栏 */}
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-4">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/40 px-4">
         {sort.sortMode ? (
           <SortToolbar
             orderDirty={sort.orderDirty}
@@ -313,11 +313,11 @@ const MainContent: React.FC<MainContentProps> = ({
       )}>
         {search.loading ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">{t("main.importing")}</p>
+            <p className="text-sm text-foreground/50">{t("main.importing")}</p>
           </div>
         ) : isEmpty ? (
           <div className="flex h-full items-center justify-center">
-            <div className="flex flex-col items-center gap-3 text-muted-foreground/60">
+            <div className="flex flex-col items-center gap-3 text-foreground/30">
               <ImagePlus className="size-12" strokeWidth={1} />
               <p className="text-sm">
                 {isCollectionView ? t("main.emptyCollection") : t("main.emptyAll")}
@@ -326,7 +326,7 @@ const MainContent: React.FC<MainContentProps> = ({
           </div>
         ) : displayWallpapers.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <div className="flex flex-col items-center gap-3 text-muted-foreground/60">
+            <div className="flex flex-col items-center gap-3 text-foreground/30">
               <Search className="size-10" strokeWidth={1} />
               <p className="text-sm">{t("grid.noResults")}</p>
             </div>

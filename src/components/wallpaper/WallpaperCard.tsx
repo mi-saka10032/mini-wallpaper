@@ -178,14 +178,14 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   const overlayTopLeft = useMemo(() => {
     if (manageMode && selected) {
       return (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
           <Check className="size-3" />
         </div>
       );
     }
     if (manageMode && !selected) {
       return (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
+        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/50 bg-black/15 opacity-0 transition-opacity group-hover:opacity-100" />
       );
     }
     return null;
@@ -211,9 +211,9 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
       style={style}
       className={cn(
         manageMode && selected
-          ? "border-primary ring-2 ring-primary"
-          : "border-border hover:ring-2 hover:ring-primary/50",
-        isDragging && "opacity-50 shadow-lg ring-2 ring-primary",
+          ? "border-primary/70 ring-1 ring-primary/30 bg-primary/3"
+          : "",
+        isDragging && "opacity-50 fluent-shadow-lg ring-1 ring-primary/40",
       )}
       onClick={(e) => {
         if (!isDragging) onClick(wallpaper, index, e);
@@ -251,7 +251,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
                     {t("main.wallpaperOf", { name: config.monitor_id })}
                   </span>
                   {isCurrent && (
-                    <span className="ml-auto pl-2 text-xs text-muted-foreground">
+                    <span className="ml-auto pl-2 text-xs text-foreground/50">
                       {t("main.currentWallpaper")}
                     </span>
                   )}

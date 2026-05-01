@@ -51,7 +51,7 @@ const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
 
   if (loading && activeConfigs.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-muted-foreground">
+      <div className="flex items-center justify-center py-12 text-foreground/50">
         <MonitorSmartphone className="mr-2 size-5" />
         {t("monitor.detecting")}
       </div>
@@ -60,7 +60,7 @@ const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
 
   if (activeConfigs.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-muted-foreground">
+      <div className="flex items-center justify-center py-12 text-foreground/50">
         <MonitorSmartphone className="mr-2 size-5" />
         {t("monitor.noMonitor")}
       </div>
@@ -104,12 +104,12 @@ const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
               {/* 显示器屏幕 */}
               <div
                 className={cn(
-                  "relative overflow-hidden rounded-lg border-2 bg-muted/80 transition-colors",
+                  "relative overflow-hidden rounded-lg border-2 bg-foreground/4 transition-colors",
                   isSelected
                     ? "border-primary shadow-lg shadow-primary/20"
                     : isDisabled
                       ? "border-border/50"
-                      : "border-border hover:border-muted-foreground/50",
+                      : "border-border hover:border-foreground/40",
                 )}
                 style={{
                   width: item.width,
@@ -130,7 +130,7 @@ const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
                   />
                 ) : (
                   <div className="flex size-full items-center justify-center">
-                    <MonitorIcon className="size-8 text-muted-foreground/30" />
+                    <MonitorIcon className="size-8 text-foreground/50/30" />
                   </div>
                 )}
 
@@ -140,7 +140,7 @@ const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
                     "absolute left-1.5 top-1.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold",
                     isSelected
                       ? "bg-primary text-primary-foreground"
-                      : "bg-background/80 text-muted-foreground",
+                      : "bg-background/80 text-foreground/50",
                   )}
                 >
                   {item.index + 1}
@@ -175,7 +175,7 @@ const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
               <span
                 className={cn(
                   "mt-1 max-w-full truncate text-[10px]",
-                  isSelected ? "font-medium text-foreground" : "text-muted-foreground",
+                  isSelected ? "font-medium text-foreground" : "text-foreground/50",
                 )}
               >
                 {item.monitorId}
@@ -187,7 +187,7 @@ const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
 
       {/* 选中显示器信息 */}
       {selectedConfig && (
-        <div className="text-center text-xs text-muted-foreground">
+        <div className="text-center text-xs text-foreground/50">
           {selectedConfig.monitor_id}
           {selectedConfig.is_enabled && selectedConfig.collection_id
             ? ` · ${t("monitor.rotating")}`

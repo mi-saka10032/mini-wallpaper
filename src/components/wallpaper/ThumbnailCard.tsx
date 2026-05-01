@@ -51,8 +51,9 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-lg border bg-muted/30 transition-all",
-        disabled ? "cursor-not-allowed" : "cursor-pointer",
+        "group relative overflow-hidden rounded-md border border-border/40 bg-card transition-all duration-200",
+        "fluent-shadow-sm hover:fluent-shadow hover:border-border/60 hover:-translate-y-0.5",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         className,
       )}
       style={style}
@@ -70,24 +71,24 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
           <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
             alt={wallpaper.name}
-            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
+            fallback={<TypeIcon className="size-8 text-foreground/50/40" />}
           />
         ) : (
-          <div className="flex size-full items-center justify-center bg-muted">
-            <TypeIcon className="size-8 text-muted-foreground/40" />
+          <div className="flex size-full items-center justify-center bg-foreground/4">
+            <TypeIcon className="size-8 text-foreground/50/40" />
           </div>
         )}
       </div>
 
       {/* 文件信息 */}
       <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <TypeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate text-xs text-foreground/80">{wallpaper.name}</span>
+        <TypeIcon className="size-3.5 shrink-0 text-foreground/40" />
+        <span className="truncate text-xs text-foreground/70">{wallpaper.name}</span>
       </div>
 
       {/* 类型角标 */}
       {(wallpaper.type === "video" || wallpaper.type === "gif") && (
-        <div className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+        <div className="absolute right-1.5 top-1.5 rounded-sm bg-black/50 px-1.5 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur-sm">
           {t(`preview.${wallpaper.type}`)}
         </div>
       )}

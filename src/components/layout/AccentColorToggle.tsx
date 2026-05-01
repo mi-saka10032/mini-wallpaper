@@ -97,7 +97,7 @@ const AccentColorToggle: React.FC = () => {
               variant="ghost"
               size="sm"
               onClick={handleReset}
-              className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
+              className="h-6 gap-1 px-1.5 text-xs text-foreground/50 hover:text-foreground"
             >
               <RotateCcw className="size-3" />
               {t("accentColor.reset")}
@@ -146,7 +146,7 @@ const AccentColorToggle: React.FC = () => {
               onClick={() => setCustomMode(!customMode)}
               className={cn(
                 "relative flex size-7 items-center justify-center rounded-full transition-all duration-200",
-                "border-2 border-dashed border-muted-foreground/40 hover:border-muted-foreground hover:scale-110",
+                "border-2 border-dashed border-foreground/25 hover:border-foreground/50 hover:scale-110",
                 "ring-offset-background",
                 isCustomActive && "ring-2 ring-ring ring-offset-2 border-solid",
               )}
@@ -166,14 +166,14 @@ const AccentColorToggle: React.FC = () => {
                   style={{ color: "white", filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.3))" }}
                 />
               ) : (
-                <Plus className="size-3.5 text-muted-foreground" />
+                <Plus className="size-3.5 text-foreground/50" />
               )}
             </button>
           </div>
 
           {/* 自定义颜色面板 - 使用 react-colorful */}
           {customMode && (
-            <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+            <div className="space-y-3 rounded-md border border-border/50 bg-foreground/3 p-3">
               {/* ColorPicker */}
               <div className="accent-color-picker">
                 <HslColorPicker color={hslColor} onChange={setHslColor} />
@@ -186,10 +186,10 @@ const AccentColorToggle: React.FC = () => {
                   style={{ backgroundColor: customPreviewColor }}
                 />
                 <div className="flex-1 space-y-0.5">
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-foreground/50">
                     {t("accentColor.hue")}: {Math.round(hslColor.h)}°
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-foreground/50">
                     {t("accentColor.saturation")}: {hslColor.s}%
                   </p>
                 </div>
@@ -203,7 +203,7 @@ const AccentColorToggle: React.FC = () => {
           )}
 
           {/* 当前选中提示 */}
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-foreground/45">
             {isCustomActive
               ? t("accentColor.customActive")
               : t(

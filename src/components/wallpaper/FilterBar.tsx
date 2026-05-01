@@ -50,7 +50,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   const { t } = useTranslation();
 
   return (
-    <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+    <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2">
       {/* 全选/取消全选操作（select 模式） */}
       {showSelectActions && (
         <>
@@ -58,7 +58,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             type="button"
             onClick={onSelectAll}
             disabled={selectableCount === 0}
-            className="text-xs text-primary hover:underline disabled:text-muted-foreground disabled:no-underline"
+            className="text-xs text-primary/80 hover:text-primary hover:underline disabled:text-foreground/30 disabled:no-underline"
           >
             {t("grid.selectAll")}
           </button>
@@ -66,18 +66,18 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             <button
               type="button"
               onClick={onClearSelection}
-              className="text-xs text-primary hover:underline"
+              className="text-xs text-primary/80 hover:text-primary hover:underline"
             >
               {t("grid.clearSelection")}
             </button>
           )}
-          <div className="mx-1 h-4 w-px bg-border" />
+          <div className="mx-1 h-4 w-px bg-border/50" />
         </>
       )}
 
       {/* 搜索框 */}
       <div className="relative flex-1 max-w-xs">
-        <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-foreground/40" />
         <Input
           value={keyword}
           onChange={(e) => onKeywordChange(e.target.value)}
@@ -88,7 +88,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           <button
             type="button"
             onClick={() => onKeywordChange("")}
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-foreground/40 hover:text-foreground"
           >
             <X className="size-3" />
           </button>
@@ -114,7 +114,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         type="button"
         onClick={() => onSortOrderChange(sortOrder === "asc" ? "desc" : "asc")}
         className={cn(
-          "flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          "flex size-8 items-center justify-center rounded-md border border-border/50 text-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground",
           sortOrder === "desc" && "rotate-180",
         )}
         title={sortOrder === "asc" ? t("grid.ascending") : t("grid.descending")}
@@ -124,7 +124,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
 
       {/* 筛选结果计数 */}
       {keyword && filteredCount !== totalCount && (
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs text-foreground/45">
           {t("grid.filterResult", { filtered: filteredCount, total: totalCount })}
         </span>
       )}

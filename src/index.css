@@ -34,66 +34,88 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* Win11 Fluent 扩展 */
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-subtle: var(--subtle);
+  --color-subtle-hover: var(--subtle-hover);
+  --color-card-hover: var(--card-hover);
 }
 
+/* ===== Win11 Fluent Design - Light Theme ===== */
 :root {
-  --background: oklch(1 0 0);
+  --background: oklch(0.985 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
+  --card-hover: oklch(0.98 0 0);
+  --popover: oklch(0.995 0 0);
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
+  --secondary: oklch(0.965 0 0);
   --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
+  --muted: oklch(0.96 0 0);
+  --muted-foreground: oklch(0.45 0 0);
+  --accent: oklch(0.955 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
+  --border: oklch(0.91 0 0);
+  --input: oklch(0.93 0 0);
   --ring: oklch(0.708 0 0);
-  --radius: 0.625rem;
-  --sidebar-background: oklch(0.985 0 0);
+  --radius: 0.5rem;
+  /* Win11 Fluent 扩展变量 */
+  --surface: oklch(0.99 0 0);
+  --surface-hover: oklch(0.96 0 0);
+  --subtle: oklch(0.97 0 0);
+  --subtle-hover: oklch(0.94 0 0);
+  /* Sidebar */
+  --sidebar-background: oklch(0.975 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent: oklch(0.955 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-border: oklch(0.91 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* ===== Win11 Fluent Design - Dark Theme ===== */
 .dark {
-  --background: oklch(0.145 0 0);
+  --background: oklch(0.16 0 0);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.145 0 0);
+  --card: oklch(0.19 0 0);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
+  --card-hover: oklch(0.22 0 0);
+  --popover: oklch(0.2 0 0);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.985 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
+  --secondary: oklch(0.24 0 0);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
+  --muted: oklch(0.24 0 0);
+  --muted-foreground: oklch(0.65 0 0);
+  --accent: oklch(0.22 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.396 0.141 25.723);
   --destructive-foreground: oklch(0.637 0.237 25.331);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
+  --border: oklch(0.26 0 0);
+  --input: oklch(0.24 0 0);
   --ring: oklch(0.439 0 0);
-  --sidebar-background: oklch(0.205 0 0);
+  /* Win11 Fluent 扩展变量 */
+  --surface: oklch(0.2 0 0);
+  --surface-hover: oklch(0.25 0 0);
+  --subtle: oklch(0.22 0 0);
+  --subtle-hover: oklch(0.28 0 0);
+  /* Sidebar */
+  --sidebar-background: oklch(0.175 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.985 0 0);
   --sidebar-primary-foreground: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent: oklch(0.24 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-border: oklch(0.26 0 0);
   --sidebar-ring: oklch(0.439 0 0);
 }
 
@@ -139,6 +161,7 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
   }
   /* Loading 阶段：body 背景透明，让 Tauri transparent 窗口穿透可见桌面 */
   body.loading-transparent {
@@ -172,6 +195,62 @@
   a {
     -webkit-user-drag: none;
     pointer-events: auto;
+  }
+}
+
+/* ===== Win11 Fluent 工具类 ===== */
+@layer utilities {
+  /* Mica 材质效果 - 用于主窗口背景 */
+  .fluent-mica {
+    background-color: var(--background);
+    backdrop-filter: blur(60px) saturate(125%);
+  }
+
+  /* Acrylic 材质效果 - 用于弹出层/覆盖层 */
+  .fluent-acrylic {
+    backdrop-filter: blur(20px) saturate(150%);
+    background-color: oklch(1 0 0 / 0.7);
+  }
+  .dark .fluent-acrylic {
+    background-color: oklch(0.16 0 0 / 0.75);
+  }
+
+  /* Win11 微妙阴影层级 */
+  .fluent-shadow-sm {
+    box-shadow:
+      0 1px 2px oklch(0 0 0 / 0.04),
+      0 1px 3px oklch(0 0 0 / 0.03);
+  }
+  .fluent-shadow {
+    box-shadow:
+      0 2px 4px oklch(0 0 0 / 0.04),
+      0 4px 8px oklch(0 0 0 / 0.04);
+  }
+  .fluent-shadow-lg {
+    box-shadow:
+      0 4px 8px oklch(0 0 0 / 0.06),
+      0 8px 16px oklch(0 0 0 / 0.06);
+  }
+
+  /* Win11 导航指示条 */
+  .fluent-indicator {
+    position: relative;
+  }
+  .fluent-indicator::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 16px;
+    border-radius: 2px;
+    background-color: var(--primary);
+    opacity: 0;
+    transition: opacity 0.2s ease, height 0.2s ease;
+  }
+  .fluent-indicator-active::before {
+    opacity: 1;
   }
 }
 

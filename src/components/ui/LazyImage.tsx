@@ -38,9 +38,9 @@ const LazyImage: React.FC<LazyImageProps> = ({ src, alt, className, fallback }) 
 
   if (error) {
     return (
-      <div className={cn("flex size-full items-center justify-center bg-muted", className)}>
+      <div className={cn("flex size-full items-center justify-center bg-foreground/4", className)}>
         {fallback ?? (
-          <div className="flex flex-col items-center gap-1 text-muted-foreground/40">
+          <div className="flex flex-col items-center gap-1 text-foreground/30">
             <ImageOff className="size-6" strokeWidth={1.5} />
           </div>
         )}
@@ -49,10 +49,10 @@ const LazyImage: React.FC<LazyImageProps> = ({ src, alt, className, fallback }) 
   }
 
   return (
-    <div className={cn("relative size-full overflow-hidden bg-muted", className)}>
+    <div className={cn("relative size-full overflow-hidden bg-foreground/4", className)}>
       {/* 骨架屏 shimmer 动画 */}
       {!loaded && (
-        <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-muted via-muted-foreground/5 to-muted" />
+        <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-foreground/3 via-foreground/5 to-foreground/3" />
       )}
       {/* 实际图片 */}
       <img

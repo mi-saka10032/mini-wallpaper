@@ -68,14 +68,14 @@ const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, in
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xl"
       onClick={onClose}
     >
       {/* 关闭按钮 — 固定右上角 */}
       <button
         type="button"
         onClick={onClose}
-        className="fixed right-6 top-6 z-50 rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/20 hover:text-white"
+        className="fixed right-6 top-6 z-50 rounded-full bg-white/8 p-2 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
       >
         <X className="size-5" />
       </button>
@@ -88,7 +88,7 @@ const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, in
             e.stopPropagation();
             goPrev();
           }}
-          className="fixed left-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/10 p-2.5 text-white/70 transition-colors hover:bg-white/20 hover:text-white"
+          className="fixed left-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/8 p-2.5 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
         >
           <ChevronLeft className="size-6" />
         </button>
@@ -102,7 +102,7 @@ const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, in
             e.stopPropagation();
             goNext();
           }}
-          className="fixed right-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/10 p-2.5 text-white/70 transition-colors hover:bg-white/20 hover:text-white"
+          className="fixed right-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/8 p-2.5 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
         >
           <ChevronRight className="size-6" />
         </button>
@@ -117,24 +117,24 @@ const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, in
             controls
             autoPlay
             muted
-            className="max-h-[80vh] max-w-[80vw] rounded-lg"
+            className="max-h-[80vh] max-w-[80vw] rounded-md"
           />
         ) : (
           <img
             src={src}
             alt={wallpaper.name}
-            className="max-h-[80vh] max-w-[80vw] rounded-lg object-contain"
+            className="max-h-[80vh] max-w-[80vw] rounded-md object-contain"
           />
         )}
       </div>
 
       {/* 底部信息 — 固定底部居中 */}
-      <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 flex items-center gap-4 rounded-full bg-black/60 px-5 py-2 text-sm text-white/70 backdrop-blur-sm">
+      <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 flex items-center gap-4 rounded-lg bg-black/50 px-5 py-2.5 text-sm text-white/70 backdrop-blur-xl">
         <span className="max-w-48 truncate">{wallpaper.name}</span>
-        {resolution && <span>{resolution}</span>}
-        {fileSize && <span>{fileSize}</span>}
-        <span className="uppercase">{wallpaper.type}</span>
-        <span className="text-white/40">
+        {resolution && <span className="text-white/50">{resolution}</span>}
+        {fileSize && <span className="text-white/50">{fileSize}</span>}
+        <span className="uppercase text-white/50">{wallpaper.type}</span>
+        <span className="text-white/35">
           {currentIndex + 1} / {wallpapers.length}
         </span>
       </div>

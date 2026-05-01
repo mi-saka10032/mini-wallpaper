@@ -75,10 +75,10 @@ const ImportDropCard: React.FC = () => {
   return (
     <div
       className={cn(
-        "group relative flex cursor-default items-center justify-center overflow-hidden rounded-lg border-2 border-dashed transition-all duration-200",
+        "group relative flex cursor-default items-center justify-center overflow-hidden rounded-md border-2 border-dashed transition-all duration-200",
         isDragOver
-          ? "border-primary bg-primary/10 shadow-lg shadow-primary/5"
-          : "border-muted-foreground/25 bg-muted/10 hover:border-muted-foreground/40 hover:bg-muted/20",
+          ? "border-primary/60 bg-primary/5 fluent-shadow"
+          : "border-foreground/15 bg-foreground/2 hover:border-foreground/25 hover:bg-foreground/4",
       )}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -91,8 +91,8 @@ const ImportDropCard: React.FC = () => {
           className={cn(
             "flex size-10 items-center justify-center rounded-full transition-all duration-200",
             isDragOver
-              ? "bg-primary/20 text-primary scale-110"
-              : "bg-muted-foreground/10 text-muted-foreground/50 group-hover:bg-muted-foreground/15 group-hover:text-muted-foreground/70",
+              ? "bg-primary/10 text-primary scale-110"
+              : "bg-foreground/5 text-foreground/35 group-hover:bg-foreground/8 group-hover:text-foreground/50",
           )}
         >
           <Upload
@@ -106,12 +106,12 @@ const ImportDropCard: React.FC = () => {
           <p
             className={cn(
               "text-xs font-medium transition-colors duration-200",
-              isDragOver ? "text-primary" : "text-muted-foreground/60 group-hover:text-muted-foreground/80",
+              isDragOver ? "text-primary" : "text-foreground/40 group-hover:text-foreground/55",
             )}
           >
             {isDragOver ? t("main.releaseToImport") : t("main.dropToImport")}
           </p>
-          <p className="mt-0.5 text-[10px] text-muted-foreground/40">
+          <p className="mt-0.5 text-[10px] text-foreground/30">
             {t("main.supportedFormats")}
           </p>
         </div>

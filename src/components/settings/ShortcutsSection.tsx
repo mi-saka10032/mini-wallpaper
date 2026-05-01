@@ -35,7 +35,7 @@ const ShortcutsSection: React.FC<ShortcutsSectionProps> = React.memo(({
   return (
     <div className="space-y-6">
       <h3 className="text-base font-semibold">{t("settings.navShortcuts")}</h3>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs text-foreground/50">
         {t("settings.shortcutsDesc")}
       </p>
 
@@ -46,7 +46,7 @@ const ShortcutsSection: React.FC<ShortcutsSectionProps> = React.memo(({
           {recordingAction === SETTING_KEYS.SHORTCUT_NEXT ? (
             <div
               ref={recorderRef}
-              className="flex h-9 flex-1 items-center rounded-md border border-primary bg-muted/50 px-3 text-sm text-primary animate-pulse max-w-xs outline-none"
+              className="flex h-9 flex-1 items-center rounded-md border border-primary bg-foreground/3 px-3 text-sm text-primary animate-pulse max-w-xs outline-none"
               tabIndex={0}
               onKeyDown={handleRecordKeyDown}
               onKeyUp={handleRecordKeyUp}
@@ -67,7 +67,7 @@ const ShortcutsSection: React.FC<ShortcutsSectionProps> = React.memo(({
             variant="ghost"
             size="sm"
             onClick={() => resetShortcut(SETTING_KEYS.SHORTCUT_NEXT, DEFAULT_SHORTCUTS.nextWallpaper)}
-            className="text-xs text-muted-foreground"
+            className="text-xs text-foreground/50"
           >
             {t("settings.shortcutReset")}
           </Button>
@@ -83,7 +83,7 @@ const ShortcutsSection: React.FC<ShortcutsSectionProps> = React.memo(({
           {recordingAction === SETTING_KEYS.SHORTCUT_PREV ? (
             <div
               ref={recorderRef}
-              className="flex h-9 flex-1 items-center rounded-md border border-primary bg-muted/50 px-3 text-sm text-primary animate-pulse max-w-xs outline-none"
+              className="flex h-9 flex-1 items-center rounded-md border border-primary bg-foreground/3 px-3 text-sm text-primary animate-pulse max-w-xs outline-none"
               tabIndex={0}
               onKeyDown={handleRecordKeyDown}
               onKeyUp={handleRecordKeyUp}
@@ -104,7 +104,7 @@ const ShortcutsSection: React.FC<ShortcutsSectionProps> = React.memo(({
             variant="ghost"
             size="sm"
             onClick={() => resetShortcut(SETTING_KEYS.SHORTCUT_PREV, DEFAULT_SHORTCUTS.prevWallpaper)}
-            className="text-xs text-muted-foreground"
+            className="text-xs text-foreground/50"
           >
             {t("settings.shortcutReset")}
           </Button>

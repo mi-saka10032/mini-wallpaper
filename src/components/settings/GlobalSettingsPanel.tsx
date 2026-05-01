@@ -79,7 +79,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
         <DialogTitle className="sr-only">{t("settings.title")}</DialogTitle>
         <div className="flex h-[520px]">
           {/* ===== 左侧导航栏 ===== */}
-          <nav className="flex w-44 shrink-0 flex-col border-r border-border bg-muted/30 px-2 py-4">
+          <nav className="flex w-44 shrink-0 flex-col border-r border-border/40 bg-surface px-2 py-4">
             <h2 className="mb-3 px-2 text-sm font-semibold text-foreground">
               {t("settings.title")}
             </h2>
@@ -90,10 +90,10 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                   type="button"
                   onClick={() => setActiveSection(id)}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+                    "fluent-indicator flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-all duration-150",
                     activeSection === id
-                      ? "bg-accent text-accent-foreground"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                      ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
+                      : "text-foreground/60 hover:bg-foreground/4 hover:text-foreground",
                   )}
                 >
                   <Icon className="size-4" />
@@ -112,7 +112,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
                       <Label className="text-sm font-medium">{t("settings.autoStart")}</Label>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-foreground/50">
                         {t("settings.autoStartDesc")}
                       </p>
                     </div>
@@ -130,7 +130,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
                       <Label className="text-sm font-medium">{t("settings.closeToTray")}</Label>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-foreground/50">
                         {t("settings.closeToTrayDesc")}
                       </p>
                     </div>
@@ -143,7 +143,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
                       <Label className="text-sm font-medium">{t("settings.pauseOnFullscreen")}</Label>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-foreground/50">
                         {t("settings.pauseOnFullscreenDesc")}
                       </p>
                     </div>
@@ -169,7 +169,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <Label className="text-sm font-medium">{t("settings.volume")}</Label>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-xs text-foreground/50">
                         {isMuted ? t("settings.volumeMuted") : `${volume}%`}
                       </span>
                     </div>
@@ -180,8 +180,8 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                         className={cn(
                           "rounded-md p-1.5 transition-colors",
                           isMuted
-                            ? "text-muted-foreground hover:bg-muted"
-                            : "text-foreground hover:bg-muted",
+                            ? "text-foreground/50 hover:bg-foreground/5"
+                            : "text-foreground hover:bg-foreground/5",
                         )}
                       >
                         {isMuted ? (

@@ -85,10 +85,10 @@ const SelectableCard: React.FC<SelectableCardProps> = memo(({
       disabled={disabled}
       className={cn(
         disabled
-          ? "border-border opacity-50"
+          ? "opacity-50"
           : selected
-            ? "border-primary ring-2 ring-primary"
-            : "border-border hover:ring-2 hover:ring-primary/50",
+            ? "border-primary/70 ring-1 ring-primary/30 bg-primary/3"
+            : "",
       )}
       onClick={() => onClick()}
       overlayTopLeft={overlayTopLeft}
@@ -108,7 +108,6 @@ const BrowseCard: React.FC<BrowseCardProps> = memo(({ wallpaper, onClick }) => {
   return (
     <ThumbnailCard
       wallpaper={wallpaper}
-      className="border-border hover:ring-2 hover:ring-primary/50"
       onClick={onClick}
     />
   );
@@ -215,7 +214,7 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
         {isEmpty ? (
           emptyContent || (
             <div className="flex h-full min-h-40 items-center justify-center">
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-foreground/40">
                 {keyword ? t("grid.noResults") : t("grid.empty")}
               </p>
             </div>

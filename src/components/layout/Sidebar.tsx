@@ -112,7 +112,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
   }, [deleteTarget, activeId, onActiveIdChange, deleteCollection]);
 
   return (
-    <div className="flex h-full w-52 shrink-0 flex-col overflow-hidden border-r border-border">
+    <div className="flex h-full w-52 shrink-0 flex-col overflow-hidden border-r border-border/50 bg-sidebar-background">
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {/* 壁纸库 */}
         <div className="mb-1">
@@ -120,10 +120,10 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
             type="button"
             onClick={() => onActiveIdChange(0)}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-base transition-colors",
+              "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
               activeId === 0
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
+                : "text-foreground/65 hover:bg-foreground/4 hover:text-foreground",
             )}
           >
             <FolderOpen className="size-4" />
@@ -134,12 +134,12 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
         <Separator className="my-2" />
 
         {/* 收藏夹标题 + 新建按钮 */}
-        <div className="mb-1 flex items-center justify-between px-2.5">
-          <span className="text-sm font-medium text-muted-foreground">{t("sidebar.collections")}</span>
+        <div className="mb-1 flex items-center justify-between px-3">
+          <span className="text-xs font-medium uppercase tracking-wide text-foreground/40">{t("sidebar.collections")}</span>
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground"
+            className="size-6 text-foreground/50 hover:text-foreground hover:bg-foreground/5"
             onClick={openCreateDialog}
           >
             <Plus className="size-3" />
@@ -157,10 +157,10 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
                       type="button"
                       onClick={() => onActiveIdChange(collection.id)}
                       className={cn(
-                        "flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-2.5 py-1.5 text-base transition-colors",
+                        "fluent-indicator flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
                         activeId === collection.id
-                          ? "bg-accent text-accent-foreground"
-                          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                          ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
+                          : "text-foreground/65 hover:bg-foreground/4 hover:text-foreground",
                       )}
                     >
                       <Star className="size-4 shrink-0" />
@@ -189,7 +189,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
           ))}
 
           {collections.length === 0 && (
-            <p className="px-2.5 py-2 text-sm text-muted-foreground/60">{t("sidebar.noCollections")}</p>
+            <p className="px-3 py-2 text-xs text-foreground/35">{t("sidebar.noCollections")}</p>
           )}
         </div>
       </div>
@@ -218,7 +218,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
             />
             <div className="mt-1.5 flex items-center justify-between">
               {dialogError ? <p className="text-sm text-destructive">{dialogError}</p> : <span />}
-              <span className="text-xs text-muted-foreground">{dialogValue.length}/32</span>
+              <span className="text-xs text-foreground/50">{dialogValue.length}/32</span>
             </div>
           </div>
           <DialogFooter>

@@ -18,6 +18,11 @@ use ctx::AppContext;
 use platform::tray;
 use runtime::Scheduler;
 
+/// 检查当前是否为开机自启动（通过命令行参数 --autostart 判断）
+fn is_autostart_launch() -> bool {
+    std::env::args().any(|arg| arg == "--autostart")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -26,14 +31,23 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec!["--autostart"]),
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 当第二个实例尝试启动时，聚焦已有窗口
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             // 初始化日志系统
             env_logger::Builder::from_env(
-                env_logger::Env::default().default_filter_or("info")
-            ).init();
+                env_logger::Env::default().default_filter_or("info"),
+            )
+            .init();
 
             let handle = app.handle().clone();
 
@@ -50,6 +64,13 @@ pub fn run() {
 
             // ===== 系统托盘 =====
             tray::setup_tray(app)?;
+
+            // ===== 开机自启时隐藏主窗口到托盘 =====
+            if is_autostart_launch() {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
 
             Ok(())
         })

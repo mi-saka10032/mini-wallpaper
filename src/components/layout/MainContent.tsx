@@ -91,17 +91,17 @@ const MainContent: React.FC<MainContentProps> = ({
     manage.enterManageMode();
     search.resetManageSearch();
     search.resetNormalSearch();
-  }, [manage, search]);
+  }, [manage.enterManageMode, search.resetManageSearch, search.resetNormalSearch]);
 
   const exitManageMode = useCallback(async () => {
     await manage.exitManageMode();
     search.resetManageSearch();
-  }, [manage, search]);
+  }, [manage.exitManageMode, search.resetManageSearch]);
 
   const enterSortMode = useCallback(() => {
     sort.enterSortMode();
     search.resetNormalSearch();
-  }, [sort, search]);
+  }, [sort.enterSortMode, search.resetNormalSearch]);
 
   // ===== displayWallpapers 计算（组件层交叉逻辑） =====
   const displayWallpapers = useMemo(() => {
@@ -126,7 +126,7 @@ const MainContent: React.FC<MainContentProps> = ({
     sort.sortMode, sort.localOrder,
     manage.manageMode, manage.pendingRemovals, manage.pendingDeletions,
     wallpapers, isCollectionView,
-    search,
+    search.getFilteredWallpapers, search.getNormalFilteredWallpapers,
   ]);
 
   const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
@@ -138,7 +138,7 @@ const MainContent: React.FC<MainContentProps> = ({
   // ===== 稳定的单个删除回调（避免内联函数导致 WallpaperCard memo 失效） =====
   const handleSingleDelete = useCallback(
     (id: number) => manage.handleDeleteRequest([id]),
-    [manage],
+    [manage.handleDeleteRequest],
   );
 
   // ===== 卡片点击 =====
@@ -152,7 +152,7 @@ const MainContent: React.FC<MainContentProps> = ({
         onPreview(realIndex !== -1 ? realIndex : _index);
       }
     },
-    [sort.sortMode, manage, onPreview],
+    [sort.sortMode, manage.manageMode, manage.toggleSelect, onPreview],
   );
 
   // ===== picker 确认 =====
@@ -160,7 +160,7 @@ const MainContent: React.FC<MainContentProps> = ({
     setPickerOpen(false);
     search.resetNormalSearch();
     onCollectionChanged?.();
-  }, [search, onCollectionChanged]);
+  }, [search.resetNormalSearch, onCollectionChanged]);
 
   // dnd-kit sensor: 需要拖动 10px 才触发，避免和点击选择冲突
   const sensors = useSensors(

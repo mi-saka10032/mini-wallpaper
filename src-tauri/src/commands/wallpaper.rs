@@ -27,6 +27,15 @@ pub async fn get_wallpapers(
     Ok(wallpaper_service::get_all(&ctx.db).await?)
 }
 
+/// 根据 ID 获取单个壁纸详情
+#[tauri::command]
+pub async fn get_wallpaper(
+    ctx: State<'_, AppContext>,
+    id: i32,
+) -> CommandResult<Option<wallpaper::Model>> {
+    Ok(wallpaper_service::get_by_id(&ctx.db, id).await?)
+}
+
 /// 导入壁纸（接收文件路径数组，复制到应用目录，生成缩略图，写入数据库）
 ///
 /// 图片/GIF 缩略图在此生成；视频缩略图由前端 canvas 抽帧后通过

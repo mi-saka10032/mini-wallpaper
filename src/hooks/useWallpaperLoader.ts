@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@/api/invoke";
 import { listen, EVENTS } from "@/api/event";
 import { COMMANDS, type Wallpaper, type MonitorConfig } from "@/api/config";
+import { getById as getWallpaperById } from "@/api/wallpaper";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 
 /**
@@ -27,7 +28,7 @@ export function useWallpaperLoader(monitorId: string | null) {
       return;
     }
 
-    // 优先从 store 中查找，避免每次都全量拉取壁纸列表
+    // 优先从 store 缓存中查找，命中则直接使用
     const storeWallpapers = useWallpaperStore.getState().wallpapers;
     const found = storeWallpapers.find((w) => w.id === config.wallpaper_id) ?? null;
     if (found) {
@@ -35,14 +36,12 @@ export function useWallpaperLoader(monitorId: string | null) {
       return;
     }
 
-    // store 中未找到（可能尚未加载），回退到刷新 store 后再查找
+    // 缓存未命中，通过 getById 接口精确查询单个壁纸
     try {
-      await useWallpaperStore.getState().fetchWallpapers();
-      const refreshed = useWallpaperStore.getState().wallpapers;
-      const fallback = refreshed.find((w) => w.id === config.wallpaper_id) ?? null;
-      setWallpaper(fallback);
+      const detail = await getWallpaperById(config.wallpaper_id);
+      setWallpaper(detail);
     } catch (e) {
-      console.error("[useWallpaperLoader] fetch wallpaper failed:", e);
+      console.error("[useWallpaperLoader] getById failed:", e);
     }
   }, []);
 

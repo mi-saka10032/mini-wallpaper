@@ -12,6 +12,11 @@ export async function getAll(): Promise<Wallpaper[]> {
   return invoke(COMMANDS.GET_WALLPAPERS);
 }
 
+/** 根据 ID 获取单个壁纸详情 */
+export async function getById(id: number): Promise<Wallpaper | null> {
+  return invoke(COMMANDS.GET_WALLPAPER, { id });
+}
+
 /** 导入壁纸文件 */
 export async function importFiles(paths: string[]): Promise<Wallpaper[]> {
   return invoke(COMMANDS.IMPORT_WALLPAPERS, { paths });

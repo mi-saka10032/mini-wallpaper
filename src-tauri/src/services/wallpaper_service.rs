@@ -25,6 +25,14 @@ pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<wallpaper::Model>> {
         .context("Failed to fetch wallpapers")
 }
 
+/// 根据 ID 获取单个壁纸详情
+pub async fn get_by_id(db: &DatabaseConnection, id: i32) -> Result<Option<wallpaper::Model>> {
+    wallpaper::Entity::find_by_id(id)
+        .one(db)
+        .await
+        .context("Failed to fetch wallpaper by id")
+}
+
 /// 获取所有支持的壁纸文件扩展名
 pub fn get_supported_extensions() -> Vec<String> {
     IMAGE_EXTENSIONS

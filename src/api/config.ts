@@ -3,6 +3,7 @@ export const COMMANDS = {
   // wallpaper
   GET_SUPPORTED_EXTENSIONS: "get_supported_extensions",
   GET_WALLPAPERS: "get_wallpapers",
+  GET_WALLPAPER: "get_wallpaper",
   IMPORT_WALLPAPERS: "import_wallpapers",
   SAVE_VIDEO_THUMBNAIL: "save_video_thumbnail",
   DELETE_WALLPAPERS: "delete_wallpapers",
@@ -225,6 +226,10 @@ export interface CommandMap {
   [COMMANDS.GET_WALLPAPERS]: {
     params: Record<string, never>;
     result: Wallpaper[];
+  };
+  [COMMANDS.GET_WALLPAPER]: {
+    params: { id: number };
+    result: Wallpaper | null;
   };
   [COMMANDS.IMPORT_WALLPAPERS]: {
     params: { req: ImportWallpapersReq };

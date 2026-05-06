@@ -48,7 +48,7 @@ export function useMonitorSettings() {
    */
   const isSyncMode = displayMode === "mirror" || displayMode === "extend";
 
-  // 获取壁纸缩略图
+  // 获取壁纸缩略图（从 store 缓存中查找）
   const getWallpaperThumb = useCallback(
     (wallpaperId: number | null): Wallpaper | null => {
       if (!wallpaperId) return null;

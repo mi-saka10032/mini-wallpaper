@@ -15,6 +15,7 @@ macro_rules! all_handlers {
             // wallpaper
             $crate::commands::wallpaper::get_supported_extensions,
             $crate::commands::wallpaper::get_wallpapers,
+            $crate::commands::wallpaper::get_wallpaper,
             $crate::commands::wallpaper::import_wallpapers,
             $crate::commands::wallpaper::save_video_thumbnail,
             $crate::commands::wallpaper::delete_wallpapers,

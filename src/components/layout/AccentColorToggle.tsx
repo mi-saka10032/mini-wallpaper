@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { Check, Palette, Plus, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { HslColorPicker } from "react-colorful";
+import ColorPicker, { Color } from "@rc-component/color-picker";
+import "@rc-component/color-picker/assets/index.css";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -18,14 +19,14 @@ function getPresetPreviewColor(hue: number, chroma: number, isDefault: boolean):
 }
 
 /**
- * 将 oklch chroma (0~0.25) 映射到 HSL saturation (0~100)
+ * 将 oklch chroma (0~0.25) 映射到 HSB saturation (0~100)
  */
 function chromaToSaturation(chroma: number): number {
   return Math.round((chroma / 0.25) * 100);
 }
 
 /**
- * 将 HSL saturation (0~100) 映射到 oklch chroma (0~0.25)
+ * 将 HSB saturation (0~100) 映射到 oklch chroma (0~0.25)
  */
 function saturationToChroma(saturation: number): number {
   return Number(((saturation / 100) * 0.25).toFixed(3));
@@ -41,11 +42,11 @@ const AccentColorToggle: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [customMode, setCustomMode] = useState(false);
 
-  // HSL 状态用于 react-colorful
-  const [hslColor, setHslColor] = useState({
+  // HSB 状态用于 @rc-component/color-picker
+  const [hsbColor, setHsbColor] = useState({
     h: currentConfig.hue || 250,
-    s: currentConfig.chroma > 0 ? chromaToSaturation(currentConfig.chroma) : 60,
-    l: 50,
+    s: currentConfig.chroma > 0 ? chromaToSaturation(currentConfig.chroma) / 100 : 0.6,
+    b: 0.6,
   });
 
   // 判断当前选中的是哪个预设
@@ -65,10 +66,10 @@ const AccentColorToggle: React.FC = () => {
   );
 
   const handleCustomConfirm = useCallback(() => {
-    const chroma = saturationToChroma(hslColor.s);
-    setCustomColor(hslColor.h, chroma);
+    const chroma = saturationToChroma(Math.round(hsbColor.s * 100));
+    setCustomColor(Math.round(hsbColor.h), chroma);
     setCustomMode(false);
-  }, [hslColor, setCustomColor]);
+  }, [hsbColor, setCustomColor]);
 
   const handleReset = useCallback(() => {
     setAccentColor("default");
@@ -77,8 +78,8 @@ const AccentColorToggle: React.FC = () => {
 
   // 自定义颜色预览（oklch 格式）
   const customPreviewColor = useMemo(
-    () => `oklch(0.6 ${saturationToChroma(hslColor.s)} ${hslColor.h})`,
-    [hslColor],
+    () => `oklch(0.6 ${saturationToChroma(Math.round(hsbColor.s * 100))} ${Math.round(hsbColor.h)})`,
+    [hsbColor],
   );
 
   return (
@@ -171,12 +172,19 @@ const AccentColorToggle: React.FC = () => {
             </button>
           </div>
 
-          {/* 自定义颜色面板 - 使用 react-colorful */}
+          {/* 自定义颜色面板 - 使用 @rc-component/color-picker */}
           {customMode && (
             <div className="space-y-3 rounded-md border border-border/50 bg-foreground/3 p-3">
               {/* ColorPicker */}
               <div className="accent-color-picker">
-                <HslColorPicker color={hslColor} onChange={setHslColor} />
+                <ColorPicker
+                  value={new Color({ h: hsbColor.h, s: hsbColor.s * 100, b: hsbColor.b * 100 })}
+                  disabledAlpha
+                  onChange={(color) => {
+                    const hsb = color.toHsb();
+                    setHsbColor({ h: hsb.h, s: hsb.s / 100, b: hsb.b / 100 });
+                  }}
+                />
               </div>
 
               {/* 颜色预览 + 信息 */}
@@ -187,10 +195,10 @@ const AccentColorToggle: React.FC = () => {
                 />
                 <div className="flex-1 space-y-0.5">
                   <p className="text-xs text-foreground/50">
-                    {t("accentColor.hue")}: {Math.round(hslColor.h)}°
+                    {t("accentColor.hue")}: {Math.round(hsbColor.h)}°
                   </p>
                   <p className="text-xs text-foreground/50">
-                    {t("accentColor.saturation")}: {hslColor.s}%
+                    {t("accentColor.saturation")}: {Math.round(hsbColor.s * 100)}%
                   </p>
                 </div>
               </div>

@@ -261,27 +261,42 @@
   }
 }
 
-/* ===== react-colorful 样式覆盖 ===== */
-.accent-color-picker .react-colorful {
+/* ===== @rc-component/color-picker 样式覆盖 ===== */
+.accent-color-picker .rc-color-picker {
+  position: relative;
   width: 100%;
-  height: 150px;
+  min-width: unset;
+}
+
+.accent-color-picker .rc-color-picker-panel {
+  width: 100%;
+  padding: 0;
+  background-color: transparent;
   border-radius: 8px;
-  overflow: hidden;
+  box-shadow: none;
 }
 
-.accent-color-picker .react-colorful__saturation {
-  border-radius: 6px 6px 0 0;
+.accent-color-picker .rc-color-picker-select .rc-color-picker-palette {
+  min-height: 140px;
+  border-radius: 8px;
 }
 
-.accent-color-picker .react-colorful__hue {
-  height: 12px;
-  border-radius: 0 0 6px 6px;
+.accent-color-picker .rc-color-picker-slider {
+  margin-bottom: 0;
+  margin-top: 8px;
 }
 
-.accent-color-picker .react-colorful__saturation-pointer,
-.accent-color-picker .react-colorful__hue-pointer {
-  width: 16px;
-  height: 16px;
+.accent-color-picker .rc-color-picker-slider .rc-color-picker-palette {
+  height: 10px;
+}
+
+.accent-color-picker .rc-color-picker-slider .rc-color-picker-gradient {
+  border-radius: 5px;
+}
+
+.accent-color-picker .rc-color-picker-handler {
+  width: 14px;
+  height: 14px;
   border: 2px solid white;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }

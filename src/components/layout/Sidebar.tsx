@@ -122,7 +122,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
             className={cn(
               "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
               activeId === 0
-                ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
+                ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
                 : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
             )}
           >
@@ -159,7 +159,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
                       className={cn(
                         "fluent-indicator flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
                         activeId === collection.id
-                          ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
+                          ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
                           : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
                       )}
                     >

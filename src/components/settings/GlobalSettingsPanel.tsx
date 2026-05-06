@@ -94,7 +94,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                   className={cn(
                     "relative flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-[13px] transition-all duration-100",
                     activeSection === id
-                      ? "bg-foreground/7 text-foreground font-medium"
+                      ? "bg-primary-hover-deep text-foreground font-medium"
                       : "text-foreground/60 hover:bg-primary-hover hover:text-foreground/80",
                   )}
                 >

@@ -1,16 +1,10 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, FolderOpen, Image } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { VirtualCombobox, type ComboboxOption } from "@/components/ui/virtual-combobox";
 import type { Wallpaper } from "@/api/config";
 
 interface Collection {
@@ -44,6 +38,44 @@ const WallpaperSourceSection: React.FC<WallpaperSourceSectionProps> = React.memo
 }) => {
   const { t } = useTranslation();
 
+  // 将壁纸列表转换为 ComboboxOption
+  const wallpaperOptions: ComboboxOption[] = useMemo(
+    () =>
+      wallpapers.map((wp) => ({
+        value: wp.id.toString(),
+        label: wp.name,
+        searchKeywords: wp.name,
+        render: (
+          <div className="flex items-center gap-2">
+            {wp.thumb_path ? (
+              <img
+                src={convertFileSrc(wp.thumb_path)}
+                alt=""
+                className="size-6 rounded object-cover"
+              />
+            ) : (
+              <div className="flex size-6 items-center justify-center rounded bg-foreground/5">
+                <Image className="size-3 text-foreground/50" />
+              </div>
+            )}
+            <span className="truncate text-sm">{wp.name}</span>
+          </div>
+        ),
+      })),
+    [wallpapers],
+  );
+
+  // 将收藏夹列表转换为 ComboboxOption
+  const collectionOptions: ComboboxOption[] = useMemo(
+    () =>
+      collections.map((col) => ({
+        value: col.id.toString(),
+        label: col.name,
+        searchKeywords: col.name,
+      })),
+    [collections],
+  );
+
   return (
     <div className="space-y-3">
       <Label className="text-sm font-medium">{t("monitor.wallpaperSource")}</Label>
@@ -69,34 +101,14 @@ const WallpaperSourceSection: React.FC<WallpaperSourceSectionProps> = React.memo
       {/* 单张壁纸选择 */}
       {sourceType === "wallpaper" && (
         <div className="space-y-2">
-          <Select
+          <VirtualCombobox
+            options={wallpaperOptions}
             value={selectedWallpaperId?.toString() ?? ""}
             onValueChange={(v) => onWallpaperSelect(Number(v))}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder={t("monitor.selectWallpaper")} />
-            </SelectTrigger>
-            <SelectContent>
-              {wallpapers.map((wp) => (
-                <SelectItem key={wp.id} value={wp.id.toString()}>
-                  <div className="flex items-center gap-2">
-                    {wp.thumb_path ? (
-                      <img
-                        src={convertFileSrc(wp.thumb_path)}
-                        alt=""
-                        className="size-6 rounded object-cover"
-                      />
-                    ) : (
-                      <div className="flex size-6 items-center justify-center rounded bg-foreground/5">
-                        <Image className="size-3 text-foreground/50" />
-                      </div>
-                    )}
-                    <span className="truncate text-sm">{wp.name}</span>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder={t("monitor.selectWallpaper")}
+            searchPlaceholder={t("monitor.searchWallpaper")}
+            emptyText={t("monitor.noWallpaperResult")}
+          />
         </div>
       )}
 
@@ -109,21 +121,15 @@ const WallpaperSourceSection: React.FC<WallpaperSourceSectionProps> = React.memo
             </p>
           ) : (
             <>
-              <Select
+              <VirtualCombobox
+                options={collectionOptions}
                 value={selectedCollectionId?.toString() ?? ""}
                 onValueChange={onCollectionSelect}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder={t("monitor.selectCollection")} />
-                </SelectTrigger>
-                <SelectContent>
-                  {collections.map((col) => (
-                    <SelectItem key={col.id} value={col.id.toString()}>
-                      {col.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                placeholder={t("monitor.selectCollection")}
+                searchPlaceholder={t("monitor.searchCollection")}
+                emptyText={t("monitor.noCollectionResult")}
+                showSearch={collections.length > 10}
+              />
               {collectionWarning && (
                 <div className="flex items-center gap-1.5 rounded-md border border-yellow-500/50 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400">
                   <AlertTriangle className="size-3.5 shrink-0" />

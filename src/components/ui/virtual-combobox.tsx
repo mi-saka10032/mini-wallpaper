@@ -209,7 +209,7 @@ function VirtualCombobox({
             </div>
           ) : (
             /* 非虚拟模式：直接渲染 */
-            <div className="p-1">
+            <div>
               {filteredOptions.map((opt) => {
                 const isSelected = opt.value === value;
                 return (

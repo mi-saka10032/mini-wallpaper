@@ -71,7 +71,7 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
         <DialogHeader className="shrink-0 border-b border-border/40 px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <DialogTitle className="flex items-center gap-2">
+              <DialogTitle className="flex items-center gap-2 py-1">
                 <ImagePlus className="size-5 text-foreground/60" />
                 {t("pickerDialog.title")}
               </DialogTitle>

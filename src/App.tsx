@@ -145,7 +145,7 @@ const App: React.FC = () => {
 
   return (
     <TooltipProvider>
-      <div className="relative h-screen w-screen overflow-hidden rounded-xl bg-background text-foreground">
+      <div className="relative h-screen w-screen overflow-hidden rounded-xl bg-background text-foreground fluent-shadow-lg">
         {/* 顶部工具栏 */}
         <div className="relative">
           <Toolbar onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
@@ -158,7 +158,9 @@ const App: React.FC = () => {
           <div className="relative h-full shrink-0">
             <Sidebar activeId={activeId} onActiveIdChange={setActiveId} />
             {/* 管理模式蒙层 - 覆盖 Sidebar */}
-            {manageMode && <div className="absolute inset-0 z-40 bg-black/20 backdrop-blur-[1px]" />}
+            {manageMode && (
+              <div className="absolute inset-0 z-40 bg-black/20 backdrop-blur-[1px]" />
+            )}
           </div>
 
           <ErrorBoundary>
@@ -206,14 +208,17 @@ const App: React.FC = () => {
         </ErrorBoundary>
 
         {/* 导入中全局蒙层 */}
-        {importing && (
-          <div className="absolute inset-0 z-[100] flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-sm">
-            <div className="flex flex-col items-center gap-3 rounded-lg bg-popover/95 px-8 py-6 fluent-shadow-lg border border-border/50">
-              <div className="size-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-              <span className="text-sm font-medium text-foreground">{t("main.importing")}</span>
-            </div>
+        <div
+          className={cn(
+            "absolute inset-0 z-100 flex items-center justify-center rounded-lg bg-black/40 backdrop-blur-sm",
+            { hidden: !importing },
+          )}
+        >
+          <div className="flex flex-col items-center gap-3 rounded-lg bg-popover/95 px-8 py-6 fluent-shadow-lg border border-border/50">
+            <div className="size-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+            <span className="text-sm font-medium text-foreground">{t("main.importing")}</span>
           </div>
-        )}
+        </div>
 
         {/* 全局 Toast 消息容器 (sonner) */}
         <Toaster position="top-center" richColors closeButton duration={4000} />

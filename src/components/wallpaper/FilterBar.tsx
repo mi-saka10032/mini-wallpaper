@@ -114,7 +114,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         type="button"
         onClick={() => onSortOrderChange(sortOrder === "asc" ? "desc" : "asc")}
         className={cn(
-          "flex size-8 items-center justify-center rounded-md border border-border/50 text-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground",
+          "flex size-8 items-center justify-center rounded-md border border-border/50 text-foreground/60 transition-colors hover:bg-primary/8 hover:text-foreground",
           sortOrder === "desc" && "rotate-180",
         )}
         title={sortOrder === "asc" ? t("grid.ascending") : t("grid.descending")}

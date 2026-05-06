@@ -64,7 +64,7 @@ const MonitorSettingsPanel: React.FC = () => {
           <MonitorIcon className="size-5 text-foreground/50" />
           <h2 className="text-base font-semibold">{t("monitor.title")}</h2>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleRefresh} className="text-foreground/60 hover:text-foreground hover:bg-foreground/5">
+        <Button variant="ghost" size="sm" onClick={handleRefresh} className="text-foreground/60 hover:text-foreground hover:bg-primary/8">
           <RefreshCw className="mr-1.5 size-3.5" />
           {t("monitor.refresh")}
         </Button>

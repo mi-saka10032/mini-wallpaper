@@ -87,7 +87,7 @@ const ManageToolbar: React.FC<ManageToolbarProps> = React.memo(({
 
       {/* 前端排序（管理模式） */}
       <Select value={sortField} onValueChange={(v) => onSortFieldChange(v as SortField)}>
-        <SelectTrigger size="sm" className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs text-foreground/60 shadow-none hover:bg-foreground/5 hover:text-foreground">
+        <SelectTrigger size="sm" className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs text-foreground/60 shadow-none hover:bg-primary/8 hover:text-foreground">
           <SortAsc className="size-3" />
           <SelectValue />
         </SelectTrigger>
@@ -102,7 +102,7 @@ const ManageToolbar: React.FC<ManageToolbarProps> = React.memo(({
         type="button"
         onClick={onSortOrderToggle}
         className={cn(
-          "flex size-7 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground",
+          "flex size-7 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-primary/8 hover:text-foreground",
           sortOrder === "desc" && "rotate-180",
         )}
         title={sortOrder === "asc" ? t("grid.ascending") : t("grid.descending")}
@@ -118,7 +118,7 @@ const ManageToolbar: React.FC<ManageToolbarProps> = React.memo(({
           className={cn(
             "flex items-center gap-1 rounded-md px-2 py-1 text-sm transition-colors",
             isCollectionView
-              ? "text-foreground/60 hover:bg-foreground/5"
+              ? "text-foreground/60 hover:bg-primary/8"
               : "text-destructive/80 hover:bg-destructive/8 hover:text-destructive",
           )}
         >

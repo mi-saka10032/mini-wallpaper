@@ -95,7 +95,7 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                     "relative flex w-full items-center gap-2.5 rounded-md px-3 py-[7px] text-[13px] transition-all duration-100",
                     activeSection === id
                       ? "bg-foreground/7 text-foreground font-medium"
-                      : "text-foreground/60 hover:bg-foreground/4 hover:text-foreground/80",
+                      : "text-foreground/60 hover:bg-primary/8 hover:text-foreground/80",
                   )}
                 >
                   {/* Win11 左侧指示条 */}
@@ -206,8 +206,8 @@ const GlobalSettingsDialog: React.FC<GlobalSettingsDialogProps> = ({
                           className={cn(
                             "rounded-md p-1.5 transition-colors",
                             isMuted
-                              ? "text-foreground/40 hover:bg-foreground/5 hover:text-foreground/60"
-                              : "text-foreground/70 hover:bg-foreground/5 hover:text-foreground",
+                              ? "text-foreground/40 hover:bg-primary/8 hover:text-foreground/60"
+                              : "text-foreground/70 hover:bg-primary/8 hover:text-foreground",
                           )}
                         >
                           {isMuted ? (

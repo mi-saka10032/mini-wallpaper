@@ -123,7 +123,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
               "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
               activeId === 0
                 ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
-                : "text-foreground/65 hover:bg-primary/8 hover:text-foreground",
+                : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
             )}
           >
             <FolderOpen className="size-4" />
@@ -139,7 +139,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-foreground/50 hover:text-foreground hover:bg-primary/8"
+            className="size-6 text-foreground/50 hover:text-foreground hover:bg-primary-hover"
             onClick={openCreateDialog}
           >
             <Plus className="size-3" />
@@ -160,7 +160,7 @@ const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange
                         "fluent-indicator flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
                         activeId === collection.id
                           ? "fluent-indicator-active bg-foreground/6 text-foreground font-medium"
-                          : "text-foreground/65 hover:bg-primary/8 hover:text-foreground",
+                          : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
                       )}
                     >
                       <Star className="size-4 shrink-0" />

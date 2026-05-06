@@ -42,7 +42,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
           variant="ghost"
           size="sm"
           onClick={onOpenPicker}
-          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary/8"
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
         >
           <Plus className="size-3.5" />
           {t("main.addWallpaper")}
@@ -55,7 +55,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
           variant="ghost"
           size="sm"
           onClick={onRefresh}
-          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary/8"
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
           title={t("main.refresh")}
         >
           <RefreshCw className="size-3.5" />
@@ -104,7 +104,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
               variant="ghost"
               size="sm"
               onClick={onSearchExpand}
-              className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary/8"
+              className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
             >
               <Search className="size-3.5" />
             </Button>
@@ -118,7 +118,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
           variant="ghost"
           size="sm"
           onClick={onEnterSortMode}
-          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary/8"
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
         >
           <GripVertical className="size-3.5" />
           {t("main.sortWallpapers")}
@@ -130,7 +130,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
           variant="ghost"
           size="sm"
           onClick={onEnterManageMode}
-          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary/8"
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
         >
           <Settings2 className="size-3.5" />
           {t("main.manageWallpapers")}

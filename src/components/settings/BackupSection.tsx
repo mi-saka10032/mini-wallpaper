@@ -54,7 +54,7 @@ const BackupSection: React.FC<BackupSectionProps> = React.memo(({
             size="sm"
             disabled={backupBusy}
             onClick={onExport}
-            className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-primary/6"
+            className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-primary-hover"
           >
             <Upload className="size-3.5" />
             {t("settings.export")}
@@ -65,7 +65,7 @@ const BackupSection: React.FC<BackupSectionProps> = React.memo(({
             size="sm"
             disabled={backupBusy}
             onClick={onImport}
-            className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-primary/6"
+            className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-primary-hover"
           >
             <Download className="size-3.5" />
             {t("settings.import")}

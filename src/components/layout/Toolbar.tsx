@@ -24,11 +24,11 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange, onOpenSettings }) =
     >
       {/* 左侧操作按钮 */}
       <div className="flex items-center gap-1">
-        <Button variant="ghost" size="sm" onClick={importWallpapers} className="gap-1.5 text-foreground/70 hover:text-foreground hover:bg-primary/8">
+        <Button variant="ghost" size="sm" onClick={importWallpapers} className="gap-1.5 text-foreground/70 hover:text-foreground hover:bg-primary-hover">
           <Plus className="size-4" />
           <span className="text-[13px]">{t("toolbar.import")}</span>
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => onActiveIdChange(-1)} className="gap-1.5 text-foreground/70 hover:text-foreground hover:bg-primary/8">
+        <Button variant="ghost" size="sm" onClick={() => onActiveIdChange(-1)} className="gap-1.5 text-foreground/70 hover:text-foreground hover:bg-primary-hover">
           <Monitor className="size-4" />
           <span className="text-[13px]">{t("toolbar.monitor")}</span>
         </Button>
@@ -44,7 +44,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange, onOpenSettings }) =
         <AccentColorToggle />
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-8 text-foreground/70 hover:text-foreground hover:bg-primary/8" onClick={onOpenSettings}>
+            <Button variant="ghost" size="icon" className="size-8 text-foreground/70 hover:text-foreground hover:bg-primary-hover" onClick={onOpenSettings}>
               <Settings className="size-4" />
             </Button>
           </TooltipTrigger>

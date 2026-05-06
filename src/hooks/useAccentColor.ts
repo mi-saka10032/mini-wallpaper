@@ -66,6 +66,44 @@ function parseAccentValue(value: string | undefined): AccentColorConfig {
 }
 
 /**
+ * 将 oklch 颜色转换为 sRGB 的 rgba() 字符串
+ * 用于解决 WebView 中 oklch(L C H / A) 语法兼容性问题
+ */
+function oklchToRgba(l: number, c: number, h: number, alpha: number): string {
+  // oklch -> oklab
+  const hRad = (h * Math.PI) / 180;
+  const a = c * Math.cos(hRad);
+  const b = c * Math.sin(hRad);
+
+  // oklab -> linear sRGB
+  const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = l - 0.0894841775 * a - 1.291485548 * b;
+
+  const lCubed = l_ * l_ * l_;
+  const mCubed = m_ * m_ * m_;
+  const sCubed = s_ * s_ * s_;
+
+  const r = 4.0767416621 * lCubed - 3.3077115913 * mCubed + 0.2309699292 * sCubed;
+  const g = -1.2684380046 * lCubed + 2.6097574011 * mCubed - 0.3413193965 * sCubed;
+  const bVal = -0.0041960863 * lCubed - 0.7034186147 * mCubed + 1.707614701 * sCubed;
+
+  // linear sRGB -> sRGB (gamma correction)
+  const gammaCorrect = (x: number) => {
+    if (x <= 0.0031308) return 12.92 * x;
+    return 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
+  };
+
+  const clamp = (x: number) => Math.max(0, Math.min(255, Math.round(x * 255)));
+
+  const rByte = clamp(gammaCorrect(r));
+  const gByte = clamp(gammaCorrect(g));
+  const bByte = clamp(gammaCorrect(bVal));
+
+  return `rgba(${rByte}, ${gByte}, ${bByte}, ${alpha})`;
+}
+
+/**
  * 根据色相和明暗模式生成 CSS 变量
  * 使用 oklch 色彩空间确保感知均匀
  */
@@ -87,8 +125,8 @@ function generateAccentVariables(
     return {
       "--primary": `oklch(0.82 ${c} ${h})`,
       "--primary-foreground": `oklch(0.18 ${c * 0.3} ${h})`,
-      "--primary-hover": `oklch(0.82 ${c} ${h} / 0.1)`,
-      "--primary-hover-deep": `oklch(0.82 ${c} ${h} / 0.14)`,
+      "--primary-hover": oklchToRgba(0.82, c, h, 0.1),
+      "--primary-hover-deep": oklchToRgba(0.82, c, h, 0.14),
       "--accent": `oklch(0.28 ${c * 0.5} ${h})`,
       "--accent-foreground": `oklch(0.9 ${c * 0.4} ${h})`,
       "--ring": `oklch(0.6 ${c * 0.8} ${h})`,
@@ -102,8 +140,8 @@ function generateAccentVariables(
     return {
       "--primary": `oklch(0.45 ${c} ${h})`,
       "--primary-foreground": `oklch(0.98 ${c * 0.1} ${h})`,
-      "--primary-hover": `oklch(0.45 ${c} ${h} / 0.1)`,
-      "--primary-hover-deep": `oklch(0.45 ${c} ${h} / 0.14)`,
+      "--primary-hover": oklchToRgba(0.45, c, h, 0.1),
+      "--primary-hover-deep": oklchToRgba(0.45, c, h, 0.14),
       "--accent": `oklch(0.94 ${c * 0.4} ${h})`,
       "--accent-foreground": `oklch(0.3 ${c * 0.8} ${h})`,
       "--ring": `oklch(0.55 ${c * 0.8} ${h})`,

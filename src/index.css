@@ -67,9 +67,9 @@
   --input: oklch(0.93 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.5rem;
-  /* 主题色 hover 背景（直接带透明度，避免 color-mix 兼容性问题） */
-  --primary-hover: oklch(0.205 0 0 / 0.08);
-  --primary-hover-deep: oklch(0.205 0 0 / 0.12);
+  /* 主题色 hover 背景（使用 rgba 格式，确保 WebView 兼容性） */
+  --primary-hover: rgba(0, 0, 0, 0.06);
+  --primary-hover-deep: rgba(0, 0, 0, 0.09);
   /* Win11 Fluent 扩展变量 */
   --surface: oklch(0.99 0 0);
   --surface-hover: oklch(0.96 0 0);
@@ -108,9 +108,9 @@
   --border: oklch(0.26 0 0);
   --input: oklch(0.24 0 0);
   --ring: oklch(0.439 0 0);
-  /* 主题色 hover 背景（直接带透明度，避免 color-mix 兼容性问题） */
-  --primary-hover: oklch(0.985 0 0 / 0.1);
-  --primary-hover-deep: oklch(0.985 0 0 / 0.14);
+  /* 主题色 hover 背景（使用 rgba 格式，确保 WebView 兼容性） */
+  --primary-hover: rgba(255, 255, 255, 0.08);
+  --primary-hover-deep: rgba(255, 255, 255, 0.11);
   /* Win11 Fluent 扩展变量 */
   --surface: oklch(0.2 0 0);
   --surface-hover: oklch(0.25 0 0);

@@ -122,11 +122,14 @@ function generateAccentVariables(
   const c = chroma;
 
   if (isDark) {
+    // 暗色模式：hover 使用主题色的深暗不透明色
+    const hoverColor = oklchToRgba(0.25, c * 0.5, h, 1);
+    const hoverDeepColor = oklchToRgba(0.28, c * 0.6, h, 1);
     return {
       "--primary": `oklch(0.82 ${c} ${h})`,
       "--primary-foreground": `oklch(0.18 ${c * 0.3} ${h})`,
-      "--primary-hover": oklchToRgba(0.82, c, h, 0.1),
-      "--primary-hover-deep": oklchToRgba(0.82, c, h, 0.14),
+      "--primary-hover": hoverColor,
+      "--primary-hover-deep": hoverDeepColor,
       "--accent": `oklch(0.28 ${c * 0.5} ${h})`,
       "--accent-foreground": `oklch(0.9 ${c * 0.4} ${h})`,
       "--ring": `oklch(0.6 ${c * 0.8} ${h})`,
@@ -137,11 +140,14 @@ function generateAccentVariables(
       "--sidebar-ring": `oklch(0.6 ${c * 0.8} ${h})`,
     };
   } else {
+    // 亮色模式：hover 使用主题色的浅亮不透明色
+    const hoverColor = oklchToRgba(0.95, c * 0.4, h, 1);
+    const hoverDeepColor = oklchToRgba(0.92, c * 0.5, h, 1);
     return {
       "--primary": `oklch(0.45 ${c} ${h})`,
       "--primary-foreground": `oklch(0.98 ${c * 0.1} ${h})`,
-      "--primary-hover": oklchToRgba(0.45, c, h, 0.1),
-      "--primary-hover-deep": oklchToRgba(0.45, c, h, 0.14),
+      "--primary-hover": hoverColor,
+      "--primary-hover-deep": hoverDeepColor,
       "--accent": `oklch(0.94 ${c * 0.4} ${h})`,
       "--accent-foreground": `oklch(0.3 ${c * 0.8} ${h})`,
       "--ring": `oklch(0.55 ${c * 0.8} ${h})`,

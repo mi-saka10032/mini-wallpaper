@@ -14,7 +14,7 @@ export async function getAll(): Promise<Wallpaper[]> {
 
 /** 根据 ID 获取单个壁纸详情 */
 export async function getById(id: number): Promise<Wallpaper | null> {
-  return invoke(COMMANDS.GET_WALLPAPER, { id });
+  return tauriInvoke(COMMANDS.GET_WALLPAPER, { id });
 }
 
 /** 导入壁纸文件 */

@@ -71,6 +71,7 @@ export default {
     dropToImport: "拖拽文件到此处导入",
     supportedFormats: "支持图片、视频、GIF 文件",
     wallpaperFiles: "壁纸文件",
+    refresh: "刷新壁纸列表",
   },
 
   // MonitorSettingsPanel

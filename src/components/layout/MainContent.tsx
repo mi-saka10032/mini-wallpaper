@@ -18,6 +18,7 @@ import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
 import { cn } from "@/lib/utils";
+import { useWallpaperStore } from "@/stores/wallpaperStore";
 import {
   DndContext,
   PointerSensor,
@@ -260,6 +261,7 @@ const MainContent: React.FC<MainContentProps> = ({
               searchExpanded={search.searchExpanded}
               normalKeyword={search.normalKeyword}
               onOpenPicker={() => setPickerOpen(true)}
+              onRefresh={() => useWallpaperStore.getState().fetchWallpapers()}
               onSearchExpand={() => search.setSearchExpanded(true)}
               onSearchCollapse={() => search.setSearchExpanded(false)}
               onNormalKeywordChange={search.setNormalKeyword}

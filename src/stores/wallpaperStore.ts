@@ -7,6 +7,7 @@ import {
   importFiles as importWallpaperFiles,
   deleteBatch as deleteWallpaperBatch,
   getSupportedExtensions as fetchSupportedExtensions,
+  getById as fetchWallpaperById,
   saveVideoThumbnail,
 } from "@/api/wallpaper";
 import { batchExtractVideoThumbnails } from "@/lib/videoThumbnail";
@@ -22,6 +23,8 @@ interface WallpaperState {
 
   fetchSupportedExtensions: () => Promise<string[]>;
   fetchWallpapers: () => Promise<void>;
+  /** 根据 ID 列表精确刷新 store 中对应壁纸（不全量拉取） */
+  refreshByIds: (ids: number[]) => Promise<void>;
   importWallpapers: () => Promise<void>;
   importByPaths: (paths: string[]) => Promise<void>;
   deleteWallpapers: (ids: number[]) => Promise<void>;
@@ -29,11 +32,11 @@ interface WallpaperState {
 
 /**
  * 对导入结果中的视频壁纸，分批（10 个一批）通过 canvas 抽取首帧缩略图，
- * 生成后调用后端持久化并刷新 store。
+ * 生成后调用后端持久化并精确刷新 store 中对应壁纸。
  */
 async function generateVideoThumbnails(
   imported: Wallpaper[],
-  refreshWallpapers: () => Promise<void>,
+  refreshByIds: (ids: number[]) => Promise<void>,
 ) {
   const videoItems = imported
     .filter((w) => w.type === "video")
@@ -43,16 +46,20 @@ async function generateVideoThumbnails(
 
   await batchExtractVideoThumbnails(videoItems, async (batchResults) => {
     // 逐个保存成功的缩略图
+    const updatedIds: number[] = [];
     for (const { wallpaperId, data } of batchResults) {
       if (!data) continue;
       try {
         await saveVideoThumbnail(wallpaperId, Array.from(data));
+        updatedIds.push(wallpaperId);
       } catch (e) {
         console.error(`[VideoThumbnail] save failed for #${wallpaperId}`, e);
       }
     }
-    // 每批完成后刷新列表，让 UI 逐步显示缩略图
-    await refreshWallpapers();
+    // 每批完成后精确刷新已更新的壁纸，避免全量拉取
+    if (updatedIds.length > 0) {
+      await refreshByIds(updatedIds);
+    }
   });
 }
 
@@ -85,6 +92,23 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     }
   },
 
+  refreshByIds: async (ids: number[]) => {
+    try {
+      const results = await Promise.all(ids.map((id) => fetchWallpaperById(id)));
+      set((state) => {
+        const updated = [...state.wallpapers];
+        for (const wp of results) {
+          if (!wp) continue;
+          const idx = updated.findIndex((w) => w.id === wp.id);
+          if (idx >= 0) updated[idx] = wp;
+        }
+        return { wallpapers: updated };
+      });
+    } catch (e) {
+      console.error("[refreshByIds]", e);
+    }
+  },
+
   importWallpapers: async () => {
     try {
       const extensions = await get().fetchSupportedExtensions();
@@ -112,7 +136,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       await get().fetchWallpapers();
 
       // 异步分批生成视频缩略图（不阻塞 loading 状态）
-      generateVideoThumbnails(imported, get().fetchWallpapers).catch((e) =>
+      generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
         console.error("[VideoThumbnail] batch failed", e),
       );
     } catch (e) {
@@ -142,7 +166,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       await get().fetchWallpapers();
 
       // 异步分批生成视频缩略图
-      generateVideoThumbnails(imported, get().fetchWallpapers).catch((e) =>
+      generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
         console.error("[VideoThumbnail] batch failed", e),
       );
     } catch (e) {

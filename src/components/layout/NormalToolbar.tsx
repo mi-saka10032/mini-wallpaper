@@ -1,5 +1,5 @@
 import React from "react";
-import { GripVertical, Plus, Search, Settings2, X } from "lucide-react";
+import { GripVertical, Plus, RefreshCw, Search, Settings2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ interface NormalToolbarProps {
   searchExpanded: boolean;
   normalKeyword: string;
   onOpenPicker: () => void;
+  onRefresh: () => void;
   onSearchExpand: () => void;
   onSearchCollapse: () => void;
   onNormalKeywordChange: (value: string) => void;
@@ -24,6 +25,7 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
   searchExpanded,
   normalKeyword,
   onOpenPicker,
+  onRefresh,
   onSearchExpand,
   onSearchCollapse,
   onNormalKeywordChange,
@@ -44,6 +46,19 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
         >
           <Plus className="size-3.5" />
           {t("main.addWallpaper")}
+        </Button>
+      )}
+
+      {/* 本地壁纸视图：刷新按钮 */}
+      {!isCollectionView && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onRefresh}
+          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-foreground/5"
+          title={t("main.refresh")}
+        >
+          <RefreshCw className="size-3.5" />
         </Button>
       )}
 

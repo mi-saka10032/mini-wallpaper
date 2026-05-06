@@ -71,6 +71,7 @@ export default {
     dropToImport: "Drag files here to import",
     supportedFormats: "Supports images, videos, and GIF files",
     wallpaperFiles: "Wallpaper Files",
+    refresh: "Refresh wallpaper list",
   },
 
   // MonitorSettingsPanel

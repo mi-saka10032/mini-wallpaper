@@ -5,6 +5,7 @@ import { useWallpaperLoader } from "@/hooks/useWallpaperLoader";
 import { useExtendViewport } from "@/hooks/useExtendViewport";
 import { useVideoSync } from "@/hooks/useVideoSync";
 import { useInputBlock } from "@/hooks/useInputBlock";
+import { useFullscreenPause } from "@/hooks/useFullscreenPause";
 
 /**
  * 壁纸渲染组件 — 壁纸窗口的唯一页面
@@ -28,6 +29,9 @@ const WallpaperRenderer: React.FC = () => {
 
   // 视频同步（extend + video）
   useVideoSync(videoRef, displayMode, extendViewport, wallpaper?.type);
+
+  // 全屏检测：全屏时暂停 video，退出全屏恢复播放
+  useFullscreenPause(videoRef, wallpaper?.type);
 
   // 禁用所有用户输入事件
   useInputBlock();

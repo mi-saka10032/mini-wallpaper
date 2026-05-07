@@ -45,22 +45,36 @@ export function useWallpaperLoader(monitorId: string | null) {
     }
   }, []);
 
+  const loadConfig = useCallback(
+    async (monitorId: string) => {
+      try {
+        const config = await invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true });
+        if (config) loadFromConfig(config);
+      } catch (e) {
+        console.error("[useWallpaperLoader] loadConfig failed:", e);
+      }
+    },
+    [loadFromConfig],
+  );
+
   // 初始化：加载 config + 音量 + displayMode
   useEffect(() => {
     if (!monitorId) return;
 
-    invoke(COMMANDS.GET_SETTING, { key: "display_mode" }, { silent: true }).then((val) => {
-      if (val) setDisplayMode(val);
-    }).catch(() => {});
+    loadConfig(monitorId);
 
-    invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
-      if (config) loadFromConfig(config);
-    });
+    invoke(COMMANDS.GET_SETTING, { key: "display_mode" }, { silent: true })
+      .then((val) => {
+        if (val) setDisplayMode(val);
+      })
+      .catch(() => {});
 
-    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }, { silent: true }).then((val) => {
-      const v = Number(val ?? "0");
-      setVolume(Math.min(Math.max(v, 0), 100));
-    }).catch(() => {});
+    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }, { silent: true })
+      .then((val) => {
+        const v = Number(val ?? "0");
+        setVolume(Math.min(Math.max(v, 0), 100));
+      })
+      .catch(() => {});
   }, [monitorId, loadFromConfig]);
 
   // 统一事件监听
@@ -72,11 +86,9 @@ export function useWallpaperLoader(monitorId: string | null) {
     unlisteners.push(
       listen(EVENTS.WALLPAPER_CHANGED, (payload) => {
         if (payload.monitor_id === monitorId) {
-          invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true }).then((config) => {
-            if (config) loadFromConfig(config);
-          });
+          loadConfig(monitorId);
         }
-      })
+      }),
     );
 
     unlisteners.push(
@@ -84,7 +96,7 @@ export function useWallpaperLoader(monitorId: string | null) {
         if (payload.monitor_id === monitorId) {
           setWallpaper(null);
         }
-      })
+      }),
     );
 
     unlisteners.push(
@@ -92,21 +104,22 @@ export function useWallpaperLoader(monitorId: string | null) {
         if (payload.monitor_id === monitorId) {
           setFitMode(payload.fit_mode);
         }
-      })
+      }),
     );
 
     unlisteners.push(
       listen(EVENTS.DISPLAY_MODE_CHANGED, (payload) => {
         if (payload.monitor_id === monitorId) {
           setDisplayMode(payload.display_mode);
+          loadConfig(monitorId);
         }
-      })
+      }),
     );
 
     unlisteners.push(
       listen(EVENTS.VOLUME_CHANGED, (payload) => {
         setVolume(Math.min(Math.max(payload.volume, 0), 100));
-      })
+      }),
     );
 
     return () => {

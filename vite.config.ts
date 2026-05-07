@@ -37,4 +37,17 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  // 构建优化：将 Radix UI 提取为独立 chunk
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes("@radix-ui")) {
+            return "vendor-radix";
+          }
+        },
+      },
+    },
+  },
 }));

@@ -13,7 +13,6 @@ import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { SortableWallpaperCard, WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
-import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
@@ -31,7 +30,7 @@ import {
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import { ImagePlus, Search } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import ManageToolbar from "./ManageToolbar";
 import NormalToolbar from "./NormalToolbar";
@@ -77,9 +76,6 @@ const MainContent: React.FC<MainContentProps> = ({
   });
 
   const search = useWallpaperSearch({ activeId });
-
-  // 添加壁纸到收藏夹的 picker
-  const [pickerOpen, setPickerOpen] = useState(false);
 
   // ===== 进入/退出模式时联动搜索重置 =====
   const enterManageMode = useCallback(() => {
@@ -159,13 +155,6 @@ const MainContent: React.FC<MainContentProps> = ({
     [sort.sortMode, manage.manageMode, manage.toggleSelect, onPreview],
   );
 
-  // ===== picker 确认 =====
-  const handlePickerConfirm = useCallback(() => {
-    setPickerOpen(false);
-    search.resetNormalSearch();
-    onCollectionChanged?.();
-  }, [search.resetNormalSearch, onCollectionChanged]);
-
   // dnd-kit sensor: 需要拖动 10px 才触发，避免和点击选择冲突
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -175,12 +164,6 @@ const MainContent: React.FC<MainContentProps> = ({
 
   // 导入拖拽卡片：暂时隐藏
   const showImportCard = false;
-
-  // 已存在于收藏夹中的壁纸 ID 集合（用于 picker 禁用已添加项）
-  const existingWallpaperIds = useMemo(
-    () => new Set(wallpapers.map((w) => w.id)),
-    [wallpapers],
-  );
 
   // 排序模式下的网格内容（dnd-kit 需要所有 DOM 在文档中，不能虚拟化）
   const sortableGridContent = (
@@ -260,13 +243,18 @@ const MainContent: React.FC<MainContentProps> = ({
               isEmpty={isEmpty}
               searchExpanded={search.searchExpanded}
               normalKeyword={search.normalKeyword}
-              onOpenPicker={() => setPickerOpen(true)}
+              collectionId={collectionId}
+              collectionWallpapers={wallpapers}
               onRefresh={() => useWallpaperStore.getState().fetchWallpapers()}
               onSearchExpand={() => search.setSearchExpanded(true)}
               onSearchCollapse={() => search.setSearchExpanded(false)}
               onNormalKeywordChange={search.setNormalKeyword}
               onEnterSortMode={enterSortMode}
               onEnterManageMode={enterManageMode}
+              onPickerConfirm={() => {
+                search.resetNormalSearch();
+                onCollectionChanged?.();
+              }}
             />
           )}
         </div>
@@ -352,17 +340,6 @@ const MainContent: React.FC<MainContentProps> = ({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-
-        {/* 壁纸选择器 Dialog */}
-        {isCollectionView && collectionId !== null && (
-          <WallpaperPickerDialog
-            open={pickerOpen}
-            collectionId={collectionId}
-            existingWallpaperIds={existingWallpaperIds}
-            onClose={() => setPickerOpen(false)}
-            onConfirm={handlePickerConfirm}
-          />
-        )}
       </div>
     </WallpaperCardContextMenuProvider>
   );

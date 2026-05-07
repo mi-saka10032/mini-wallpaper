@@ -5,7 +5,6 @@ import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { addWallpapers } from "@/api/collectionWallpaper";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -14,7 +13,6 @@ import {
 import WallpaperGrid from "./WallpaperGrid";
 
 interface WallpaperPickerDialogProps {
-  open: boolean;
   collectionId: number;
   /** 收藏夹中已有的壁纸 ID，显示但禁用 */
   existingWallpaperIds: Set<number>;
@@ -23,7 +21,6 @@ interface WallpaperPickerDialogProps {
 }
 
 const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
-  open,
   collectionId,
   existingWallpaperIds,
   onClose,
@@ -62,11 +59,10 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
   const availableCount = allWallpapers.filter((w) => !existingWallpaperIds.has(w.id)).length;
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        showCloseButton={false}
-        className="flex h-[80vh] max-h-[800px] w-[80vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0"
-      >
+    <DialogContent
+      showCloseButton={false}
+      className="flex h-[80vh] max-h-[800px] w-[80vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0"
+    >
         {/* Header */}
         <DialogHeader className="shrink-0 border-b border-border/40 px-6 py-4">
           <div className="flex items-center justify-between">
@@ -136,7 +132,6 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
           </div>
         </div>
       </DialogContent>
-    </Dialog>
   );
 };
 

@@ -22,7 +22,6 @@ import AppLoading from "@/components/ui/AppLoading";
 import { cn } from "./lib/utils";
 
 // 非首屏组件懒加载
-const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
 const PreviewDialog = lazy(() => import("@/components/wallpaper/PreviewDialog"));
 const MonitorSettingsPanel = lazy(() => import("@/components/settings/MonitorSettingsPanel"));
 
@@ -85,9 +84,6 @@ const App: React.FC = () => {
   const [viewWallpapers, setViewWallpapers] = useState<Wallpaper[]>(wallpapers);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
-  // 全局设置 Dialog
-  const [settingsOpen, setSettingsOpen] = useState(false);
-
   // 管理模式状态（用于蒙层遮挡）
   const [manageMode, setManageMode] = useState(false);
 
@@ -148,7 +144,7 @@ const App: React.FC = () => {
       <div className="relative h-screen w-screen overflow-hidden rounded-xl bg-background text-foreground fluent-shadow-lg">
         {/* 顶部工具栏 */}
         <div className="relative">
-          <Toolbar onActiveIdChange={setActiveId} onOpenSettings={() => setSettingsOpen(true)} />
+          <Toolbar onActiveIdChange={setActiveId} />
           {/* 管理模式蒙层 - 覆盖 Toolbar */}
           {manageMode && <div className="absolute inset-0 z-40 bg-black/20 backdrop-blur-[1px]" />}
         </div>
@@ -199,13 +195,6 @@ const App: React.FC = () => {
             </Suspense>
           </ErrorBoundary>
         )}
-
-        {/* 全局设置 Dialog */}
-        <ErrorBoundary>
-          <Suspense fallback={null}>
-            <GlobalSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-          </Suspense>
-        </ErrorBoundary>
 
         {/* 导入中全局蒙层 */}
         <div

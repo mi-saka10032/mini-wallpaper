@@ -1,6 +1,8 @@
+import { lazy, Suspense } from "react";
 import { Monitor, Plus, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import WindowControls from "./WindowControls";
@@ -8,12 +10,13 @@ import ThemeToggle from "./ThemeToggle";
 import LanguageToggle from "./LanguageToggle";
 import AccentColorToggle from "./AccentColorToggle";
 
+const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
+
 interface ToolbarProps {
   onActiveIdChange: (id: number) => void;
-  onOpenSettings: () => void;
 }
 
-const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange, onOpenSettings }) => {
+const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
   const { t } = useTranslation();
   const importWallpapers = useWallpaperStore((s) => s.importWallpapers);
 
@@ -42,14 +45,21 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange, onOpenSettings }) =
         <LanguageToggle />
         <ThemeToggle />
         <AccentColorToggle />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-8 text-foreground/70 hover:text-foreground hover:bg-primary-hover" onClick={onOpenSettings}>
-              <Settings className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{t("sidebar.globalSettings")}</TooltipContent>
-        </Tooltip>
+        <Dialog>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DialogTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-8 text-foreground/70 hover:text-foreground hover:bg-primary-hover">
+                  <Settings className="size-4" />
+                </Button>
+              </DialogTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{t("sidebar.globalSettings")}</TooltipContent>
+          </Tooltip>
+          <Suspense fallback={null}>
+            <GlobalSettingsDialog />
+          </Suspense>
+        </Dialog>
         <WindowControls />
       </div>
     </div>

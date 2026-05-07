@@ -1,21 +1,29 @@
-import React from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { GripVertical, Plus, RefreshCw, Search, Settings2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import WallpaperPickerDialog from "@/components/wallpaper/WallpaperPickerDialog";
+import type { Wallpaper } from "@/api/config";
 
 interface NormalToolbarProps {
   isCollectionView: boolean;
   isEmpty: boolean;
   searchExpanded: boolean;
   normalKeyword: string;
-  onOpenPicker: () => void;
+  /** 收藏夹 ID（仅收藏夹视图有效） */
+  collectionId: number | null;
+  /** 收藏夹中已有的壁纸列表（用于 picker 禁用已添加项） */
+  collectionWallpapers: Wallpaper[];
   onRefresh: () => void;
   onSearchExpand: () => void;
   onSearchCollapse: () => void;
   onNormalKeywordChange: (value: string) => void;
   onEnterSortMode: () => void;
   onEnterManageMode: () => void;
+  /** picker 确认后的回调 */
+  onPickerConfirm: () => void;
 }
 
 /** 常态模式下的操作栏 */
@@ -24,29 +32,56 @@ const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
   isEmpty,
   searchExpanded,
   normalKeyword,
-  onOpenPicker,
+  collectionId,
+  collectionWallpapers,
   onRefresh,
   onSearchExpand,
   onSearchCollapse,
   onNormalKeywordChange,
   onEnterSortMode,
   onEnterManageMode,
+  onPickerConfirm,
 }) => {
   const { t } = useTranslation();
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const handlePickerConfirm = useCallback(() => {
+    setPickerOpen(false);
+    onPickerConfirm();
+  }, [onPickerConfirm]);
+
+  const handlePickerOpenChange = useCallback((open: boolean) => {
+    setPickerOpen(open);
+  }, []);
+
+  // 已存在于收藏夹中的壁纸 ID 集合
+  const existingWallpaperIds = useMemo(
+    () => new Set(collectionWallpapers.map((w) => w.id)),
+    [collectionWallpapers],
+  );
 
   return (
     <>
-      {/* 收藏夹视图：添加壁纸按钮 */}
-      {isCollectionView && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onOpenPicker}
-          className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
-        >
-          <Plus className="size-3.5" />
-          {t("main.addWallpaper")}
-        </Button>
+      {/* 收藏夹视图：添加壁纸按钮 + Dialog */}
+      {isCollectionView && collectionId !== null && (
+        <Dialog open={pickerOpen} onOpenChange={handlePickerOpenChange}>
+          <DialogTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
+            >
+              <Plus className="size-3.5" />
+              {t("main.addWallpaper")}
+            </Button>
+          </DialogTrigger>
+          <WallpaperPickerDialog
+            collectionId={collectionId}
+            existingWallpaperIds={existingWallpaperIds}
+            onClose={() => setPickerOpen(false)}
+            onConfirm={handlePickerConfirm}
+          />
+        </Dialog>
       )}
 
       {/* 本地壁纸视图：刷新按钮 */}

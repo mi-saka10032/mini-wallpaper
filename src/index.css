@@ -309,3 +309,40 @@
   border: 2px solid white;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
+
+/* ===== Dialog 过渡动画：从触发元素位置展开/收起 ===== */
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translate(
+      calc(-50% + var(--dialog-offset-x, 0px)),
+      calc(-50% + var(--dialog-offset-y, 0px))
+    ) scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes dialog-exit {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(
+      calc(-50% + var(--dialog-offset-x, 0px)),
+      calc(-50% + var(--dialog-offset-y, 0px))
+    ) scale(0.85);
+  }
+}
+
+.dialog-animate[data-state="open"] {
+  animation: dialog-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.dialog-animate[data-state="closed"] {
+  animation: dialog-exit 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

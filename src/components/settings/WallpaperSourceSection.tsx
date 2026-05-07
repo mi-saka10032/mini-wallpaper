@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { memo, useMemo, type FC } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, FolderOpen, Image } from "lucide-react";
@@ -25,7 +25,7 @@ interface WallpaperSourceSectionProps {
 }
 
 /** 壁纸来源选择区块 */
-const WallpaperSourceSection: React.FC<WallpaperSourceSectionProps> = React.memo(({
+const WallpaperSourceSection: FC<WallpaperSourceSectionProps> = memo(({
   sourceType,
   wallpapers,
   collections,

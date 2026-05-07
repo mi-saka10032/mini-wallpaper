@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, type FC } from "react";
 import { Search, SortAsc, Trash2, Unlink, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ interface ManageToolbarProps {
 }
 
 /** 管理模式下的操作栏 */
-const ManageToolbar: React.FC<ManageToolbarProps> = React.memo(({
+const ManageToolbar: FC<ManageToolbarProps> = memo(({
   selectedCount,
   keyword,
   sortField,

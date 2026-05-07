@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, type FC } from "react";
 import { useTranslation } from "react-i18next";
 import { Layers, Link } from "lucide-react";
 import { Label } from "@/components/ui/label";
@@ -17,7 +17,7 @@ interface DisplayModeSectionProps {
 }
 
 /** 显示模式选择区块 */
-const DisplayModeSection: React.FC<DisplayModeSectionProps> = React.memo(({
+const DisplayModeSection: FC<DisplayModeSectionProps> = memo(({
   displayMode,
   isSyncMode,
   onDisplayModeChange,

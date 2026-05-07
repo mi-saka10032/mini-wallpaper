@@ -1,4 +1,16 @@
-import * as React from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type CSSProperties,
+  type MutableRefObject,
+  type RefObject,
+} from "react";
 import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
@@ -9,16 +21,16 @@ import { Button } from "@/components/ui/button";
  * Dialog 上下文：用于在 Trigger 和 Content 之间共享触发元素引用
  */
 interface DialogContextValue {
-  triggerRef: React.RefObject<HTMLElement | null>;
+  triggerRef: RefObject<HTMLElement | null>;
 }
 
-const DialogContext = React.createContext<DialogContextValue>({
+const DialogContext = createContext<DialogContextValue>({
   triggerRef: { current: null },
 });
 
-function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  const triggerRef = React.useRef<HTMLElement | null>(null);
-  const contextValue = React.useMemo(() => ({ triggerRef }), []);
+function Dialog({ ...props }: ComponentProps<typeof DialogPrimitive.Root>) {
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const contextValue = useMemo(() => ({ triggerRef }), []);
 
   return (
     <DialogContext.Provider value={contextValue}>
@@ -30,16 +42,16 @@ function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>)
 function DialogTrigger({
   ref,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
-  const { triggerRef } = React.useContext(DialogContext);
+}: ComponentProps<typeof DialogPrimitive.Trigger>) {
+  const { triggerRef } = useContext(DialogContext);
 
-  const composedRef = React.useCallback(
+  const composedRef = useCallback(
     (node: HTMLButtonElement | null) => {
       triggerRef.current = node;
       if (typeof ref === "function") {
         ref(node);
       } else if (ref) {
-        (ref as React.MutableRefObject<HTMLButtonElement | null>).current = node;
+        (ref as MutableRefObject<HTMLButtonElement | null>).current = node;
       }
     },
     [ref, triggerRef],
@@ -48,18 +60,18 @@ function DialogTrigger({
   return <DialogPrimitive.Trigger data-slot="dialog-trigger" ref={composedRef} {...props} />;
 }
 
-function DialogPortal({ ...props }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
+function DialogPortal({ ...props }: ComponentProps<typeof DialogPrimitive.Portal>) {
   return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />;
 }
 
-function DialogClose({ ...props }: React.ComponentProps<typeof DialogPrimitive.Close>) {
+function DialogClose({ ...props }: ComponentProps<typeof DialogPrimitive.Close>) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
 }
 
 function DialogOverlay({
   className,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+}: ComponentProps<typeof DialogPrimitive.Overlay>) {
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
@@ -73,19 +85,19 @@ function DialogOverlay({
 }
 
 /**
- * 计算 trigger 元素相对于视口中心的 transform-origin
- * 返回格式如 "calc(50% + Xpx) calc(50% + Ypx)"
+ * 计算 trigger 元素中心相对于视口中心的偏移量
  */
-function computeTransformOrigin(triggerEl: HTMLElement | null): string | undefined {
-  if (!triggerEl) return undefined;
+function computeTriggerOffset(triggerEl: HTMLElement | null): { x: number; y: number } | null {
+  if (!triggerEl) return null;
   const rect = triggerEl.getBoundingClientRect();
   const viewportCenterX = window.innerWidth / 2;
   const viewportCenterY = window.innerHeight / 2;
   const triggerCenterX = rect.left + rect.width / 2;
   const triggerCenterY = rect.top + rect.height / 2;
-  const offsetX = triggerCenterX - viewportCenterX;
-  const offsetY = triggerCenterY - viewportCenterY;
-  return `calc(50% + ${Math.round(offsetX)}px) calc(50% + ${Math.round(offsetY)}px)`;
+  return {
+    x: Math.round(triggerCenterX - viewportCenterX),
+    y: Math.round(triggerCenterY - viewportCenterY),
+  };
 }
 
 function DialogContent({
@@ -94,16 +106,15 @@ function DialogContent({
   showCloseButton = true,
   style,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+}: ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
 }) {
-  const { triggerRef } = React.useContext(DialogContext);
-  const [transformOrigin, setTransformOrigin] = React.useState<string | undefined>(undefined);
+  const { triggerRef } = useContext(DialogContext);
+  const [offset, setOffset] = useState<{ x: number; y: number } | null>(null);
 
-  // 在 Dialog 打开时（Content 挂载时）计算 transform-origin
-  React.useLayoutEffect(() => {
-    const origin = computeTransformOrigin(triggerRef.current);
-    setTransformOrigin(origin);
+  // 在 Dialog 打开时（Content 挂载时）计算 trigger 偏移
+  useLayoutEffect(() => {
+    setOffset(computeTriggerOffset(triggerRef.current));
   }, [triggerRef]);
 
   return (
@@ -112,13 +123,15 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg outline-none duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-lg",
+          "dialog-animate",
           className,
         )}
         style={{
-          transformOrigin: transformOrigin || "center center",
+          "--dialog-offset-x": `${offset?.x ?? 0}px`,
+          "--dialog-offset-y": `${offset?.y ?? 0}px`,
           ...style,
-        }}
+        } as CSSProperties}
         {...props}
       >
         {children}
@@ -136,7 +149,7 @@ function DialogContent({
   );
 }
 
-function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
+function DialogHeader({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
@@ -151,7 +164,7 @@ function DialogFooter({
   showCloseButton = false,
   children,
   ...props
-}: React.ComponentProps<"div"> & {
+}: ComponentProps<"div"> & {
   showCloseButton?: boolean;
 }) {
   return (
@@ -170,7 +183,7 @@ function DialogFooter({
   );
 }
 
-function DialogTitle({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Title>) {
+function DialogTitle({ className, ...props }: ComponentProps<typeof DialogPrimitive.Title>) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
@@ -183,7 +196,7 @@ function DialogTitle({ className, ...props }: React.ComponentProps<typeof Dialog
 function DialogDescription({
   className,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Description>) {
+}: ComponentProps<typeof DialogPrimitive.Description>) {
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"

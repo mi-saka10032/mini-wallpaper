@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type FC, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -7,7 +7,7 @@ interface LazyImageProps {
   alt: string;
   className?: string;
   /** 加载失败时的自定义 fallback 内容 */
-  fallback?: React.ReactNode;
+  fallback?: ReactNode;
 }
 
 /**
@@ -19,7 +19,7 @@ interface LazyImageProps {
  * - 加载失败：友好的 fallback UI
  * - 修复：src 变化时正确处理缓存命中场景，避免 onLoad 与 useEffect 的竞态条件
  */
-const LazyImage: React.FC<LazyImageProps> = ({ src, alt, className, fallback }) => {
+const LazyImage: FC<LazyImageProps> = ({ src, alt, className, fallback }) => {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);

@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, type FC } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowRight, Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ interface RotationSectionProps {
 }
 
 /** 轮播设置区块 */
-const RotationSection: React.FC<RotationSectionProps> = React.memo(({
+const RotationSection: FC<RotationSectionProps> = memo(({
   isEnabled,
   playMode,
   intervalSliderValue,

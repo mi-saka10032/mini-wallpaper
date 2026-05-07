@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState, type FC } from "react";
 import { GripVertical, Plus, RefreshCw, Search, Settings2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ interface NormalToolbarProps {
 }
 
 /** 常态模式下的操作栏 */
-const NormalToolbar: React.FC<NormalToolbarProps> = React.memo(({
+const NormalToolbar: FC<NormalToolbarProps> = memo(({
   isCollectionView,
   isEmpty,
   searchExpanded,

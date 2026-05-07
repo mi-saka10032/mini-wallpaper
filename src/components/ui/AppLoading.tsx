@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FC } from "react";
 import style from "@/styles/AppLoading.module.css";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +24,7 @@ interface AppLoadingProps {
 
  */
 
-const AppLoading: React.FC<AppLoadingProps> = ({ finished, onExited }) => {
+const AppLoading: FC<AppLoadingProps> = ({ finished, onExited }) => {
   const [exiting, setExiting] = useState(false);
 
   const [removed, setRemoved] = useState(false);

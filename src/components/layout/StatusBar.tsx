@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, type FC } from "react";
 import { useTranslation } from "react-i18next";
 
 interface StatusBarProps {
@@ -14,7 +14,7 @@ interface StatusBarProps {
 }
 
 /** 底部状态栏 */
-const StatusBar: React.FC<StatusBarProps> = React.memo(({
+const StatusBar: FC<StatusBarProps> = memo(({
   manageMode,
   sortMode,
   selectedCount,

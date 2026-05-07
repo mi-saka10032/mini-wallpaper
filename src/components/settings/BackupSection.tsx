@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, type FC } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ interface BackupSectionProps {
 }
 
 /** 备份/导出设置区块 - Win11 Fluent 风格 */
-const BackupSection: React.FC<BackupSectionProps> = React.memo(({
+const BackupSection: FC<BackupSectionProps> = memo(({
   backupBusy,
   backupMsg,
   dataSize,

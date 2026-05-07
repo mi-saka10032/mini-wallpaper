@@ -1,5 +1,4 @@
-import * as React from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CheckIcon, ChevronDownIcon, Search } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -10,7 +9,7 @@ export interface ComboboxOption {
   value: string;
   label: string;
   /** 可选：自定义渲染内容 */
-  render?: React.ReactNode;
+  render?: ReactNode;
   /** 可选：用于搜索匹配的额外关键词 */
   searchKeywords?: string;
 }

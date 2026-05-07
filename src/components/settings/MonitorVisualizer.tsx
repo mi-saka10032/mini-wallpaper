@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { memo, useMemo, type FC } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { Monitor as MonitorIcon, MonitorSmartphone, Link } from "lucide-react";
@@ -15,7 +15,7 @@ interface MonitorVisualizerProps {
 }
 
 /** 显示器可视化布局组件 */
-const MonitorVisualizer: React.FC<MonitorVisualizerProps> = React.memo(({
+const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(({
   loading,
   activeConfigs,
   selectedIndex,

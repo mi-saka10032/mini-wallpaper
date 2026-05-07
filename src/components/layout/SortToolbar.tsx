@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, type FC } from "react";
 import { GripVertical } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ interface SortToolbarProps {
 }
 
 /** 排序模式下的操作栏 */
-const SortToolbar: React.FC<SortToolbarProps> = React.memo(({
+const SortToolbar: FC<SortToolbarProps> = memo(({
   orderDirty,
   onCancel,
   onSave,

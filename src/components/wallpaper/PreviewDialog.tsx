@@ -1,6 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import React, { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState, type FC } from "react";
 import type { Wallpaper } from "@/api/config";
 
 interface PreviewDialogProps {
@@ -23,7 +23,7 @@ function usePreloadAdjacent(wallpapers: Wallpaper[], currentIndex: number) {
   }, [wallpapers, currentIndex]);
 }
 
-const PreviewDialog: React.FC<PreviewDialogProps> = React.memo(({ wallpapers, initialIndex, onClose }) => {
+const PreviewDialog: FC<PreviewDialogProps> = memo(({ wallpapers, initialIndex, onClose }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
 
   const wallpaper = wallpapers[currentIndex];

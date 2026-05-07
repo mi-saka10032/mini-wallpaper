@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, type FC } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,7 @@ interface ShortcutsSectionProps {
 }
 
 /** 快捷键设置区块 - Win11 Fluent 风格 */
-const ShortcutsSection: React.FC<ShortcutsSectionProps> = React.memo(({
+const ShortcutsSection: FC<ShortcutsSectionProps> = memo(({
   shortcutNext,
   shortcutPrev,
   updateSetting,

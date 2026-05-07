@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 // ============ 断点配置 ============
 
@@ -43,11 +43,11 @@ export interface VirtualGridProps<T> {
   /** 获取唯一 key */
   getKey: (item: T) => string | number;
   /** 渲染单个卡片 */
-  renderItem: (item: T, index: number) => React.ReactNode;
+  renderItem: (item: T, index: number) => ReactNode;
   /** 是否强制禁用虚拟滚动（如排序模式） */
   forceDisable?: boolean;
   /** 额外的尾部元素（如导入卡片） */
-  trailingElement?: React.ReactNode;
+  trailingElement?: ReactNode;
   /** 容器 className */
   className?: string;
   /** 当外部状态（如选中态）变化时递增此值，强制虚拟行重渲染 */
@@ -61,8 +61,8 @@ interface VirtualRowProps<T> {
   cols: number;
   rowIndex: number;
   getKey: (item: T) => string | number;
-  renderItem: (item: T, index: number) => React.ReactNode;
-  style: React.CSSProperties;
+  renderItem: (item: T, index: number) => ReactNode;
+  style: CSSProperties;
   gap: number;
   /** 用于强制刷新的版本号 */
   renderVersion?: number;
@@ -125,7 +125,7 @@ function virtualRowAreEqual<T>(prev: VirtualRowProps<T>, next: VirtualRowProps<T
   return true;
 }
 
-const VirtualRow = React.memo(VirtualRowInner, virtualRowAreEqual) as typeof VirtualRowInner;
+const VirtualRow = memo(VirtualRowInner, virtualRowAreEqual) as typeof VirtualRowInner;
 
 // ============ VirtualGrid 组件 ============
 

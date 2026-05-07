@@ -31,14 +31,14 @@ import {
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCollectionStore, type Collection } from "@/stores/collectionStore";
-import React from "react";
+import { memo, type FC } from "react";
 
 interface SidebarProps {
   activeId: number;
   onActiveIdChange: (id: number) => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = React.memo(({ activeId, onActiveIdChange }) => {
+const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
   const { t } = useTranslation();
   const collections = useCollectionStore((s) => s.collections);
   const fetchCollections = useCollectionStore((s) => s.fetchCollections);

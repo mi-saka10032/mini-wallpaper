@@ -1,6 +1,8 @@
 import { createBrowserRouter } from "react-router-dom";
+import { lazy, Suspense } from "react";
 import { AppShell } from "@/App";
-import WallpaperRenderer from "@/WallpaperRenderer";
+
+const WallpaperRenderer = lazy(() => import("@/WallpaperRenderer"));
 
 /**
  * 路由表
@@ -14,7 +16,11 @@ const router = createBrowserRouter([
   },
   {
     path: "/wallpaper",
-    element: <WallpaperRenderer />,
+    element: (
+      <Suspense fallback={null}>
+        <WallpaperRenderer />
+      </Suspense>
+    ),
   },
 ]);
 

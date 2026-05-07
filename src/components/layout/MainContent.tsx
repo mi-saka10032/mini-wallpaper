@@ -11,31 +11,23 @@ import {
 } from "@/components/ui/alert-dialog";
 import ImportDropCard from "@/components/wallpaper/ImportDropCard";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
-import { SortableWallpaperCard, WallpaperCard } from "@/components/wallpaper/WallpaperCard";
+import { WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
 import { cn } from "@/lib/utils";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  rectSortingStrategy,
-} from "@dnd-kit/sortable";
 import { ImagePlus, Search } from "lucide-react";
-import { useCallback, useMemo, useRef } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import ManageToolbar from "./ManageToolbar";
 import NormalToolbar from "./NormalToolbar";
 import SortToolbar from "./SortToolbar";
 import StatusBar from "./StatusBar";
+
+// 排序网格组件懒加载（包含 @dnd-kit 依赖）
+const SortableGrid = lazy(() => import("@/components/wallpaper/SortableGrid"));
 
 interface MainContentProps {
   className?: string;
@@ -155,34 +147,25 @@ const MainContent: React.FC<MainContentProps> = ({
     [sort.sortMode, manage.manageMode, manage.toggleSelect, onPreview],
   );
 
-  // dnd-kit sensor: 需要拖动 10px 才触发，避免和点击选择冲突
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 10 },
-    }),
-  );
-
   // 导入拖拽卡片：暂时隐藏
   const showImportCard = false;
 
-  // 排序模式下的网格内容（dnd-kit 需要所有 DOM 在文档中，不能虚拟化）
+  // 排序模式下的网格内容（懒加载 SortableGrid，包含 @dnd-kit）
   const sortableGridContent = (
-    <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">
-      {displayWallpapers.map((wp, index) => (
-        <SortableWallpaperCard
-          key={wp.id}
-          wallpaper={wp}
-          index={index}
-          activeId={activeId}
-          manageMode={manage.manageMode}
-          selected={manage.selectedIds.has(wp.id)}
-          isCollectionView={isCollectionView}
-          onClick={handleCardClick}
-          onDelete={handleSingleDelete}
-          onAddToCollection={manage.handleAddToCollection}
-        />
-      ))}
-    </div>
+    <Suspense fallback={null}>
+      <SortableGrid
+        wallpapers={displayWallpapers}
+        wallpaperIds={wallpaperIds}
+        activeId={activeId}
+        manageMode={manage.manageMode}
+        selectedIds={manage.selectedIds}
+        isCollectionView={isCollectionView}
+        onDragEnd={sort.handleDragEnd}
+        onClick={handleCardClick}
+        onDelete={handleSingleDelete}
+        onAddToCollection={manage.handleAddToCollection}
+      />
+    </Suspense>
   );
 
   // 非排序模式下的网格内容（支持虚拟滚动）
@@ -287,15 +270,7 @@ const MainContent: React.FC<MainContentProps> = ({
               </div>
             </div>
           ) : sort.isDragEnabled ? (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={sort.handleDragEnd}
-            >
-              <SortableContext items={wallpaperIds} strategy={rectSortingStrategy}>
-                {sortableGridContent}
-              </SortableContext>
-            </DndContext>
+            sortableGridContent
           ) : (
             virtualGridContent
           )}

@@ -10,8 +10,10 @@ import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 
 /** 默认快捷键 */
 export const DEFAULT_SHORTCUTS = {
-  nextWallpaper: "CommandOrControl+Alt+N",
-  prevWallpaper: "CommandOrControl+Alt+P",
+  nextWallpaper: "CommandOrControl+Alt+Right",
+  prevWallpaper: "CommandOrControl+Alt+Left",
+  togglePause: "CommandOrControl+Alt+Space",
+  openMain: "CommandOrControl+Alt+W",
 } as const;
 
 /** action → setting key 映射 */

@@ -97,6 +97,14 @@ pub fn run() {
                         sched.stop_all();
                     });
                 }
+                // 销毁所有 Toast 通知窗口
+                if let Some(ctx) = app.try_state::<AppContext>() {
+                    let toast_mgr = ctx.toast_manager.clone();
+                    tauri::async_runtime::block_on(async {
+                        let mut mgr = toast_mgr.lock().await;
+                        mgr.destroy_all();
+                    });
+                }
             }
         });
 }

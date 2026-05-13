@@ -5,6 +5,7 @@ pub mod error;
 pub mod fullscreen;
 pub mod monitor_config;
 pub mod shortcut;
+pub mod toast;
 pub mod wallpaper;
 pub mod wallpaper_window;
 pub mod action;
@@ -41,6 +42,8 @@ pub use wallpaper_window::{
     create_wallpaper_window, destroy_all_wallpaper_windows, destroy_wallpaper_window,
     get_active_wallpaper_windows, hide_wallpaper_windows, show_wallpaper_windows,
 };
+#[allow(unused_imports)]
+pub use toast::close_toast_window;
 
 /// 聚合所有 command，供 lib.rs 一行调用
 macro_rules! all_handlers {
@@ -89,6 +92,8 @@ macro_rules! all_handlers {
             $crate::commands::wallpaper_window::hide_wallpaper_windows,
             $crate::commands::wallpaper_window::show_wallpaper_windows,
             $crate::commands::wallpaper_window::get_active_wallpaper_windows,
+            // toast
+            $crate::commands::toast::close_toast_window,
         ]
     };
 }

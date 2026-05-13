@@ -12,6 +12,8 @@ export const SETTING_KEYS = {
   DISPLAY_MODE: "display_mode",
   SHORTCUT_NEXT: "shortcut_next_wallpaper",
   SHORTCUT_PREV: "shortcut_prev_wallpaper",
+  SHORTCUT_TOGGLE_PAUSE: "shortcut_toggle_pause",
+  SHORTCUT_OPEN_MAIN: "shortcut_open_main",
 } as const;
 
 interface SettingState {

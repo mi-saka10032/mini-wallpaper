@@ -15,6 +15,7 @@
 //! - **职责分离**：`ctx` 管"是什么"（状态），`runtime` 管"做什么"（调度）
 
 mod db;
+pub mod toast_manager;
 pub mod window_manager;
 
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use anyhow::Result;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 
+use toast_manager::ToastManager;
 use window_manager::WallpaperWindowManager;
 
 /// 应用全局上下文
@@ -41,6 +43,9 @@ pub struct AppContext {
     /// 壁纸窗口管理器（物理显示器 ↔ 壁纸窗口的映射管理）
     pub window_manager: Arc<Mutex<WallpaperWindowManager>>,
 
+    /// Toast 通知窗口管理器（右下角独立通知窗口）
+    pub toast_manager: Arc<Mutex<ToastManager>>,
+
     /// 备份操作互斥锁（防止导入/导出并发执行导致数据损坏）
     pub backup_lock: Mutex<()>,
 }
@@ -54,9 +59,11 @@ impl AppContext {
     pub async fn new(app_handle: tauri::AppHandle) -> Result<Self> {
         let db = db::init_db(&app_handle).await?;
         let window_manager = Arc::new(Mutex::new(WallpaperWindowManager::new(app_handle.clone())));
+        let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
 
         Ok(Self {
             window_manager,
+            toast_manager,
             app_handle,
             db,
             backup_lock: Mutex::new(()),

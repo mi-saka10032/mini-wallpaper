@@ -12,7 +12,6 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
 import { useWebGuard } from "@/hooks/useWebGuard";
 import { useAccentColor } from "@/hooks/useAccentColor";
-import { useActionToast } from "@/hooks/useActionToast";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
@@ -75,7 +74,6 @@ const App: React.FC = () => {
   useMonitorHotPlug();
   useWebGuard();
   useAccentColor(); // 初始化主题色（启动时应用持久化的 accent color）
-  useActionToast(); // 监听后端动作反馈 toast 事件
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const importing = useWallpaperStore((s) => s.loading);
   const language = useSettingStore((s) => s.settings[SETTING_KEYS.LANGUAGE]);

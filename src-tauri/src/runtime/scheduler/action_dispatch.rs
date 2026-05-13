@@ -36,11 +36,12 @@
 use log::{info, warn};
 
 use super::Scheduler;
+use crate::ctx::AppContext;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
-use crate::events::{ActionToastPayload, TypedEmit};
 use crate::runtime::action::Action;
 use crate::services::monitor_config_service;
+use tauri::Manager;
 
 // `platform::windows` 仅在 windows target 编译，因此这里通过本地 cfg 包装
 // 把"探测 active 显示器 device_name"抽象为跨平台可调用的小函数。
@@ -84,7 +85,7 @@ impl Scheduler {
 
         // 发送 toast 反馈（仅对需要反馈的动作）
         if let Some(msg) = toast_message {
-            self.emit_action_toast(&action, msg);
+            self.show_action_toast(&action, msg).await;
         }
     }
 
@@ -158,7 +159,7 @@ impl Scheduler {
 
         // 根据最终状态发送 toast
         let msg = if paused { "已暂停轮播" } else { "已恢复轮播" };
-        self.emit_action_toast(&Action::TogglePause, msg);
+        self.show_action_toast(&Action::TogglePause, msg).await;
     }
 
     /// 显示并聚焦主窗口
@@ -181,8 +182,8 @@ impl Scheduler {
 
     // ==================== Toast 反馈 ====================
 
-    /// 向主窗口发送动作反馈 toast 事件
-    fn emit_action_toast(&self, action: &Action, message: &str) {
+    /// 通过 toast_manager 创建独立 Toast 通知窗口
+    async fn show_action_toast(&self, action: &Action, message: &str) {
         let action_name = match action {
             Action::Next => "next",
             Action::Prev => "prev",
@@ -190,13 +191,17 @@ impl Scheduler {
             Action::OpenMain => "openMain",
             Action::Quit => "quit",
         };
-        let payload = ActionToastPayload {
-            action: action_name.to_string(),
-            message: message.to_string(),
+
+        let ctx = match self.app.try_state::<AppContext>() {
+            Some(c) => c,
+            None => {
+                warn!("[ActionDispatch] AppContext 未就绪，跳过 toast");
+                return;
+            }
         };
-        if let Err(e) = self.app.typed_emit(&payload) {
-            warn!("[ActionDispatch] 发送 toast 事件失败: {}", e);
-        }
+
+        let mut toast_mgr = ctx.toast_manager.lock().await;
+        toast_mgr.show_toast(action_name, message);
     }
 
     // ==================== 目标显示器解析 ====================

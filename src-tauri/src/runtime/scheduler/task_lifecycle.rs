@@ -90,6 +90,12 @@ impl Scheduler {
         let key = carousel_key(&config.monitor_id);
         let db = self.db();
 
+        // 暂停集合内的显示器：强制停定时器，等待用户主动恢复
+        if self.paused_monitors.contains(&config.monitor_id) {
+            self.stop(&key);
+            return;
+        }
+
         if !monitor_config_service::should_start_timer(config) {
             self.stop(&key);
             return;
@@ -162,6 +168,15 @@ impl Scheduler {
         for config in &configs {
             if monitor_config_service::should_start_timer(config) {
                 if is_sync_mode && primary_started {
+                    continue;
+                }
+
+                // 跳过被用户显式暂停的显示器
+                if self.paused_monitors.contains(&config.monitor_id) {
+                    info!(
+                        "[Scheduler] 跳过已暂停的显示器: {}",
+                        config.monitor_id
+                    );
                     continue;
                 }
 

@@ -7,6 +7,7 @@ pub mod monitor_config;
 pub mod shortcut;
 pub mod wallpaper;
 pub mod wallpaper_window;
+pub mod action;
 
 // 重导出所有 command 函数，便于 rust-analyzer 提供跳转支持（IDE 导航用途）
 #[allow(unused_imports)]
@@ -29,6 +30,8 @@ pub use monitor_config::{
 pub use app_setting::{get_setting, get_settings, set_setting};
 #[allow(unused_imports)]
 pub use shortcut::switch_wallpaper;
+#[allow(unused_imports)]
+pub use action::trigger_action;
 #[allow(unused_imports)]
 pub use backup::{export_backup, get_data_size, import_backup};
 #[allow(unused_imports)]
@@ -71,6 +74,8 @@ macro_rules! all_handlers {
             $crate::commands::app_setting::set_setting,
             // shortcut
             $crate::commands::shortcut::switch_wallpaper,
+            // action
+            $crate::commands::action::trigger_action,
             // backup
             $crate::commands::backup::export_backup,
             $crate::commands::backup::import_backup,

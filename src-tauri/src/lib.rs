@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 use ctx::AppContext;
 use platform::tray;
+use platform::global_shortcut;
 use runtime::Scheduler;
 
 /// 检查当前是否为开机自启动（通过命令行参数 --autostart 判断）
@@ -33,7 +34,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--autostart"]),
         ))
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(global_shortcut::build_plugin())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 当第二个实例尝试启动时，聚焦已有窗口
             if let Some(window) = app.get_webview_window("main") {
@@ -64,6 +65,15 @@ pub fn run() {
 
             // ===== 系统托盘 =====
             tray::setup_tray(app)?;
+
+            // ===== 全局快捷键注册 =====
+            // 必须在 AppContext 与 Scheduler 都 manage 之后调用：
+            // - register_default_shortcuts 内部读 DB 决定键位（依赖 AppContext.db）
+            // - handler 触发后异步派发到 Scheduler（依赖 Scheduler 已 manage）
+            let app_handle_for_shortcut = app.handle().clone();
+            tauri::async_runtime::block_on(async move {
+                global_shortcut::register_default_shortcuts(&app_handle_for_shortcut).await;
+            });
 
             // ===== 开机自启时隐藏主窗口到托盘 =====
             if is_autostart_launch() {

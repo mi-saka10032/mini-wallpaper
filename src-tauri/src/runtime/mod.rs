@@ -12,7 +12,10 @@
 //!   - `mod.rs`：`TaskSpawner` trait 定义
 //!   - `carousel.rs`：轮播定时器
 //!   - `fullscreen_detector.rs`：全屏检测
+//! - **`action.rs`**：用户动作（Action）类型定义，
+//!   被前端 / 全局快捷键 / 托盘菜单共享，由 `Scheduler::dispatch_action` 解释执行
 
+pub mod action;
 pub mod scheduler;
 pub mod tasks;
 

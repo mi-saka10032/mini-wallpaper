@@ -13,13 +13,16 @@
 //! - **`task_lifecycle.rs`**：JoinHandle 生命周期管理 + 轮播/全屏检测编排
 //! - **`setting_effects.rs`**：设置变更副作用（音量、全屏检测开关、display_mode）
 //! - **`deletion_effects.rs`**：删除联动（壁纸删除、收藏夹删除、收藏夹移除壁纸）
+//! - **`action_dispatch.rs`**：用户动作派发（Next/Prev/... 快捷键 & 托盘菜单共用）
 
+mod action_dispatch;
 mod deletion_effects;
 mod setting_effects;
 mod task_lifecycle;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::collections::HashSet;
 
 use sea_orm::DatabaseConnection;
 use tauri::Manager;
@@ -44,6 +47,13 @@ pub struct Scheduler {
     pub(super) app: tauri::AppHandle,
     /// key -> JoinHandle 映射
     pub(super) tasks: HashMap<String, JoinHandle<()>>,
+    /// 已暂停轮播的显示器集合（monitor_id），仅运行时态，不持久化
+    ///
+    /// 当 `monitor_id` 在该集合内时：
+    /// - 轮播定时器被显式 stop
+    /// - `start_all_carousel_timers` / `manage_carousel_timer` 跳过该 monitor
+    /// - 用户再次触发 TogglePause 时移除 + 通过常规编排恢复
+    pub(super) paused_monitors: HashSet<String>,
 }
 
 impl Scheduler {
@@ -52,6 +62,7 @@ impl Scheduler {
         Self {
             app,
             tasks: HashMap::new(),
+            paused_monitors: HashSet::new(),
         }
     }
 

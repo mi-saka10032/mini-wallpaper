@@ -19,6 +19,8 @@ export const EVENTS = {
   WALLPAPER_CLEARED: "wallpaper-cleared",
   /** 显示器配置刷新事件（后端删除操作导致 config 变更，通知主窗口重新拉取） */
   MONITOR_CONFIG_REFRESHED: "monitor-config-refreshed",
+  /** 动作反馈 Toast 事件（后端 dispatch_action 完成后通知前端显示反馈） */
+  ACTION_TOAST: "action-toast",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -71,6 +73,14 @@ export interface VideoSyncPayload {
   current_time: number;
 }
 
+/** 动作反馈 Toast 事件 payload */
+export interface ActionToastPayload {
+  /** 动作标识（camelCase，如 "next"、"togglePause"） */
+  action: string;
+  /** 人类可读的反馈消息 */
+  message: string;
+}
+
 /** 事件 → payload 类型映射 */
 export interface EventMap {
   [EVENTS.WALLPAPER_CHANGED]: WallpaperChangedPayload;
@@ -83,6 +93,7 @@ export interface EventMap {
   [EVENTS.DISPLAY_MODE_CHANGED]: DisplayModeChangedPayload;
   [EVENTS.WALLPAPER_CLEARED]: WallpaperClearedPayload;
   [EVENTS.MONITOR_CONFIG_REFRESHED]: Record<string, never>;
+  [EVENTS.ACTION_TOAST]: ActionToastPayload;
 }
 
 /**

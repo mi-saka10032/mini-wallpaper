@@ -13,6 +13,8 @@ pub mod keys {
     pub const DISPLAY_MODE: &str = "display_mode";
     pub const SHORTCUT_NEXT_WALLPAPER: &str = "shortcut_next_wallpaper";
     pub const SHORTCUT_PREV_WALLPAPER: &str = "shortcut_prev_wallpaper";
+    pub const SHORTCUT_TOGGLE_PAUSE: &str = "shortcut_toggle_pause";
+    pub const SHORTCUT_OPEN_MAIN: &str = "shortcut_open_main";
     pub const ACCENT_COLOR: &str = "accent_color";
 }
 
@@ -26,6 +28,8 @@ const VALID_KEYS: &[&str] = &[
     keys::DISPLAY_MODE,
     keys::SHORTCUT_NEXT_WALLPAPER,
     keys::SHORTCUT_PREV_WALLPAPER,
+    keys::SHORTCUT_TOGGLE_PAUSE,
+    keys::SHORTCUT_OPEN_MAIN,
     keys::ACCENT_COLOR,
 ];
 

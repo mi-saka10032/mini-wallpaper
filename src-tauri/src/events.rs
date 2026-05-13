@@ -154,3 +154,19 @@ pub struct MonitorConfigRefreshedPayload;
 impl EventPayload for MonitorConfigRefreshedPayload {
     const EVENT_NAME: &'static str = "monitor-config-refreshed";
 }
+
+/// 动作反馈 Toast 事件（通知主窗口显示操作反馈）
+///
+/// 由 `Scheduler::dispatch_action` 在动作执行完成后发送，
+/// 前端监听后通过 sonner toast 显示短暂的操作反馈。
+#[derive(Clone, Serialize)]
+pub struct ActionToastPayload {
+    /// 动作标识（对应 Action 枚举的 camelCase 名称，如 "next"、"togglePause"）
+    pub action: String,
+    /// 人类可读的反馈消息
+    pub message: String,
+}
+
+impl EventPayload for ActionToastPayload {
+    const EVENT_NAME: &'static str = "action-toast";
+}

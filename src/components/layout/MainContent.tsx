@@ -9,10 +9,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import ImportDropCard from "@/components/wallpaper/ImportDropCard";
+import { toast } from "@/components/ui/toast";
+import DropOverlay from "@/components/wallpaper/DropOverlay";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
+import { useDropImport } from "@/hooks/useDropImport";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
@@ -147,8 +149,31 @@ const MainContent: React.FC<MainContentProps> = ({
     [sort.sortMode, manage.manageMode, manage.toggleSelect, onPreview],
   );
 
-  // 导入拖拽卡片：暂时隐藏
-  const showImportCard = false;
+  // ===== 拖拽导入（H5 drag）=====
+  // 仅本地壁纸普通模式生效：非收藏夹 + 非管理模式 + 非排序模式 + 非加载中
+  const dropEnabled =
+    !isCollectionView && !manage.manageMode && !sort.sortMode && !search.loading;
+
+  const handleDropImport = useCallback(
+    async (files: File[]) => {
+      const result = await useWallpaperStore.getState().importByFiles(files);
+      if (result.imported > 0) {
+        toast.success(t("main.importedCount", { count: result.imported }));
+      }
+      if (result.skipped > 0) {
+        toast.info(t("main.skippedUnsupported", { count: result.skipped }));
+      }
+      if (result.rejectedBySize > 0) {
+        toast.warning(t("main.skippedBySize", { count: result.rejectedBySize }));
+      }
+    },
+    [t],
+  );
+
+  const { isDragOver, dragHandlers } = useDropImport({
+    enabled: dropEnabled,
+    onImport: handleDropImport,
+  });
 
   // 排序模式下的网格内容（懒加载 SortableGrid，包含 @dnd-kit）
   const sortableGridContent = (
@@ -176,7 +201,6 @@ const MainContent: React.FC<MainContentProps> = ({
       className="h-full p-4"
       forceDisable={false}
       renderVersion={renderVersion}
-      trailingElement={showImportCard ? <ImportDropCard /> : undefined}
       renderItem={(wp, index) => (
         <WallpaperCard
           wallpaper={wp}
@@ -243,12 +267,15 @@ const MainContent: React.FC<MainContentProps> = ({
         </div>
 
         {/* 内容区 */}
-        <div className={cn(
-          "min-h-0 flex-1",
-          (search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled)
-            ? "overflow-y-auto p-4"
-            : "overflow-hidden",
-        )}>
+        <div
+          className={cn(
+            "relative min-h-0 flex-1",
+            (search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled)
+              ? "overflow-y-auto p-4"
+              : "overflow-hidden",
+          )}
+          {...dragHandlers}
+        >
           {search.loading ? (
             <div className="flex h-full items-center justify-center">
               <p className="text-sm text-foreground/50">{t("main.importing")}</p>
@@ -274,6 +301,9 @@ const MainContent: React.FC<MainContentProps> = ({
           ) : (
             virtualGridContent
           )}
+
+          {/* 拖拽导入蒙层（仅启用时根据 isDragOver 显示） */}
+          {dropEnabled && <DropOverlay visible={isDragOver} />}
         </div>
 
         {/* 底部状态栏 */}

@@ -22,6 +22,13 @@ export async function importFiles(paths: string[]): Promise<Wallpaper[]> {
   return invoke(COMMANDS.IMPORT_WALLPAPERS, { paths });
 }
 
+/** 通过字节方式导入壁纸文件（H5 拖拽场景） */
+export async function importFilesBytes(
+  items: Array<{ name: string; bytes: number[] }>,
+): Promise<Wallpaper[]> {
+  return invoke(COMMANDS.IMPORT_WALLPAPERS_BYTES, { items });
+}
+
 /** 保存视频缩略图（前端 canvas 抽帧后回传字节数据） */
 export async function saveVideoThumbnail(
   wallpaperId: number,

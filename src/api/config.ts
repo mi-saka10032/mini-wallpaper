@@ -5,6 +5,7 @@ export const COMMANDS = {
   GET_WALLPAPERS: "get_wallpapers",
   GET_WALLPAPER: "get_wallpaper",
   IMPORT_WALLPAPERS: "import_wallpapers",
+  IMPORT_WALLPAPERS_BYTES: "import_wallpapers_bytes",
   SAVE_VIDEO_THUMBNAIL: "save_video_thumbnail",
   DELETE_WALLPAPERS: "delete_wallpapers",
   // collection
@@ -133,6 +134,19 @@ export interface ImportWallpapersReq {
   paths: string[];
 }
 
+/** 字节方式导入单个文件项 */
+export interface ImportFileItemReq {
+  /** 原始文件名（含扩展名） */
+  name: string;
+  /** 文件字节内容（Tauri 端会被解析为 Vec<u8>） */
+  bytes: number[];
+}
+
+/** 字节方式导入壁纸请求（H5 拖拽场景） */
+export interface ImportWallpapersBytesReq {
+  items: ImportFileItemReq[];
+}
+
 /** 保存视频缩略图请求 */
 export interface SaveVideoThumbnailReq {
   wallpaperId: number;
@@ -233,6 +247,10 @@ export interface CommandMap {
   };
   [COMMANDS.IMPORT_WALLPAPERS]: {
     params: { req: ImportWallpapersReq };
+    result: Wallpaper[];
+  };
+  [COMMANDS.IMPORT_WALLPAPERS_BYTES]: {
+    params: { req: ImportWallpapersBytesReq };
     result: Wallpaper[];
   };
   [COMMANDS.SAVE_VIDEO_THUMBNAIL]: {

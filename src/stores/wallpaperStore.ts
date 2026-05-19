@@ -5,6 +5,7 @@ import i18n from "@/i18n";
 import {
   getAll as fetchAllWallpapers,
   importFiles as importWallpaperFiles,
+  importFilesBytes as importWallpaperFilesBytes,
   deleteBatch as deleteWallpaperBatch,
   getSupportedExtensions as fetchSupportedExtensions,
   getById as fetchWallpaperById,
@@ -26,7 +27,15 @@ interface WallpaperState {
   /** 根据 ID 列表精确刷新 store 中对应壁纸（不全量拉取） */
   refreshByIds: (ids: number[]) => Promise<void>;
   importWallpapers: () => Promise<void>;
-  importByPaths: (paths: string[]) => Promise<void>;
+  /**
+   * 通过 H5 拖拽传入的 File[] 导入壁纸（字节方式，不依赖文件路径）
+   * 返回 { imported, skipped, rejectedBySize }，便于上层提示
+   */
+  importByFiles: (files: File[]) => Promise<{
+    imported: number;
+    skipped: number;
+    rejectedBySize: number;
+  }>;
   deleteWallpapers: (ids: number[]) => Promise<void>;
 }
 
@@ -146,31 +155,85 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     }
   },
 
-  /** 通过路径数组直接导入（拖拽导入使用） */
-  importByPaths: async (paths: string[]) => {
+  /**
+   * 通过 H5 拖拽传入的 File[] 导入壁纸（字节方式，不依赖文件路径）
+   *
+   * 步骤：
+   * 1. 按支持的扩展名过滤
+   * 2. 体积守卫：单文件 > 200MB 或总量 > 500MB 直接拒绝（前端拒绝，不进 invoke）
+   * 3. 把 File 转 ArrayBuffer → number[]，调用后端 import_wallpapers_bytes
+   * 4. 复用现有 generateVideoThumbnails 异步分批生成视频缩略图
+   */
+  importByFiles: async (files: File[]) => {
     const extensions = await get().fetchSupportedExtensions();
     const extensionSet = new Set(extensions);
 
-    // 过滤出支持的文件格式
-    const validPaths = paths.filter((p) => {
-      const ext = p.split(".").pop()?.toLowerCase() ?? "";
-      return extensionSet.has(ext);
-    });
-    if (validPaths.length === 0) return;
+    // 体积上限（字节）
+    const SINGLE_LIMIT = 200 * 1024 * 1024; // 单文件 200MB
+    const TOTAL_LIMIT = 500 * 1024 * 1024; // 总量 500MB
+
+    // 1) 扩展名过滤
+    const matched: File[] = [];
+    let skipped = 0;
+    for (const f of files) {
+      const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+      if (extensionSet.has(ext)) {
+        matched.push(f);
+      } else {
+        skipped += 1;
+      }
+    }
+
+    if (matched.length === 0) {
+      return { imported: 0, skipped, rejectedBySize: 0 };
+    }
+
+    // 2) 体积守卫：单文件超限直接剔除；剩余总量再次校验
+    const sizeAccepted: File[] = [];
+    let rejectedBySize = 0;
+    let totalBytes = 0;
+    for (const f of matched) {
+      if (f.size > SINGLE_LIMIT) {
+        rejectedBySize += 1;
+        continue;
+      }
+      if (totalBytes + f.size > TOTAL_LIMIT) {
+        rejectedBySize += 1;
+        continue;
+      }
+      totalBytes += f.size;
+      sizeAccepted.push(f);
+    }
+
+    if (sizeAccepted.length === 0) {
+      return { imported: 0, skipped, rejectedBySize };
+    }
 
     try {
       set({ loading: true });
-      const imported = await importWallpaperFiles(validPaths);
-      console.log(`[DragImport] ${imported.length} wallpapers imported`);
+
+      // 3) File → ArrayBuffer → number[]（Tauri 默认 JSON 序列化）
+      const items = await Promise.all(
+        sizeAccepted.map(async (f) => {
+          const buf = await f.arrayBuffer();
+          return { name: f.name, bytes: Array.from(new Uint8Array(buf)) };
+        }),
+      );
+
+      const imported = await importWallpaperFilesBytes(items);
+      console.log(`[DragImport] ${imported.length} wallpapers imported (bytes)`);
 
       await get().fetchWallpapers();
 
-      // 异步分批生成视频缩略图
+      // 4) 异步分批生成视频缩略图
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
         console.error("[VideoThumbnail] batch failed", e),
       );
+
+      return { imported: imported.length, skipped, rejectedBySize };
     } catch (e) {
-      console.error("[importByPaths]", e);
+      console.error("[importByFiles]", e);
+      return { imported: 0, skipped, rejectedBySize };
     } finally {
       set({ loading: false });
     }

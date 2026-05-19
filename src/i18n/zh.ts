@@ -72,6 +72,9 @@ export default {
     supportedFormats: "支持图片、视频、GIF 文件",
     wallpaperFiles: "壁纸文件",
     refresh: "刷新壁纸列表",
+    importedCount: "已导入 {{count}} 个文件",
+    skippedUnsupported: "{{count}} 个文件因格式不支持被忽略",
+    skippedBySize: "{{count}} 个文件因体积过大被跳过（单文件上限 200MB，总量上限 500MB）",
   },
 
   // MonitorSettingsPanel

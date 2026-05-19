@@ -46,8 +46,6 @@ export interface VirtualGridProps<T> {
   renderItem: (item: T, index: number) => ReactNode;
   /** 是否强制禁用虚拟滚动（如排序模式） */
   forceDisable?: boolean;
-  /** 额外的尾部元素（如导入卡片） */
-  trailingElement?: ReactNode;
   /** 容器 className */
   className?: string;
   /** 当外部状态（如选中态）变化时递增此值，强制虚拟行重渲染 */
@@ -134,7 +132,6 @@ function VirtualGrid<T>({
   getKey,
   renderItem,
   forceDisable = false,
-  trailingElement,
   className,
   renderVersion,
 }: VirtualGridProps<T>) {
@@ -213,7 +210,6 @@ function VirtualGrid<T>({
           {items.map((item, index) => (
             <div key={getKey(item)}>{stableRenderItem(item, index)}</div>
           ))}
-          {trailingElement}
         </div>
       </div>
     );
@@ -260,9 +256,6 @@ function VirtualGrid<T>({
           );
         })}
       </div>
-      {trailingElement && (
-        <div className="mt-3">{trailingElement}</div>
-      )}
     </div>
   );
 }

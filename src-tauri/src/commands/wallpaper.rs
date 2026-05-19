@@ -5,7 +5,9 @@ use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::dto::wallpaper_dto::{DeleteWallpapersRequest, ImportWallpapersRequest};
+use crate::dto::wallpaper_dto::{
+    DeleteWallpapersRequest, ImportWallpapersBytesRequest, ImportWallpapersRequest,
+};
 use crate::dto::Validated;
 use crate::entities::wallpaper;
 use crate::runtime::Scheduler;
@@ -52,6 +54,33 @@ pub async fn import_wallpapers(
     let thumbnails_dir = app_data_dir.join("thumbnails");
 
     Ok(wallpaper_service::import_batch(&ctx.db, req.paths, &wallpapers_dir, &thumbnails_dir).await?)
+}
+
+/// 通过字节方式导入壁纸（H5 拖拽场景）
+///
+/// 与 `import_wallpapers` 区别：直接接收文件名 + 字节内容，
+/// 不依赖 Tauri 注入的 File.path 属性，适用于 dragDropEnabled = false 场景。
+#[tauri::command]
+pub async fn import_wallpapers_bytes(
+    ctx: State<'_, AppContext>,
+    req: Validated<ImportWallpapersBytesRequest>,
+) -> CommandResult<Vec<wallpaper::Model>> {
+    let req = req.into_inner();
+    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
+
+    let wallpapers_dir = app_data_dir.join("wallpapers");
+    let thumbnails_dir = app_data_dir.join("thumbnails");
+
+    let items: Vec<(String, Vec<u8>)> = req
+        .items
+        .into_iter()
+        .map(|it| (it.name, it.bytes))
+        .collect();
+
+    Ok(
+        wallpaper_service::import_batch_from_bytes(&ctx.db, items, &wallpapers_dir, &thumbnails_dir)
+            .await?,
+    )
 }
 
 /// 保存视频缩略图（前端 canvas 抽帧后回传字节数据）

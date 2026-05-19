@@ -293,6 +293,193 @@ pub async fn import_batch(
     Ok(models)
 }
 
+/// 字节预处理结果（spawn_blocking 阶段产出）
+struct PreparedBytesWallpaper {
+    original_name: String,
+    file_type: String,
+    dest_path: String,
+    thumb_path: Option<String>,
+    width: Option<i32>,
+    height: Option<i32>,
+    file_size: i64,
+}
+
+/// 同步字节预处理：校验、写盘、生成缩略图、获取尺寸
+///
+/// 与 `prepare_wallpaper_files` 不同：
+/// - 不依赖磁盘原文件路径，直接接收字节内容
+/// - 通过 `original_name` 解析扩展名与文件类型
+fn prepare_wallpaper_from_bytes(
+    original_name: &str,
+    bytes: &[u8],
+    wallpapers_dir: &Path,
+    thumbnails_dir: &Path,
+) -> Result<PreparedBytesWallpaper> {
+    // 1. 解析扩展名 + 校验文件类型
+    let ext = Path::new(original_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let file_type = detect_file_type(ext)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported file type: .{}", ext))?;
+
+    // 2. 文件大小（直接用字节长度）
+    let file_size = bytes.len() as i64;
+
+    // 3. 写入应用目录（uuid 命名，保留原扩展名）
+    ensure_dir(wallpapers_dir)?;
+    let new_name = format!("{}.{}", Uuid::new_v4(), ext);
+    let dest_path = wallpapers_dir.join(&new_name);
+    std::fs::write(&dest_path, bytes).context("Failed to write wallpaper bytes")?;
+
+    // 4. 缩略图：仅图片/GIF 在此生成，视频由前端 canvas 抽帧后单独写入
+    let thumb_path_str = if file_type == "image" || file_type == "gif" {
+        ensure_dir(thumbnails_dir)?;
+        let thumb_name = format!(
+            "{}.webp",
+            dest_path.file_stem().expect("dest_path must have a file stem").to_string_lossy(),
+        );
+        let thumb_path = thumbnails_dir.join(&thumb_name);
+        match generate_static_thumbnail(&dest_path, &thumb_path) {
+            Ok(()) => {
+                info!("[Thumbnail] Generated: {:?}", thumb_path);
+                Some(thumb_path.to_string_lossy().to_string())
+            }
+            Err(e) => {
+                warn!("[WARN] Thumbnail generation failed for {}: {}", original_name, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // 5. 尺寸（图片/GIF 才提取，视频由前端处理）
+    let (width, height) = if file_type == "image" || file_type == "gif" {
+        get_image_dimensions(&dest_path)
+            .map(|(w, h)| (Some(w as i32), Some(h as i32)))
+            .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+
+    Ok(PreparedBytesWallpaper {
+        original_name: original_name.to_string(),
+        file_type: file_type.to_string(),
+        dest_path: dest_path.to_string_lossy().to_string(),
+        thumb_path: thumb_path_str,
+        width,
+        height,
+        file_size,
+    })
+}
+
+/// 通过字节方式导入单个壁纸（H5 拖拽场景）
+///
+/// 与 `import_single` 区别：
+/// - 不读取磁盘源文件，避免依赖 Tauri 注入的 path 属性
+/// - 适用于浏览器 File 对象通过 ArrayBuffer 传输到后端的场景
+async fn import_single_from_bytes(
+    db: &DatabaseConnection,
+    original_name: String,
+    bytes: Vec<u8>,
+    wallpapers_dir: &Path,
+    thumbnails_dir: &Path,
+) -> Result<wallpaper::Model> {
+    // 阶段 1：spawn_blocking 处理同步 I/O
+    let wallpapers_dir_owned = wallpapers_dir.to_path_buf();
+    let thumbnails_dir_owned = thumbnails_dir.to_path_buf();
+    let name_for_blocking = original_name.clone();
+
+    let prepared = tokio::task::spawn_blocking(move || {
+        prepare_wallpaper_from_bytes(
+            &name_for_blocking,
+            &bytes,
+            &wallpapers_dir_owned,
+            &thumbnails_dir_owned,
+        )
+    })
+    .await
+    .context("File preparation task panicked")??;
+
+    // 阶段 2：异步写入数据库
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let active_model = wallpaper::ActiveModel {
+        name: Set(prepared.original_name),
+        r#type: Set(prepared.file_type),
+        file_path: Set(prepared.dest_path.clone()),
+        thumb_path: Set(prepared.thumb_path),
+        width: Set(prepared.width),
+        height: Set(prepared.height),
+        duration: Set(None),
+        file_size: Set(Some(prepared.file_size)),
+        tags: Set(None),
+        is_favorite: Set(0),
+        play_count: Set(0),
+        created_at: Set(now.clone()),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+
+    let model = active_model
+        .insert(db)
+        .await
+        .context("Failed to insert wallpaper into database")?;
+
+    info!("[ImportBytes] {} -> {}", original_name, model.file_path);
+
+    Ok(model)
+}
+
+/// 通过字节方式批量导入壁纸（H5 拖拽场景）
+///
+/// 与 `import_batch` 共用相同的并发上限 `IMPORT_CONCURRENCY`。
+pub async fn import_batch_from_bytes(
+    db: &DatabaseConnection,
+    items: Vec<(String, Vec<u8>)>,
+    wallpapers_dir: &Path,
+    thumbnails_dir: &Path,
+) -> Result<Vec<wallpaper::Model>> {
+    let wallpapers_dir = wallpapers_dir.to_path_buf();
+    let thumbnails_dir = thumbnails_dir.to_path_buf();
+
+    let results: Vec<std::result::Result<wallpaper::Model, (String, anyhow::Error)>> =
+        stream::iter(items)
+            .map(|(name, bytes)| {
+                let w_dir = wallpapers_dir.clone();
+                let t_dir = thumbnails_dir.clone();
+                async move {
+                    let name_for_err = name.clone();
+                    import_single_from_bytes(db, name, bytes, &w_dir, &t_dir)
+                        .await
+                        .map_err(|e| (name_for_err, e))
+                }
+            })
+            .buffer_unordered(IMPORT_CONCURRENCY)
+            .collect()
+            .await;
+
+    let mut models = Vec::new();
+    let mut errors = Vec::new();
+
+    for result in results {
+        match result {
+            Ok(model) => models.push(model),
+            Err((name, e)) => {
+                warn!("[ImportBytes Error] {}: {}", name, e);
+                errors.push(format!("{}: {}", name, e));
+            }
+        }
+    }
+
+    if models.is_empty() && !errors.is_empty() {
+        anyhow::bail!("All imports failed: {}", errors.join("; "));
+    }
+
+    Ok(models)
+}
+
 /// 保存前端 canvas 生成的视频缩略图
 ///
 /// 接收前端传来的图片字节数据（WebP/JPEG），持久化到 thumbnails 目录，

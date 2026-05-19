@@ -71,7 +71,10 @@ export default {
     dropToImport: "Drag files here to import",
     supportedFormats: "Supports images, videos, and GIF files",
     wallpaperFiles: "Wallpaper Files",
-    refresh: "Refresh wallpaper list",
+    refresh: "Refresh wallpapers",
+    importedCount: "Imported {{count}} file(s)",
+    skippedUnsupported: "Skipped {{count}} file(s): unsupported format",
+    skippedBySize: "Skipped {{count}} file(s): too large (max 200MB per file, 500MB total)",
   },
 
   // MonitorSettingsPanel

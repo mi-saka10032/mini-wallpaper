@@ -72,6 +72,8 @@ export interface Collection {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  /** 是否系统内置（1 = 内置「我喜欢」，不可删除/重命名；0 = 用户自建） */
+  is_builtin: number;
 }
 
 /** 显示器配置模型 */

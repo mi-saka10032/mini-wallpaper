@@ -34,6 +34,8 @@ export default {
     cancel: "取消",
     deleteConfirmTitle: "删除收藏夹",
     deleteConfirmDesc: "确定要删除收藏夹「{{name}}」吗？收藏夹内的壁纸不会被删除。",
+    /** 内置收藏夹的展示名（数据层名称由 m006 迁移种入为「我喜欢」，此处仅作前端显示回退） */
+    builtinFavorites: "我喜欢",
   },
 
   // MainContent

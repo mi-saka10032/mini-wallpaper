@@ -34,6 +34,8 @@ export default {
     cancel: "Cancel",
     deleteConfirmTitle: "Delete Collection",
     deleteConfirmDesc: 'Are you sure you want to delete collection "{{name}}"? Wallpapers inside will not be removed.',
+    /** Display name of the built-in collection (DB row is seeded as 「我喜欢」 by m006; this i18n key only governs UI rendering) */
+    builtinFavorites: "My Favorites",
   },
 
   // MainContent

@@ -4,6 +4,12 @@ use sea_orm::*;
 
 use crate::entities::{collection, collection_wallpaper, monitor_config, wallpaper};
 
+/// 标记：业务尝试修改/删除内置收藏夹时返回的错误信息
+///
+/// 该字符串会经 `CommandResult` 序列化给前端，前端可据此判断是否需要提示
+/// "系统收藏夹不可删除/重命名"。
+const ERR_BUILTIN_IMMUTABLE: &str = "Builtin collection is immutable";
+
 /// 获取所有收藏夹
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<collection::Model>> {
     let collections = collection::Entity::find()
@@ -14,6 +20,24 @@ pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<collection::Model>> 
     Ok(collections)
 }
 
+/// 查找系统内置收藏夹（is_builtin = 1）
+///
+/// 由 m006 迁移种入，全表至多一条（partial unique index 兜底）。
+/// 业务代码（如 ToggleFavorite 快捷键、未来的红心按钮）必须通过本函数动态定位
+/// 内置收藏夹 id，**禁止 hardcode `id = 1`**：老用户的 id=1 通常已被既有
+/// 收藏夹占用，自增分配的内置收藏夹 id 无法预测。
+///
+/// 当前未被业务代码引用，是为后续 ToggleFavorite / 红心按钮预留的对外接口；
+/// 暴露在 service 层即视为契约的一部分，因此显式允许 dead_code。
+#[allow(dead_code)]
+pub async fn find_builtin(db: &DatabaseConnection) -> Result<Option<collection::Model>> {
+    let model = collection::Entity::find()
+        .filter(collection::Column::IsBuiltin.eq(1))
+        .one(db)
+        .await?;
+    Ok(model)
+}
+
 /// 创建收藏夹
 pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection::Model> {
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -22,6 +46,7 @@ pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection:
         sort_order: Set(0),
         created_at: Set(now.clone()),
         updated_at: Set(now),
+        is_builtin: Set(0),
         ..Default::default()
     };
     let result = collection::Entity::insert(model).exec(db).await?;
@@ -33,7 +58,16 @@ pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection:
 }
 
 /// 重命名收藏夹
+///
+/// 内置收藏夹（is_builtin = 1）不可重命名，会返回错误。
 pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<collection::Model> {
+    // 守卫：内置收藏夹不可重命名
+    if let Some(existing) = collection::Entity::find_by_id(id).one(db).await? {
+        if existing.is_builtin == 1 {
+            return Err(anyhow::anyhow!(ERR_BUILTIN_IMMUTABLE));
+        }
+    }
+
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = collection::ActiveModel {
         id: Set(id),
@@ -50,7 +84,16 @@ pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<co
 }
 
 /// 删除收藏夹（手动清理关联记录，不依赖外键级联，事务保护）
+///
+/// 内置收藏夹（is_builtin = 1）不可删除，会返回错误。
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
+    // 守卫：内置收藏夹不可删除（前置校验，避免开启事务后再回滚的浪费）
+    if let Some(existing) = collection::Entity::find_by_id(id).one(db).await? {
+        if existing.is_builtin == 1 {
+            return Err(anyhow::anyhow!(ERR_BUILTIN_IMMUTABLE));
+        }
+    }
+
     let txn = db.begin().await?;
 
     // 1. 清理 collection_wallpapers 关联记录

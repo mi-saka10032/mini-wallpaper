@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, Pencil, Plus, Star, Trash2 } from "lucide-react";
+import { FolderOpen, Heart, Pencil, Plus, Star, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Separator } from "@/components/ui/separator";
@@ -148,45 +148,71 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
 
         {/* 收藏夹列表 */}
         <div className="space-y-0.5">
-          {collections.map((collection) => (
-            <ContextMenu key={collection.id}>
-              <ContextMenuTrigger className="block w-full min-w-0">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => onActiveIdChange(collection.id)}
+          {collections.map((collection) => {
+            const isBuiltin = collection.is_builtin === 1;
+            // 内置收藏夹的展示名走 i18n（让中英文环境分别显示「我喜欢」/ "My Favorites"），
+            // 用户自建收藏夹直接显示 DB 中的名字
+            const displayName = isBuiltin ? t("sidebar.builtinFavorites") : collection.name;
+            const Icon = isBuiltin ? Heart : Star;
+
+            const trigger = (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => onActiveIdChange(collection.id)}
+                    className={cn(
+                      "fluent-indicator flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
+                      activeId === collection.id
+                        ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
+                        : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
+                    )}
+                  >
+                    <Icon
                       className={cn(
-                        "fluent-indicator flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
-                        activeId === collection.id
-                          ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
-                          : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
+                        "size-4 shrink-0",
+                        // 内置收藏夹用主题红色填充心形，强化"系统级"视觉
+                        isBuiltin && "fill-[#ef4444] text-[#ef4444]",
                       )}
-                    >
-                      <Star className="size-4 shrink-0" />
-                      <span className="block max-w-[120px] truncate">{collection.name}</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    {collection.name}
-                  </TooltipContent>
-                </Tooltip>
-              </ContextMenuTrigger>
-              <ContextMenuContent className="w-32">
-                <ContextMenuItem onClick={() => openRenameDialog(collection)}>
-                  <Pencil className="mr-2 size-3.5" />
-                  {t("sidebar.rename")}
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() => setDeleteTarget(collection)}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <Trash2 className="mr-2 size-3.5" />
-                  {t("sidebar.delete")}
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-          ))}
+                    />
+                    <span className="block max-w-[120px] truncate">{displayName}</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">{displayName}</TooltipContent>
+              </Tooltip>
+            );
+
+            // 内置收藏夹：不挂右键菜单（用户无法重命名/删除）
+            if (isBuiltin) {
+              return (
+                <div key={collection.id} className="block w-full min-w-0">
+                  {trigger}
+                </div>
+              );
+            }
+
+            // 用户自建收藏夹：挂载完整的右键菜单
+            return (
+              <ContextMenu key={collection.id}>
+                <ContextMenuTrigger className="block w-full min-w-0">
+                  {trigger}
+                </ContextMenuTrigger>
+                <ContextMenuContent className="w-32">
+                  <ContextMenuItem onClick={() => openRenameDialog(collection)}>
+                    <Pencil className="mr-2 size-3.5" />
+                    {t("sidebar.rename")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => setDeleteTarget(collection)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="mr-2 size-3.5" />
+                    {t("sidebar.delete")}
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+            );
+          })}
 
           {collections.length === 0 && (
             <p className="px-3 py-2 text-xs text-foreground/35">{t("sidebar.noCollections")}</p>

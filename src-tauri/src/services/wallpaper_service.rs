@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::entities::{collection_wallpaper, monitor_config, wallpaper};
+use crate::utils::concurrency::import_concurrency;
 
 /// 支持的图片扩展名
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "webp"];
@@ -244,10 +245,9 @@ pub async fn import_single(
 
 /// 批量导入壁纸（有限并发）
 ///
-/// 使用 `buffer_unordered` 控制最大并发数为 3，
+/// 使用 `buffer_unordered` 控制最大并发数（基于 CPU 核数动态计算），
 /// 每个任务内部通过 `spawn_blocking` 执行文件 I/O，避免阻塞 async runtime。
 /// SQLite 写操作由连接池自动排队，无需额外加锁。
-const IMPORT_CONCURRENCY: usize = 3;
 
 pub async fn import_batch(
     db: &DatabaseConnection,
@@ -269,7 +269,7 @@ pub async fn import_batch(
                         .map_err(|e| (path, e))
                 }
             })
-            .buffer_unordered(IMPORT_CONCURRENCY)
+            .buffer_unordered(import_concurrency())
             .collect()
             .await;
 
@@ -434,7 +434,7 @@ async fn import_single_from_bytes(
 
 /// 通过字节方式批量导入壁纸（H5 拖拽场景）
 ///
-/// 与 `import_batch` 共用相同的并发上限 `IMPORT_CONCURRENCY`。
+/// 与 `import_batch` 共用相同的动态并发策略（基于 CPU 核数）。
 pub async fn import_batch_from_bytes(
     db: &DatabaseConnection,
     items: Vec<(String, Vec<u8>)>,
@@ -456,7 +456,7 @@ pub async fn import_batch_from_bytes(
                         .map_err(|e| (name_for_err, e))
                 }
             })
-            .buffer_unordered(IMPORT_CONCURRENCY)
+            .buffer_unordered(import_concurrency())
             .collect()
             .await;
 

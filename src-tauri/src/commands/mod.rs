@@ -14,7 +14,7 @@ pub mod action;
 #[allow(unused_imports)]
 pub use wallpaper::{
     delete_wallpapers, get_supported_extensions, get_wallpaper, get_wallpapers, import_wallpapers,
-    import_wallpapers_bytes, save_video_thumbnail,
+    import_wallpaper_bytes, save_video_thumbnail,
 };
 #[allow(unused_imports)]
 pub use collection::{
@@ -54,7 +54,7 @@ macro_rules! all_handlers {
             $crate::commands::wallpaper::get_wallpapers,
             $crate::commands::wallpaper::get_wallpaper,
             $crate::commands::wallpaper::import_wallpapers,
-            $crate::commands::wallpaper::import_wallpapers_bytes,
+            $crate::commands::wallpaper::import_wallpaper_bytes,
             $crate::commands::wallpaper::save_video_thumbnail,
             $crate::commands::wallpaper::delete_wallpapers,
             // collection

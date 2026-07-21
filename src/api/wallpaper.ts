@@ -22,21 +22,31 @@ export async function importFiles(paths: string[]): Promise<Wallpaper[]> {
   return invoke(COMMANDS.IMPORT_WALLPAPERS, { paths });
 }
 
-/** 通过字节方式导入壁纸文件（H5 拖拽场景） */
-export async function importFilesBytes(
-  items: Array<{ name: string; bytes: number[] }>,
-): Promise<Wallpaper[]> {
-  return invoke(COMMANDS.IMPORT_WALLPAPERS_BYTES, { items });
+/** 通过字节方式导入单个壁纸文件（H5 拖拽场景）
+ *
+ * 字节数据通过 Tauri v2 raw body 直传（Uint8Array），避免 JSON 数组
+ * 序列化开销；文件名经 fileName 请求头传入（encodeURIComponent 编码）。
+ */
+export async function importWallpaperBytes(
+  name: string,
+  data: Uint8Array,
+): Promise<Wallpaper> {
+  return tauriInvoke(COMMANDS.IMPORT_WALLPAPER_BYTES, data, {
+    headers: { fileName: encodeURIComponent(name) },
+  });
 }
 
-/** 保存视频缩略图（前端 canvas 抽帧后回传字节数据） */
+/** 保存视频缩略图（前端 canvas 抽帧后回传字节数据）
+ *
+ * 字节数据通过 Tauri v2 raw body 直传（Uint8Array），避免 JSON
+ * 序列化开销；wallpaperId 经请求头传入。
+ */
 export async function saveVideoThumbnail(
   wallpaperId: number,
-  data: number[],
+  data: Uint8Array,
 ): Promise<string> {
-  return tauriInvoke(COMMANDS.SAVE_VIDEO_THUMBNAIL, {
-    wallpaperId,
-    data,
+  return tauriInvoke(COMMANDS.SAVE_VIDEO_THUMBNAIL, data, {
+    headers: { wallpaperId: String(wallpaperId) },
   });
 }
 

@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
 use crate::dto::wallpaper_dto::{
-    DeleteWallpapersRequest, ImportWallpapersBytesRequest, ImportWallpapersRequest,
+    DeleteWallpapersRequest, ImportWallpapersRequest,
 };
 use crate::dto::Validated;
 use crate::entities::wallpaper;
@@ -56,44 +56,70 @@ pub async fn import_wallpapers(
     Ok(wallpaper_service::import_batch(&ctx.db, req.paths, &wallpapers_dir, &thumbnails_dir).await?)
 }
 
-/// 通过字节方式导入壁纸（H5 拖拽场景）
+/// 通过字节方式导入单个壁纸（H5 拖拽场景，raw body 直传）
 ///
-/// 与 `import_wallpapers` 区别：直接接收文件名 + 字节内容，
-/// 不依赖 Tauri 注入的 File.path 属性，适用于 dragDropEnabled = false 场景。
+/// 与 `import_wallpapers` 区别：直接接收字节内容，不依赖 Tauri 注入的
+/// File.path 属性，适用于 dragDropEnabled = false 场景。
+///
+/// 字节数据通过 Tauri v2 raw body（`InvokeBody::Raw`）直传，避免 JSON
+/// 数组序列化开销；文件名经 `fileName` 请求头传入（前端 encodeURIComponent 编码）。
 #[tauri::command]
-pub async fn import_wallpapers_bytes(
+pub async fn import_wallpaper_bytes(
     ctx: State<'_, AppContext>,
-    req: Validated<ImportWallpapersBytesRequest>,
-) -> CommandResult<Vec<wallpaper::Model>> {
-    let req = req.into_inner();
-    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
+    request: tauri::ipc::Request<'_>,
+) -> CommandResult<wallpaper::Model> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("import_wallpaper_bytes 需要 raw body（Uint8Array）".into());
+    };
 
+    let file_name = request
+        .headers()
+        .get("fileName")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| urlencoding::decode(s).ok().map(|c| c.into_owned()))
+        .ok_or("import_wallpaper_bytes 缺少有效的 fileName 请求头")?;
+
+    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
     let wallpapers_dir = app_data_dir.join("wallpapers");
     let thumbnails_dir = app_data_dir.join("thumbnails");
 
-    let items: Vec<(String, Vec<u8>)> = req
-        .items
-        .into_iter()
-        .map(|it| (it.name, it.bytes))
-        .collect();
-
-    Ok(
-        wallpaper_service::import_batch_from_bytes(&ctx.db, items, &wallpapers_dir, &thumbnails_dir)
-            .await?,
+    Ok(wallpaper_service::import_single_from_bytes(
+        &ctx.db,
+        file_name,
+        data.clone(),
+        &wallpapers_dir,
+        &thumbnails_dir,
     )
+    .await?)
 }
 
 /// 保存视频缩略图（前端 canvas 抽帧后回传字节数据）
+///
+/// 字节数据通过 Tauri v2 raw body（`InvokeBody::Raw`）直传，避免 JSON
+/// 序列化开销；`wallpaperId` 经请求头传入。
 #[tauri::command]
 pub async fn save_video_thumbnail(
     ctx: State<'_, AppContext>,
-    wallpaper_id: i32,
-    data: Vec<u8>,
+    request: tauri::ipc::Request<'_>,
 ) -> CommandResult<String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("save_video_thumbnail 需要 raw body（Uint8Array）".into());
+    };
+
+    let wallpaper_id: i32 = request
+        .headers()
+        .get("wallpaperId")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .ok_or("save_video_thumbnail 缺少有效的 wallpaperId 请求头")?;
+
     let app_data_dir = ctx.app_handle.path().app_data_dir()?;
     let thumbnails_dir = app_data_dir.join("thumbnails");
 
-    Ok(wallpaper_service::save_video_thumbnail(&ctx.db, wallpaper_id, data, &thumbnails_dir).await?)
+    Ok(
+        wallpaper_service::save_video_thumbnail(&ctx.db, wallpaper_id, data.clone(), &thumbnails_dir)
+            .await?,
+    )
 }
 
 /// 批量删除壁纸（删文件 + 删缩略图 + 删数据库记录 + 窗口/定时器联动）

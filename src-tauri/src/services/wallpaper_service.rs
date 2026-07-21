@@ -378,8 +378,8 @@ fn prepare_wallpaper_from_bytes(
 ///
 /// 与 `import_single` 区别：
 /// - 不读取磁盘源文件，避免依赖 Tauri 注入的 path 属性
-/// - 适用于浏览器 File 对象通过 ArrayBuffer 传输到后端的场景
-async fn import_single_from_bytes(
+/// - 适用于浏览器 File 对象通过 raw body（Uint8Array）传输到后端的场景
+pub async fn import_single_from_bytes(
     db: &DatabaseConnection,
     original_name: String,
     bytes: Vec<u8>,
@@ -430,54 +430,6 @@ async fn import_single_from_bytes(
     info!("[ImportBytes] {} -> {}", original_name, model.file_path);
 
     Ok(model)
-}
-
-/// 通过字节方式批量导入壁纸（H5 拖拽场景）
-///
-/// 与 `import_batch` 共用相同的动态并发策略（基于 CPU 核数）。
-pub async fn import_batch_from_bytes(
-    db: &DatabaseConnection,
-    items: Vec<(String, Vec<u8>)>,
-    wallpapers_dir: &Path,
-    thumbnails_dir: &Path,
-) -> Result<Vec<wallpaper::Model>> {
-    let wallpapers_dir = wallpapers_dir.to_path_buf();
-    let thumbnails_dir = thumbnails_dir.to_path_buf();
-
-    let results: Vec<std::result::Result<wallpaper::Model, (String, anyhow::Error)>> =
-        stream::iter(items)
-            .map(|(name, bytes)| {
-                let w_dir = wallpapers_dir.clone();
-                let t_dir = thumbnails_dir.clone();
-                async move {
-                    let name_for_err = name.clone();
-                    import_single_from_bytes(db, name, bytes, &w_dir, &t_dir)
-                        .await
-                        .map_err(|e| (name_for_err, e))
-                }
-            })
-            .buffer_unordered(import_concurrency())
-            .collect()
-            .await;
-
-    let mut models = Vec::new();
-    let mut errors = Vec::new();
-
-    for result in results {
-        match result {
-            Ok(model) => models.push(model),
-            Err((name, e)) => {
-                warn!("[ImportBytes Error] {}: {}", name, e);
-                errors.push(format!("{}: {}", name, e));
-            }
-        }
-    }
-
-    if models.is_empty() && !errors.is_empty() {
-        anyhow::bail!("All imports failed: {}", errors.join("; "));
-    }
-
-    Ok(models)
 }
 
 /// 保存前端 canvas 生成的视频缩略图

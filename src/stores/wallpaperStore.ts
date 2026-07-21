@@ -5,7 +5,7 @@ import i18n from "@/i18n";
 import {
   getAll as fetchAllWallpapers,
   importFiles as importWallpaperFiles,
-  importFilesBytes as importWallpaperFilesBytes,
+  importWallpaperBytes,
   deleteBatch as deleteWallpaperBatch,
   getSupportedExtensions as fetchSupportedExtensions,
   getById as fetchWallpaperById,
@@ -59,7 +59,7 @@ async function generateVideoThumbnails(
     for (const { wallpaperId, data } of batchResults) {
       if (!data) continue;
       try {
-        await saveVideoThumbnail(wallpaperId, Array.from(data));
+        await saveVideoThumbnail(wallpaperId, data);
         updatedIds.push(wallpaperId);
       } catch (e) {
         console.error(`[VideoThumbnail] save failed for #${wallpaperId}`, e);
@@ -161,7 +161,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
    * 步骤：
    * 1. 按支持的扩展名过滤
    * 2. 体积守卫：单文件 > 200MB 或总量 > 500MB 直接拒绝（前端拒绝，不进 invoke）
-   * 3. 把 File 转 ArrayBuffer → number[]，调用后端 import_wallpapers_bytes
+   * 3. 逐文件串行：File → ArrayBuffer → Uint8Array，raw body 直传后端 import_wallpaper_bytes
    * 4. 复用现有 generateVideoThumbnails 异步分批生成视频缩略图
    */
   importByFiles: async (files: File[]) => {
@@ -212,15 +212,18 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     try {
       set({ loading: true });
 
-      // 3) File → ArrayBuffer → number[]（Tauri 默认 JSON 序列化）
-      const items = await Promise.all(
-        sizeAccepted.map(async (f) => {
+      // 3) 逐文件串行导入：File → ArrayBuffer → Uint8Array，raw body 直传
+      //    串行可将内存峰值控制在单个文件大小，且规避 SQLite 写锁竞争
+      const imported: Wallpaper[] = [];
+      for (const f of sizeAccepted) {
+        try {
           const buf = await f.arrayBuffer();
-          return { name: f.name, bytes: Array.from(new Uint8Array(buf)) };
-        }),
-      );
-
-      const imported = await importWallpaperFilesBytes(items);
+          const wp = await importWallpaperBytes(f.name, new Uint8Array(buf));
+          imported.push(wp);
+        } catch (e) {
+          console.error(`[DragImport] failed for ${f.name}`, e);
+        }
+      }
       console.log(`[DragImport] ${imported.length} wallpapers imported (bytes)`);
 
       await get().fetchWallpapers();

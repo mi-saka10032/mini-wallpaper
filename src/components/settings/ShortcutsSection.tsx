@@ -4,7 +4,7 @@ import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { SETTING_KEYS } from "@/stores/settingStore";
-import { DEFAULT_SHORTCUTS } from "@/hooks/useShortcuts";
+import { DEFAULT_SHORTCUTS } from "@/constants/shortcuts";
 import { useShortcutRecorder } from "@/hooks/useShortcutRecorder";
 
 interface ShortcutsSectionProps {
@@ -12,6 +12,7 @@ interface ShortcutsSectionProps {
   shortcutPrev: string;
   shortcutTogglePause: string;
   shortcutOpenMain: string;
+  shortcutToggleFavorite: string;
   updateSetting: (key: string, value: string) => void;
 }
 
@@ -29,6 +30,7 @@ const ShortcutsSection: FC<ShortcutsSectionProps> = memo(({
   shortcutPrev,
   shortcutTogglePause,
   shortcutOpenMain,
+  shortcutToggleFavorite,
   updateSetting,
 }) => {
   const { t } = useTranslation();
@@ -71,7 +73,13 @@ const ShortcutsSection: FC<ShortcutsSectionProps> = memo(({
       defaultValue: DEFAULT_SHORTCUTS.openMain,
       currentValue: shortcutOpenMain,
     },
-  ], [shortcutNext, shortcutPrev, shortcutTogglePause, shortcutOpenMain]);
+    {
+      settingKey: SETTING_KEYS.SHORTCUT_TOGGLE_FAVORITE,
+      labelKey: "settings.shortcutToggleFavorite",
+      defaultValue: DEFAULT_SHORTCUTS.toggleFavorite,
+      currentValue: shortcutToggleFavorite,
+    },
+  ], [shortcutNext, shortcutPrev, shortcutTogglePause, shortcutOpenMain, shortcutToggleFavorite]);
 
   /** 获取所有当前快捷键值（用于冲突检测） */
   const allShortcutValues = useMemo(() => {

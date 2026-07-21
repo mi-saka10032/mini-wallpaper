@@ -15,6 +15,7 @@ pub mod keys {
     pub const SHORTCUT_PREV_WALLPAPER: &str = "shortcut_prev_wallpaper";
     pub const SHORTCUT_TOGGLE_PAUSE: &str = "shortcut_toggle_pause";
     pub const SHORTCUT_OPEN_MAIN: &str = "shortcut_open_main";
+    pub const SHORTCUT_TOGGLE_FAVORITE: &str = "shortcut_toggle_favorite";
     pub const ACCENT_COLOR: &str = "accent_color";
 }
 
@@ -30,6 +31,7 @@ const VALID_KEYS: &[&str] = &[
     keys::SHORTCUT_PREV_WALLPAPER,
     keys::SHORTCUT_TOGGLE_PAUSE,
     keys::SHORTCUT_OPEN_MAIN,
+    keys::SHORTCUT_TOGGLE_FAVORITE,
     keys::ACCENT_COLOR,
 ];
 

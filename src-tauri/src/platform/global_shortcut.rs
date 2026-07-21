@@ -20,11 +20,15 @@
 //!
 //! ## P0 落地范围
 //!
-//! - ✅ Next / Prev / TogglePause / OpenMain 四组快捷键
-//! - ⏸️ ToggleFavorite：等待"当前壁纸权威源"建立后于 P1 启用
+//! - ✅ Next / Prev / TogglePause / OpenMain 四组基础切换/控制快捷键
+//! - ✅ ToggleFavorite：收藏/取消收藏当前显示壁纸（当前壁纸权威源已由
+//!   `monitor_configs.wallpaper_id` 建立）
 //! - ⏸️ Quit：仅托盘菜单可达，避免误触退出
 
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use log::{info, warn};
 use tauri::{AppHandle, Manager};
@@ -51,9 +55,9 @@ struct DefaultShortcut {
     action: Action,
 }
 
-/// P0 落地的 4 组默认快捷键
+/// 默认快捷键组（Next / Prev / TogglePause / OpenMain / ToggleFavorite）
 ///
-/// `Quit` 故意不绑定（避免误触）；`ToggleFavorite` 暂缓（待 P1）。
+/// `Quit` 故意不绑定（避免误触退出）。
 const DEFAULTS: &[DefaultShortcut] = &[
     DefaultShortcut {
         setting_key: setting_keys::SHORTCUT_NEXT_WALLPAPER,
@@ -75,6 +79,11 @@ const DEFAULTS: &[DefaultShortcut] = &[
         default_accelerator: "CmdOrCtrl+Alt+W",
         action: Action::OpenMain,
     },
+    DefaultShortcut {
+        setting_key: setting_keys::SHORTCUT_TOGGLE_FAVORITE,
+        default_accelerator: "CmdOrCtrl+Alt+F",
+        action: Action::ToggleFavorite,
+    },
 ];
 
 // ==================== Plugin Builder ====================
@@ -91,10 +100,53 @@ pub fn build_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 
 // ==================== Handler ====================
 
+/// 全局快捷键节流间隔
+///
+/// 500ms 内同一键位的重复触发会被丢弃，避免快速连按
+/// （尤其是 ToggleFavorite）导致后端重复执行与 toast 堆积。
+const SHORTCUT_THROTTLE: Duration = Duration::from_millis(500);
+
+/// 每个快捷键上次实际派发的时间戳（进程级）
+///
+/// key 用 `Shortcut::id()`（稳定 u32），使节流判断得以前置到
+/// `resolve_action`（含一次 DB 查询）之前——被节流丢弃的重复按键
+/// 因此不再付出反查开销。
+fn last_fire_map() -> &'static StdMutex<HashMap<u32, Instant>> {
+    static MAP: OnceLock<StdMutex<HashMap<u32, Instant>>> = OnceLock::new();
+    MAP.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+/// 按键位独立节流：允许派发返回 true，被节流丢弃返回 false
+fn should_fire(shortcut_id: u32) -> bool {
+    let now = Instant::now();
+    let mut map = match last_fire_map().lock() {
+        Ok(m) => m,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(last) = map.get(&shortcut_id) {
+        if now.duration_since(*last) < SHORTCUT_THROTTLE {
+            return false;
+        }
+    }
+    map.insert(shortcut_id, now);
+    true
+}
+
 /// plugin handler 单一入口
 fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     // 仅按下沿派发：避免长按重复触发与抬起噪声
     if event.state() != ShortcutState::Pressed {
+        return;
+    }
+
+    // 时间节流（前置于 resolve）：短时间高频触发同一键位时丢弃，
+    // 既避免重复执行与 toast 堆积，也省去被丢弃按键的 DB 反查开销
+    if !should_fire(shortcut.id()) {
+        info!(
+            "[GlobalShortcut] 键位 {:?} 被节流丢弃（<{}ms）",
+            shortcut,
+            SHORTCUT_THROTTLE.as_millis()
+        );
         return;
     }
 
@@ -194,6 +246,23 @@ pub async fn register_default_shortcuts(app: &AppHandle) {
             ),
         }
     }
+}
+
+/// 键位变更后全组重注册
+///
+/// 用户在设置面板修改任一快捷键并落库后，由 `set_setting` 的副作用调用。
+/// 先注销当前进程注册的全部全局快捷键，再调用 [`register_default_shortcuts`]
+/// 重新读取 DB（此时新值已写入）批量注册，从而让新键位即时生效、旧键位失效。
+///
+/// 之所以整组重注册而非单键增量更新：快捷键变更是低频操作，
+/// 全组重注册可彻底规避"旧 accelerator 捕获 / 单键失败回退"的复杂度。
+pub async fn reregister_all(app: &AppHandle) {
+    let manager = app.global_shortcut();
+    if let Err(e) = manager.unregister_all() {
+        warn!("[GlobalShortcut] 注销旧键位失败（继续重注册）: {}", e);
+    }
+    register_default_shortcuts(app).await;
+    info!("[GlobalShortcut] 键位变更后已完成全组重注册");
 }
 
 // ==================== 内部工具 ====================

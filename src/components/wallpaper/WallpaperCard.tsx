@@ -1,6 +1,7 @@
 import {
   Check,
   GripVertical,
+  Heart,
 } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 import { useSortable } from "@dnd-kit/sortable";
@@ -8,6 +9,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import { useWallpaperCardContextMenu } from "@/components/wallpaper/WallpaperCardContextMenu";
+import { useFavoritesStore } from "@/stores/favoritesStore";
 import type { Wallpaper } from "@/api/config";
 
 // ============ 类型定义 ============
@@ -45,6 +47,20 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
 }) => {
   const { openContextMenu } = useWallpaperCardContextMenu();
 
+  // 订阅该壁纸的收藏状态（仅当自身收藏态变化时重渲染）
+  const isFavorite = useFavoritesStore((s) => s.favoriteIds.has(wallpaper.id));
+  const toggleFavorite = useFavoritesStore((s) => s.toggle);
+
+  const handleToggleFavorite = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      toggleFavorite(wallpaper.id).catch((err) =>
+        console.error("[toggleFavorite]", err),
+      );
+    },
+    [toggleFavorite, wallpaper.id],
+  );
+
   // 右键菜单处理：仅在卡片范围内触发
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -72,8 +88,23 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
         <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/50 bg-black/15 opacity-0 transition-opacity group-hover:opacity-100" />
       );
     }
-    return null;
-  }, [manageMode, selected]);
+    // 非管理模式：红心一键收藏按钮（已收藏常亮，未收藏 hover 显示）
+    return (
+      <button
+        type="button"
+        onClick={handleToggleFavorite}
+        title={isFavorite ? "取消收藏" : "收藏"}
+        className={cn(
+          "absolute left-1.5 top-1.5 z-20 flex size-6 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm transition-all hover:bg-black/60 hover:scale-110 active:scale-95",
+          isFavorite
+            ? "opacity-100 text-red-500"
+            : "text-white/90 opacity-0 group-hover:opacity-100",
+        )}
+      >
+        <Heart className={cn("size-3.5", isFavorite && "fill-current")} />
+      </button>
+    );
+  }, [manageMode, selected, isFavorite, handleToggleFavorite]);
 
   // 右下角叠加层：拖拽手柄
   const overlayBottomRight = useMemo(() => {

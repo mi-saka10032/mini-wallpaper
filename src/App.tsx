@@ -8,7 +8,8 @@ import { Toaster } from "@/components/ui/toast";
 import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
-import { useShortcuts } from "@/hooks/useShortcuts";
+import { useFavoritesStore } from "@/stores/favoritesStore";
+import { listen, EVENTS } from "@/api/event";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
 import { useWebGuard } from "@/hooks/useWebGuard";
 import { useAccentColor } from "@/hooks/useAccentColor";
@@ -36,6 +37,7 @@ export const AppShell: React.FC = () => {
   const fetchSettings = useSettingStore((s) => s.fetchSettings);
   const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);
   const initMonitors = useMonitorConfigStore((s) => s.init);
+  const initFavorites = useFavoritesStore((s) => s.init);
 
   useEffect(() => {
     const init = async () => {
@@ -44,6 +46,7 @@ export const AppShell: React.FC = () => {
           fetchSettings(),
           fetchWallpapers(),
           initMonitors(),
+          initFavorites(),
           invoke(COMMANDS.INIT_FULLSCREEN_DETECTION).catch((e) =>
             console.error("[initFullscreenDetection]", e),
           ),
@@ -58,7 +61,7 @@ export const AppShell: React.FC = () => {
       }
     };
     init();
-  }, [fetchSettings, fetchWallpapers, initMonitors]);
+  }, [fetchSettings, fetchWallpapers, initMonitors, initFavorites]);
 
   // 互斥渲染：Loading 退出后才挂载 App，避免 App 加载抢占主线程导致动画卡顿
   if (!loadingExited) {
@@ -70,13 +73,23 @@ export const AppShell: React.FC = () => {
 
 const App: React.FC = () => {
   const { t } = useTranslation();
-  useShortcuts();
   useMonitorHotPlug();
   useWebGuard();
   useAccentColor(); // 初始化主题色（启动时应用持久化的 accent color）
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const importing = useWallpaperStore((s) => s.loading);
   const language = useSettingStore((s) => s.settings[SETTING_KEYS.LANGUAGE]);
+  const applyFavoriteChange = useFavoritesStore((s) => s.applyChange);
+
+  // 监听后端收藏归属变更事件（快捷键 / 托盘触发时回流，保持红心状态一致）
+  useEffect(() => {
+    const unlisten = listen(EVENTS.FAVORITES_CHANGED, ({ wallpaper_id, favorited }) => {
+      applyFavoriteChange(wallpaper_id, favorited);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [applyFavoriteChange]);
 
   // activeId: 0 = 本地壁纸，>0 = 收藏夹 id
   const [activeId, setActiveId] = useState(0);

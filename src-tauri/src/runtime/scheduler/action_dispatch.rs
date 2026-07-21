@@ -73,6 +73,7 @@ impl Scheduler {
             Action::TogglePause => None, // TogglePause 的 toast 在内部根据状态动态生成
             Action::OpenMain => None,    // 打开窗口无需 toast
             Action::Quit => None,        // 退出无需 toast
+            Action::ToggleFavorite => None, // ToggleFavorite 的 toast 在内部根据收藏结果动态生成
         };
 
         match action {
@@ -81,6 +82,7 @@ impl Scheduler {
             Action::TogglePause => self.dispatch_toggle_pause().await,
             Action::OpenMain => self.dispatch_open_main(),
             Action::Quit => self.dispatch_quit(),
+            Action::ToggleFavorite => self.dispatch_toggle_favorite().await,
         }
 
         // 发送 toast 反馈（仅对需要反馈的动作）
@@ -171,6 +173,46 @@ impl Scheduler {
         info!("[ActionDispatch] 显示主窗口");
     }
 
+    /// 收藏 / 取消收藏当前显示中的壁纸
+    ///
+    /// 与 Next/Prev 一样先解析 active 目标显示器，取其 `wallpaper_id`
+    /// （轮播 tick 与手动切换实时回写的权威源）作为收藏对象，
+    /// 再委托 [`Scheduler::toggle_favorite`] 完成切换 + 联动 + 事件广播。
+    /// 最后按切换结果动态发送 toast 反馈。
+    async fn dispatch_toggle_favorite(&mut self) {
+        let targets = match self.resolve_action_targets().await {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                warn!("[ActionDispatch] 找不到合适的目标显示器，跳过 ToggleFavorite 动作");
+                self.show_action_toast(&Action::ToggleFavorite, "当前显示器未启用壁纸")
+                    .await;
+                return;
+            }
+        };
+
+        // 取第一个 active 目标当前显示的壁纸 id
+        let wallpaper_id = match targets.iter().find_map(|c| c.wallpaper_id) {
+            Some(wid) => wid,
+            None => {
+                warn!("[ActionDispatch] 当前显示器无壁纸，跳过 ToggleFavorite");
+                self.show_action_toast(&Action::ToggleFavorite, "当前没有正在显示的壁纸")
+                    .await;
+                return;
+            }
+        };
+
+        match self.toggle_favorite(wallpaper_id).await {
+            Ok(favorited) => {
+                let msg = if favorited { "已收藏当前壁纸" } else { "已取消收藏" };
+                self.show_action_toast(&Action::ToggleFavorite, msg).await;
+            }
+            Err(e) => {
+                warn!("[ActionDispatch] ToggleFavorite 失败: {}", e);
+                self.show_action_toast(&Action::ToggleFavorite, "收藏操作失败").await;
+            }
+        }
+    }
+
     /// 退出应用
     ///
     /// 调用 `AppHandle::exit(0)`，Tauri 会触发 `ExitRequested` 事件，
@@ -190,6 +232,7 @@ impl Scheduler {
             Action::TogglePause => "togglePause",
             Action::OpenMain => "openMain",
             Action::Quit => "quit",
+            Action::ToggleFavorite => "toggleFavorite",
         };
 
         let ctx = match self.app.try_state::<AppContext>() {

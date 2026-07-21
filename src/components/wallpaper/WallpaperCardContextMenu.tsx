@@ -13,6 +13,7 @@ import {
   Star,
   Trash2,
   Unlink,
+  Heart,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Wallpaper } from "@/api/config";
@@ -20,6 +21,7 @@ import { getCollectionWallpapers } from "@/api/collection";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
+import { useFavoritesStore } from "@/stores/favoritesStore";
 import { cn } from "@/lib/utils";
 
 // ============ Context 类型定义 ============
@@ -78,6 +80,8 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
   const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
+  const favoriteIds = useFavoritesStore((s) => s.favoriteIds);
+  const toggleFavorite = useFavoritesStore((s) => s.toggle);
 
   const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
 
@@ -208,6 +212,15 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
     [payload, configs, displayMode, upsert, upsertAll, closeMenu],
   );
 
+  // 切换收藏状态（红心 / 「我喜欢」）
+  const handleToggleFavorite = useCallback(() => {
+    if (!payload) return;
+    toggleFavorite(payload.wallpaper.id).catch((e) =>
+      console.error("[contextMenu.toggleFavorite]", e),
+    );
+    closeMenu();
+  }, [payload, toggleFavorite, closeMenu]);
+
   // 计算菜单位置（确保不超出视口，且在鼠标右侧弹出）
   const menuStyle = useMemo((): React.CSSProperties => {
     if (!payload) return { display: "none" };
@@ -296,6 +309,29 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
               <Monitor className="size-4 text-muted-foreground" />
               {t("main.setAs")}
               <span className="ml-auto text-muted-foreground">›</span>
+            </button>
+
+            {/* 收藏 / 取消收藏（内置「我喜欢」） */}
+            <button
+              type="button"
+              className={cn(
+                "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none",
+                "hover:bg-accent hover:text-accent-foreground",
+              )}
+              onMouseEnter={() => setSubMenu(null)}
+              onClick={handleToggleFavorite}
+            >
+              <Heart
+                className={cn(
+                  "size-4",
+                  favoriteIds.has(payload.wallpaper.id)
+                    ? "fill-red-500 text-red-500"
+                    : "text-muted-foreground",
+                )}
+              />
+              {favoriteIds.has(payload.wallpaper.id)
+                ? t("main.unfavorite")
+                : t("main.favorite")}
             </button>
 
             {/* 添加到收藏夹（仅全部壁纸视图） */}

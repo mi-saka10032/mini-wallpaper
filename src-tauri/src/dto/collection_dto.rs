@@ -75,3 +75,12 @@ pub struct ReorderWallpapersRequest {
     #[garde(length(min = 1))]
     pub wallpaper_ids: Vec<i32>,
 }
+
+/// 切换壁纸收藏状态请求（内置「我喜欢」收藏夹）
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleFavoriteRequest {
+    /// 壁纸 ID：正整数
+    #[garde(range(min = 1))]
+    pub wallpaper_id: i32,
+}

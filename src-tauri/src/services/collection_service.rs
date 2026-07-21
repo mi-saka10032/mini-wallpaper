@@ -26,10 +26,6 @@ pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<collection::Model>> 
 /// 业务代码（如 ToggleFavorite 快捷键、未来的红心按钮）必须通过本函数动态定位
 /// 内置收藏夹 id，**禁止 hardcode `id = 1`**：老用户的 id=1 通常已被既有
 /// 收藏夹占用，自增分配的内置收藏夹 id 无法预测。
-///
-/// 当前未被业务代码引用，是为后续 ToggleFavorite / 红心按钮预留的对外接口；
-/// 暴露在 service 层即视为契约的一部分，因此显式允许 dead_code。
-#[allow(dead_code)]
 pub async fn find_builtin(db: &DatabaseConnection) -> Result<Option<collection::Model>> {
     let model = collection::Entity::find()
         .filter(collection::Column::IsBuiltin.eq(1))
@@ -244,6 +240,22 @@ pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Re
         .count(db)
         .await?;
     Ok(count)
+}
+
+/// 判断某壁纸是否已在指定收藏夹中
+///
+/// 用于 ToggleFavorite / 红心按钮的"切换"语义：先探测归属，再决定 add / remove。
+pub async fn is_wallpaper_in_collection(
+    db: &DatabaseConnection,
+    collection_id: i32,
+    wallpaper_id: i32,
+) -> Result<bool> {
+    let count = collection_wallpaper::Entity::find()
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(collection_wallpaper::Column::WallpaperId.eq(wallpaper_id))
+        .count(db)
+        .await?;
+    Ok(count > 0)
 }
 
 /// 检查收藏夹壁纸数量是否 > 1（满足轮播切换的最低条件）

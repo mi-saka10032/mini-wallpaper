@@ -38,6 +38,7 @@ const GlobalSettingsDialog: React.FC = () => {
     shortcutPrev,
     shortcutTogglePause,
     shortcutOpenMain,
+    shortcutToggleFavorite,
     updateSetting,
     handleVolumeChange,
     toggleMute,
@@ -175,6 +176,7 @@ const GlobalSettingsDialog: React.FC = () => {
                 shortcutPrev={shortcutPrev}
                 shortcutTogglePause={shortcutTogglePause}
                 shortcutOpenMain={shortcutOpenMain}
+                shortcutToggleFavorite={shortcutToggleFavorite}
                 updateSetting={updateSetting}
               />
             )}

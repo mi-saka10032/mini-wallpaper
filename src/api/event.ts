@@ -21,6 +21,8 @@ export const EVENTS = {
   MONITOR_CONFIG_REFRESHED: "monitor-config-refreshed",
   /** 动作反馈 Toast 事件（后端 dispatch_action 完成后通知前端显示反馈） */
   ACTION_TOAST: "action-toast",
+  /** 收藏归属变更事件（壁纸被加入/移出内置「我喜欢」收藏夹时发送） */
+  FAVORITES_CHANGED: "favorites-changed",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -81,6 +83,14 @@ export interface ActionToastPayload {
   message: string;
 }
 
+/** 收藏归属变更事件 payload */
+export interface FavoritesChangedPayload {
+  /** 被切换的壁纸 ID */
+  wallpaper_id: number;
+  /** 切换后的状态：true = 已收藏，false = 已取消收藏 */
+  favorited: boolean;
+}
+
 /** 事件 → payload 类型映射 */
 export interface EventMap {
   [EVENTS.WALLPAPER_CHANGED]: WallpaperChangedPayload;
@@ -94,6 +104,7 @@ export interface EventMap {
   [EVENTS.WALLPAPER_CLEARED]: WallpaperClearedPayload;
   [EVENTS.MONITOR_CONFIG_REFRESHED]: Record<string, never>;
   [EVENTS.ACTION_TOAST]: ActionToastPayload;
+  [EVENTS.FAVORITES_CHANGED]: FavoritesChangedPayload;
 }
 
 /**

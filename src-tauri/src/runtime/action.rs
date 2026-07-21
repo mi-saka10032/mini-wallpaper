@@ -23,9 +23,9 @@ use serde::Deserialize;
 ///
 /// 当前阶段（Phase 1）落地：Next / Prev / TogglePause / OpenMain / Quit。
 ///
-/// `ToggleFavorite` 暂未落地：后端目前不持有"当前显示中的壁纸 id"，
-/// 该信息仅在前端壁纸窗口的 React state。等到 P1 设计完"当前壁纸状态机"
-/// （内存 HashMap 或 carousel 切换回写）后再补齐。
+/// `ToggleFavorite`：收藏 / 取消收藏"当前显示中的壁纸"。收藏目标 id 的权威源
+/// 是 `monitor_configs.wallpaper_id`——轮播 tick 与手动切换都会实时回写，
+/// 因此后端可直接从 active config 读取当前壁纸 id，无需前端透传。
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Action {
@@ -39,7 +39,6 @@ pub enum Action {
     OpenMain,
     /// 退出应用
     Quit,
-    // -------- 占位：等待"当前壁纸状态机"设计完成后启用 --------
-    // /// 收藏 / 取消收藏当前壁纸
-    // ToggleFavorite,
+    /// 收藏 / 取消收藏当前显示中的壁纸（切换其在内置「我喜欢」收藏夹中的归属）
+    ToggleFavorite,
 }

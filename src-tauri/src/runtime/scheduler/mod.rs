@@ -13,10 +13,12 @@
 //! - **`task_lifecycle.rs`**：JoinHandle 生命周期管理 + 轮播/全屏检测编排
 //! - **`setting_effects.rs`**：设置变更副作用（音量、全屏检测开关、display_mode）
 //! - **`deletion_effects.rs`**：删除联动（壁纸删除、收藏夹删除、收藏夹移除壁纸）
+//! - **`favorite_effects.rs`**：收藏切换联动（ToggleFavorite 快捷键 / 托盘 / 红心按钮共用）
 //! - **`action_dispatch.rs`**：用户动作派发（Next/Prev/... 快捷键 & 托盘菜单共用）
 
 mod action_dispatch;
 mod deletion_effects;
+mod favorite_effects;
 mod setting_effects;
 mod task_lifecycle;
 

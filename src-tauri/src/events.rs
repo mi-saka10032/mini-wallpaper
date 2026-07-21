@@ -170,3 +170,19 @@ pub struct ActionToastPayload {
 impl EventPayload for ActionToastPayload {
     const EVENT_NAME: &'static str = "action-toast";
 }
+
+/// 收藏夹归属变更事件（通知主窗口刷新收藏状态）
+///
+/// 当壁纸被加入 / 移出内置「我喜欢」收藏夹（ToggleFavorite 快捷键 / 托盘 / 红心按钮）
+/// 时发送，前端据此刷新收藏 id 集合，红心按钮亮灭与「我喜欢」列表即时同步。
+#[derive(Clone, Serialize)]
+pub struct FavoritesChangedPayload {
+    /// 被切换的壁纸 ID
+    pub wallpaper_id: i32,
+    /// 切换后的状态：true = 已收藏，false = 已取消收藏
+    pub favorited: bool,
+}
+
+impl EventPayload for FavoritesChangedPayload {
+    const EVENT_NAME: &'static str = "favorites-changed";
+}

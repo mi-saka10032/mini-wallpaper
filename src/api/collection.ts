@@ -26,5 +26,13 @@ export async function getCollectionWallpapers(collectionId: number): Promise<Wal
   return invoke(COMMANDS.GET_COLLECTION_WALLPAPERS, { collectionId });
 }
 
+/**
+ * 切换壁纸在内置「我喜欢」收藏夹中的收藏状态
+ * @returns 切换后的收藏状态：true = 已收藏，false = 已取消收藏
+ */
+export async function toggleFavorite(wallpaperId: number): Promise<boolean> {
+  return invoke(COMMANDS.TOGGLE_FAVORITE, { wallpaperId });
+}
+
 /** @deprecated 使用 getCollectionWallpapers 代替 */
 export const getWallpapers = getCollectionWallpapers;

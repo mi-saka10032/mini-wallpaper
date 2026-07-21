@@ -20,7 +20,7 @@ pub use wallpaper::{
 pub use collection::{
     add_wallpapers_to_collection, create_collection, delete_collection, get_collection_wallpapers,
     get_collections, remove_wallpapers_from_collection, rename_collection,
-    reorder_collection_wallpapers,
+    reorder_collection_wallpapers, toggle_favorite,
 };
 #[allow(unused_imports)]
 pub use monitor_config::{
@@ -66,6 +66,7 @@ macro_rules! all_handlers {
             $crate::commands::collection::add_wallpapers_to_collection,
             $crate::commands::collection::remove_wallpapers_from_collection,
             $crate::commands::collection::reorder_collection_wallpapers,
+            $crate::commands::collection::toggle_favorite,
             // monitor_config
             $crate::commands::monitor_config::get_monitor_configs,
             $crate::commands::monitor_config::get_monitor_config,

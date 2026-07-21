@@ -18,6 +18,7 @@ export const COMMANDS = {
   ADD_WALLPAPERS_TO_COLLECTION: "add_wallpapers_to_collection",
   REMOVE_WALLPAPERS_FROM_COLLECTION: "remove_wallpapers_from_collection",
   REORDER_COLLECTION_WALLPAPERS: "reorder_collection_wallpapers",
+  TOGGLE_FAVORITE: "toggle_favorite",
   // monitor_config
   GET_MONITOR_CONFIGS: "get_monitor_configs",
   GET_MONITOR_CONFIG: "get_monitor_config",
@@ -122,6 +123,11 @@ export interface AddWallpapersReq {
 export interface RemoveWallpapersReq {
   collectionId: number;
   wallpaperIds: number[];
+}
+
+/** 切换壁纸收藏状态请求（内置「我喜欢」收藏夹） */
+export interface ToggleFavoriteReq {
+  wallpaperId: number;
 }
 
 /** 重新排序收藏夹壁纸请求 */
@@ -274,6 +280,10 @@ export interface CommandMap {
   [COMMANDS.REORDER_COLLECTION_WALLPAPERS]: {
     params: { req: ReorderWallpapersReq };
     result: void;
+  };
+  [COMMANDS.TOGGLE_FAVORITE]: {
+    params: { req: ToggleFavoriteReq };
+    result: boolean;
   };
   [COMMANDS.GET_MONITOR_CONFIGS]: {
     params: Record<string, never>;

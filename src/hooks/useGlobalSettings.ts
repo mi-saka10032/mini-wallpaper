@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { isEnabled, enable, disable } from "@tauri-apps/plugin-autostart";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
-import { DEFAULT_SHORTCUTS } from "@/hooks/useShortcuts";
+import { DEFAULT_SHORTCUTS } from "@/constants/shortcuts";
 
 export function useGlobalSettings() {
   const updateSetting = useSettingStore((s) => s.updateSetting);
@@ -12,6 +12,7 @@ export function useGlobalSettings() {
   const shortcutPrev = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_PREV]) || DEFAULT_SHORTCUTS.prevWallpaper;
   const shortcutTogglePause = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_TOGGLE_PAUSE]) || DEFAULT_SHORTCUTS.togglePause;
   const shortcutOpenMain = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_OPEN_MAIN]) || DEFAULT_SHORTCUTS.openMain;
+  const shortcutToggleFavorite = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_TOGGLE_FAVORITE]) || DEFAULT_SHORTCUTS.toggleFavorite;
 
   const volume = Number(volumeStr ?? "0");
   const isMuted = volume === 0;
@@ -77,6 +78,7 @@ export function useGlobalSettings() {
     shortcutPrev,
     shortcutTogglePause,
     shortcutOpenMain,
+    shortcutToggleFavorite,
     updateSetting,
     handleVolumeChange,
     toggleMute,

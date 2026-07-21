@@ -52,6 +52,15 @@ impl Scheduler {
             setting_keys::DISPLAY_MODE => {
                 self.apply_display_mode_side_effect(value, monitor_id).await;
             }
+            setting_keys::SHORTCUT_NEXT_WALLPAPER
+            | setting_keys::SHORTCUT_PREV_WALLPAPER
+            | setting_keys::SHORTCUT_TOGGLE_PAUSE
+            | setting_keys::SHORTCUT_OPEN_MAIN
+            | setting_keys::SHORTCUT_TOGGLE_FAVORITE => {
+                // 键位已写入 DB，整组重注册使新键位即时生效、旧键位失效
+                crate::platform::global_shortcut::reregister_all(&self.app).await;
+                info!("[Scheduler] 快捷键 {} 变更，已触发重注册", key);
+            }
             _ => {}
         }
     }

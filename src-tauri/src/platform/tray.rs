@@ -9,6 +9,7 @@
 //! ▶ 下一张          → Action::Next
 //! ◀ 上一张          → Action::Prev
 //! ⏸ 暂停 / ▶ 恢复   → Action::TogglePause（文本动态切换）
+//! ❤ 收藏当前壁纸    → Action::ToggleFavorite
 //! ─── 分隔线 ───
 //! 🖥 显示主窗口      → Action::OpenMain
 //! ─── 分隔线 ───
@@ -35,6 +36,7 @@ use crate::runtime::Scheduler;
 const ID_NEXT: &str = "tray_next";
 const ID_PREV: &str = "tray_prev";
 const ID_TOGGLE_PAUSE: &str = "tray_toggle_pause";
+const ID_TOGGLE_FAVORITE: &str = "tray_toggle_favorite";
 const ID_OPEN_MAIN: &str = "tray_open_main";
 const ID_QUIT: &str = "tray_quit";
 
@@ -48,6 +50,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let next_i = MenuItem::with_id(app, ID_NEXT, "下一张壁纸", true, None::<&str>)?;
     let prev_i = MenuItem::with_id(app, ID_PREV, "上一张壁纸", true, None::<&str>)?;
     let pause_i = MenuItem::with_id(app, ID_TOGGLE_PAUSE, "暂停轮播", true, None::<&str>)?;
+    let favorite_i = MenuItem::with_id(app, ID_TOGGLE_FAVORITE, "收藏当前壁纸", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let open_main_i = MenuItem::with_id(app, ID_OPEN_MAIN, "显示主窗口", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -55,7 +58,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let tray_menu = Menu::with_items(
         app,
-        &[&next_i, &prev_i, &pause_i, &sep1, &open_main_i, &sep2, &quit_i],
+        &[&next_i, &prev_i, &pause_i, &favorite_i, &sep1, &open_main_i, &sep2, &quit_i],
     )?;
 
     // ===== 构建托盘 =====
@@ -73,6 +76,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 ID_NEXT => Action::Next,
                 ID_PREV => Action::Prev,
                 ID_TOGGLE_PAUSE => Action::TogglePause,
+                ID_TOGGLE_FAVORITE => Action::ToggleFavorite,
                 ID_OPEN_MAIN => Action::OpenMain,
                 ID_QUIT => Action::Quit,
                 _ => return,

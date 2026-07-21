@@ -8,7 +8,7 @@ use crate::ctx::AppContext;
 use crate::dto::collection_dto::{
     AddWallpapersRequest, CreateCollectionRequest, DeleteCollectionRequest,
     GetCollectionWallpapersRequest, RemoveWallpapersRequest, RenameCollectionRequest,
-    ReorderWallpapersRequest,
+    ReorderWallpapersRequest, ToggleFavoriteRequest,
 };
 use crate::dto::Validated;
 use crate::entities::{collection, wallpaper};
@@ -129,4 +129,21 @@ pub async fn reorder_collection_wallpapers(
 ) -> CommandResult<()> {
     let req = req.into_inner();
     Ok(collection_service::reorder_wallpapers(&ctx.db, req.collection_id, req.wallpaper_ids).await?)
+}
+
+/// 切换壁纸在内置「我喜欢」收藏夹中的收藏状态
+///
+/// 供前端红心按钮 / 右键菜单调用（作用于卡片壁纸）。与全局快捷键 / 托盘的
+/// ToggleFavorite（作用于当前显示壁纸）共享 `Scheduler::toggle_favorite`
+/// 单一入口：动态定位内置收藏夹、幂等 add/remove、移除联动、事件广播。
+///
+/// 返回切换后的收藏状态：`true` = 已收藏，`false` = 已取消收藏。
+#[tauri::command]
+pub async fn toggle_favorite(
+    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    req: Validated<ToggleFavoriteRequest>,
+) -> CommandResult<bool> {
+    let req = req.into_inner();
+    let mut sched = scheduler.lock().await;
+    Ok(sched.toggle_favorite(req.wallpaper_id).await?)
 }

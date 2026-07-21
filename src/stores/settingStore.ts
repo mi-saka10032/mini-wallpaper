@@ -14,6 +14,7 @@ export const SETTING_KEYS = {
   SHORTCUT_PREV: "shortcut_prev_wallpaper",
   SHORTCUT_TOGGLE_PAUSE: "shortcut_toggle_pause",
   SHORTCUT_OPEN_MAIN: "shortcut_open_main",
+  SHORTCUT_TOGGLE_FAVORITE: "shortcut_toggle_favorite",
 } as const;
 
 interface SettingState {

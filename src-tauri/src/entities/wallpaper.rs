@@ -16,7 +16,6 @@ pub struct Model {
     pub duration: Option<f64>,
     pub file_size: Option<i64>,
     pub tags: Option<String>,
-    pub is_favorite: i32,
     pub play_count: i32,
     pub created_at: String,
     pub updated_at: String,

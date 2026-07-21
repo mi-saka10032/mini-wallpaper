@@ -59,7 +59,6 @@ export interface Wallpaper {
   duration: number | null;
   file_size: number | null;
   tags: string | null;
-  is_favorite: number;
   play_count: number;
   created_at: string;
   updated_at: string;

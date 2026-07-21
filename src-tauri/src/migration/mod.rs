@@ -4,6 +4,7 @@ pub mod m003_create_collection_wallpapers;
 pub mod m004_create_monitor_configs;
 pub mod m005_create_app_settings;
 pub mod m006_seed_builtin_collections;
+pub mod m007_drop_is_favorite;
 
 use sea_orm_migration::prelude::*;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m004_create_monitor_configs::Migration),
             Box::new(m005_create_app_settings::Migration),
             Box::new(m006_seed_builtin_collections::Migration),
+            Box::new(m007_drop_is_favorite::Migration),
         ]
     }
 }

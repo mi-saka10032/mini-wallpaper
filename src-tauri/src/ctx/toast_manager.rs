@@ -9,7 +9,7 @@
 //!
 //! ## 窗口属性
 //! - always-on-top、skip-taskbar、no-focus、transparent、无边框
-//! - 出现在主显示器右下角，多个 Toast 从下往上堆叠
+//! - 出现在**用户当前活跃显示器**右下角，多个 Toast 从下往上堆叠
 //!
 //! ## Vec 索引与位置关系
 //! - Vec 索引越大 → 越新 → offsetY 越小（越靠近底部/任务栏）
@@ -56,6 +56,13 @@ pub struct ToastManager {
     app_handle: AppHandle,
     /// 当前存活的 Toast 条目列表（索引越大越新，越靠近底部）
     toasts: Vec<ToastEntry>,
+    /// 当前 Toast 堆栈锚定的基准位置（逻辑像素，右下角）
+    ///
+    /// 仅在"从空堆栈创建第一个 Toast"时探测活跃显示器并写入，
+    /// 堆栈存活期间复用该值；堆栈清空后重置为 `None`。
+    /// 这样可避免用户在 Toast 显示过程中切换焦点屏时，
+    /// 后续 `recalculate_positions` 把仍在显示的 Toast 整体挪到另一块屏。
+    anchor: Option<(f64, f64)>,
     /// 自增计数器，用于生成唯一 label
     counter: u64,
 }
@@ -66,6 +73,7 @@ impl ToastManager {
         Self {
             app_handle,
             toasts: Vec::new(),
+            anchor: None,
             counter: 0,
         }
     }
@@ -106,8 +114,14 @@ impl ToastManager {
             action, encoded_message, label, TOAST_DURATION_MS
         );
 
+        // 确立堆栈锚点：仅当堆栈为空（本次是第一个 Toast）时重新探测活跃显示器，
+        // 否则沿用既有锚点，保证同一批 Toast 始终待在同一块屏上。
+        if self.toasts.is_empty() || self.anchor.is_none() {
+            self.anchor = Some(self.get_base_position());
+        }
+
         // 计算初始位置（逻辑像素，与 inner_size 同坐标系），创建后统一重排
-        let (base_x, base_y) = self.get_base_position();
+        let (base_x, base_y) = self.anchor.unwrap_or_else(|| self.get_base_position());
         let index = self.toasts.len(); // 新 Toast 将在末尾
         let y = base_y - ((index as f64 + 1.0) * (TOAST_HEIGHT as f64 + TOAST_GAP as f64));
 
@@ -183,6 +197,10 @@ impl ToastManager {
         if let Some(idx) = removed {
             self.toasts.remove(idx);
             self.destroy_window(label);
+            // 堆栈清空后释放锚点，使下一批 Toast 重新探测当前活跃显示器
+            if self.toasts.is_empty() {
+                self.anchor = None;
+            }
             // 方案 B：重排剩余窗口位置（下移填补空位）
             self.recalculate_positions();
             info!("[ToastManager] 关闭 Toast: label='{}', 剩余 {} 个", label, self.toasts.len());
@@ -199,6 +217,7 @@ impl ToastManager {
             self.destroy_window(label);
         }
         self.toasts.clear();
+        self.anchor = None;
     }
 
     /// 重新计算所有存活 Toast 窗口的位置（方案 B 核心）
@@ -208,7 +227,8 @@ impl ToastManager {
     /// - 最新的 Toast 在最底部，旧的往上堆叠
     /// - 关闭中间某个后，上方的 Toast 下移填补
     fn recalculate_positions(&self) {
-        let (base_x, base_y) = self.get_base_position();
+        // 复用堆栈锚点，避免重排时重新探测活跃屏导致跨屏跳动
+        let (base_x, base_y) = self.anchor.unwrap_or_else(|| self.get_base_position());
         let total = self.toasts.len();
 
         for (i, entry) in self.toasts.iter().enumerate() {
@@ -225,7 +245,7 @@ impl ToastManager {
         }
     }
 
-    /// 获取 Toast 窗口的基准位置（主显示器右下角），单位为**逻辑像素**
+    /// 获取 Toast 窗口的基准位置（**用户当前活跃显示器**右下角），单位为**逻辑像素**
     ///
     /// 统一使用逻辑像素是为了和 `inner_size` 保持同一坐标系：
     /// `inner_size` 接受逻辑尺寸并由 Tauri 内部乘以 scale_factor，
@@ -234,23 +254,36 @@ impl ToastManager {
     /// 让 TOAST_WIDTH / TOAST_MARGIN_* / TOAST_HEIGHT / TOAST_GAP 这些
     /// 常量全部按逻辑像素参与运算，缩放屏上才不会出现边距偏大或堆叠重叠。
     ///
+    /// ## 为什么不能用 `primary_monitor()`
+    /// 多屏场景下 Toast 必须弹在用户正在看的那块屏，否则用户在副屏操作
+    /// prev/next 时，提示会跑到主屏而完全看不到。这里复用
+    /// `monitor_geometry::active_monitor()`（前台窗口 → 鼠标 → 主屏三级 fallback），
+    /// 与 `action_dispatch` 解析"动作作用于哪块屏"的口径保持一致，
+    /// 保证"哪块屏换了壁纸"与"提示弹在哪块屏"始终同屏。
+    ///
     /// 返回 (base_x, base_y)：
     /// - base_x: 屏幕右边缘 - Toast 宽度 - 右边距
     /// - base_y: 屏幕底部边缘 - 底部边距（任务栏上方）
     fn get_base_position(&self) -> (f64, f64) {
-        // 尝试获取主显示器信息
-        if let Some(monitor) = self.app_handle.primary_monitor().ok().flatten() {
-            let size = monitor.size();
-            let position = monitor.position();
-            let scale = monitor.scale_factor();
-
+        // 优先使用活跃显示器；失败时回落到 Tauri 主显示器
+        if let Some((left, top, width, height, scale)) = self.resolve_active_monitor_rect() {
             // 物理像素 → 逻辑像素
-            let logical = size.to_logical::<f64>(scale);
-            let logical_pos = position.to_logical::<f64>(scale);
-
             let base_x =
-                logical_pos.x + logical.width - TOAST_WIDTH as f64 - TOAST_MARGIN_RIGHT as f64;
-            let base_y = logical_pos.y + logical.height - TOAST_MARGIN_BOTTOM as f64;
+                (left as f64 + width as f64) / scale - TOAST_WIDTH as f64 - TOAST_MARGIN_RIGHT as f64;
+            let base_y = (top as f64 + height as f64) / scale - TOAST_MARGIN_BOTTOM as f64;
+            return (base_x, base_y);
+        }
+
+        if let Some(monitor) = self.app_handle.primary_monitor().ok().flatten() {
+            let scale = monitor.scale_factor();
+            // 同样使用 work_area（已排除任务栏），与活跃屏分支口径一致
+            let work = monitor.work_area();
+
+            let base_x = (work.position.x as f64 + work.size.width as f64) / scale
+                - TOAST_WIDTH as f64
+                - TOAST_MARGIN_RIGHT as f64;
+            let base_y =
+                (work.position.y as f64 + work.size.height as f64) / scale - TOAST_MARGIN_BOTTOM as f64;
 
             (base_x, base_y)
         } else {
@@ -259,6 +292,56 @@ impl ToastManager {
             let base_y = 1080.0 - TOAST_MARGIN_BOTTOM as f64;
             (base_x, base_y)
         }
+    }
+
+    /// 解析活跃显示器的**工作区**物理矩形与缩放比例
+    ///
+    /// 返回 `(left, top, width, height, scale_factor)`，全部为物理像素 + 该屏 scale。
+    ///
+    /// 使用工作区（`rcWork`）而非显示器全尺寸（`rcMonitor`）：后者包含任务栏区域，
+    /// 据此计算右下角会让 Toast 压在任务栏下方被遮挡。
+    ///
+    /// `active_monitor()` 只给出 Win32 物理矩形，不含 scale_factor，而把物理坐标
+    /// 换算成逻辑坐标必须用**该屏自己的** scale（混合 DPI 下各屏 scale 可能不同）。
+    /// 因此这里用 `device_name` 与 Tauri `available_monitors()` 的 `name` 对齐取 scale
+    /// （两者同源，均为 `\\.\DISPLAYn`）；匹配不到时退化为主屏 scale，
+    /// 避免因拿不到 scale 就整体放弃活跃屏定位。
+    #[cfg(target_os = "windows")]
+    fn resolve_active_monitor_rect(&self) -> Option<(i32, i32, i32, i32, f64)> {
+        let active = crate::platform::windows::monitor_geometry::active_monitor()?;
+
+        let scale = self
+            .app_handle
+            .available_monitors()
+            .ok()
+            .and_then(|monitors| {
+                monitors
+                    .into_iter()
+                    .find(|m| m.name().map(|n| n.as_str() == active.device_name).unwrap_or(false))
+                    .map(|m| m.scale_factor())
+            })
+            .or_else(|| {
+                self.app_handle
+                    .primary_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|m| m.scale_factor())
+            })
+            .unwrap_or(1.0);
+
+        Some((
+            active.work_left,
+            active.work_top,
+            active.work_width(),
+            active.work_height(),
+            scale,
+        ))
+    }
+
+    /// 非 Windows 平台占位：无活跃显示器探测能力，交由主显示器分支兜底
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_active_monitor_rect(&self) -> Option<(i32, i32, i32, i32, f64)> {
+        None
     }
 
     /// 销毁指定 label 的窗口实例

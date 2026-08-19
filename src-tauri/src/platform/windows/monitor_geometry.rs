@@ -31,6 +31,18 @@ pub struct MonitorRect {
     pub right: i32,
     /// 显示器物理矩形 - 下
     pub bottom: i32,
+    /// 工作区矩形（`rcWork`，已排除任务栏/停靠工具栏）- 左
+    ///
+    /// 与 `left`/`top`/`right`/`bottom`（`rcMonitor`，显示器全尺寸）的区别：
+    /// 全屏判定必须用 rcMonitor，而"把窗口摆在屏幕角落"这类定位应当用 rcWork，
+    /// 否则窗口会被任务栏遮住。两者在无任务栏的副屏上通常相等。
+    pub work_left: i32,
+    /// 工作区矩形 - 上
+    pub work_top: i32,
+    /// 工作区矩形 - 右
+    pub work_right: i32,
+    /// 工作区矩形 - 下
+    pub work_bottom: i32,
 }
 
 impl MonitorRect {
@@ -44,6 +56,18 @@ impl MonitorRect {
     #[inline]
     pub fn height(&self) -> i32 {
         self.bottom - self.top
+    }
+
+    /// 工作区宽度（物理像素，已排除任务栏）
+    #[inline]
+    pub fn work_width(&self) -> i32 {
+        self.work_right - self.work_left
+    }
+
+    /// 工作区高度（物理像素，已排除任务栏）
+    #[inline]
+    pub fn work_height(&self) -> i32 {
+        self.work_bottom - self.work_top
     }
 }
 
@@ -198,12 +222,17 @@ mod imp {
         let device_name = String::from_utf16_lossy(&info.szDevice[..len]);
 
         let rect = info.monitorInfo.rcMonitor;
+        let work = info.monitorInfo.rcWork;
         Some(MonitorRect {
             device_name,
             left: rect.left,
             top: rect.top,
             right: rect.right,
             bottom: rect.bottom,
+            work_left: work.left,
+            work_top: work.top,
+            work_right: work.right,
+            work_bottom: work.bottom,
         })
     }
 

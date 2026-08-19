@@ -57,6 +57,8 @@ export function useManageMode({
     if (!isCollectionView && pendingDeletionsRef.current.length > 0) {
       try {
         await deleteWallpapers(pendingDeletionsRef.current);
+        // 与 handleDeleteConfirm 同理：软删除影响收藏夹命中集，需刷新当前视图
+        onCollectionChanged?.();
       } catch (e) {
         console.error("[exitManageMode] delete wallpapers failed:", e);
       }
@@ -125,6 +127,9 @@ export function useManageMode({
       onCollectionChanged?.();
     } else {
       await deleteWallpapers(pendingDeleteIds);
+      // 软删除会改变收藏夹命中集（智能收藏夹实时求值、手动收藏夹过滤已删成员），
+      // 若当前正停留在收藏夹视图，需重新拉取，否则已入回收站的壁纸仍留在网格上
+      onCollectionChanged?.();
     }
     setPendingDeleteIds([]);
     setDeleteDialogOpen(false);

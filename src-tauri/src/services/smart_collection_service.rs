@@ -40,8 +40,18 @@ fn load_rule(model: &collection::Model) -> Result<SmartRule> {
 /// 本模块所有查询都必须经由此函数获得基础条件，而非直接调用
 /// `rule.build_condition()`——回收站内的壁纸不应出现在任何智能收藏夹的
 /// 命中集与命中数中（含轮播游标求值），这是单一收敛点。
+///
+/// ## 为何必须包一层 `Condition::all()`
+///
+/// 规则自身的条件在 `combinator = or` 时是 `Condition::any()`。若直接
+/// `rule.build_condition()?.add(not_deleted())`，`deleted_at IS NULL` 会被并入
+/// 同一个 OR 组，退化成 `(A OR B OR deleted_at IS NULL)`——过滤形同虚设，
+/// 且会把回收站外任意壁纸误纳入命中集。此处显式建立顶层 AND：
+/// `(规则条件) AND (deleted_at IS NULL)`，与 combinator 取值无关。
 fn rule_condition(rule: &SmartRule) -> Result<Condition> {
-    Ok(rule.build_condition()?.add(wallpaper_service::not_deleted()))
+    Ok(Condition::all()
+        .add(rule.build_condition()?)
+        .add(wallpaper_service::not_deleted()))
 }
 
 /// 求值命中的完整壁纸列表（按 id 升序）

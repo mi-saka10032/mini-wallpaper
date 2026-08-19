@@ -36,3 +36,22 @@ export async function toggleFavorite(wallpaperId: number): Promise<boolean> {
 
 /** @deprecated 使用 getCollectionWallpapers 代替 */
 export const getWallpapers = getCollectionWallpapers;
+
+/** 创建智能收藏夹（规则经后端白名单校验） */
+export async function createSmart(name: string, ruleJson: string): Promise<Collection> {
+  return invoke(COMMANDS.CREATE_SMART_COLLECTION, { name, ruleJson });
+}
+
+/** 更新智能收藏夹规则（name 传 null 则不改名） */
+export async function updateSmart(
+  id: number,
+  ruleJson: string,
+  name?: string | null
+): Promise<Collection> {
+  return invoke(COMMANDS.UPDATE_SMART_COLLECTION, { id, name: name ?? null, ruleJson });
+}
+
+/** 预览一段规则 JSON 的当前命中数（未落库） */
+export async function previewSmartCount(ruleJson: string): Promise<number> {
+  return invoke(COMMANDS.PREVIEW_SMART_COUNT, { ruleJson });
+}

@@ -84,3 +84,39 @@ pub struct ToggleFavoriteRequest {
     #[garde(range(min = 1))]
     pub wallpaper_id: i32,
 }
+
+/// 创建智能收藏夹请求
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSmartCollectionRequest {
+    /// 收藏夹名称：trim 后 1~32 个字符
+    #[garde(length(chars, min = 1, max = 32))]
+    pub name: String,
+    /// 规则 JSON（结构化 schema，后端二次白名单校验）：非空
+    #[garde(length(min = 1))]
+    pub rule_json: String,
+}
+
+/// 更新智能收藏夹规则请求
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSmartCollectionRequest {
+    /// 收藏夹 ID：正整数
+    #[garde(range(min = 1))]
+    pub id: i32,
+    /// 新名称（可选，为空则不改名）
+    #[garde(inner(length(chars, min = 1, max = 32)))]
+    pub name: Option<String>,
+    /// 规则 JSON：非空
+    #[garde(length(min = 1))]
+    pub rule_json: String,
+}
+
+/// 预览规则命中数请求（未落库）
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSmartCountRequest {
+    /// 规则 JSON：非空
+    #[garde(length(min = 1))]
+    pub rule_json: String,
+}

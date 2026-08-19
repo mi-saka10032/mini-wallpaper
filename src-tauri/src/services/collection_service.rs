@@ -53,6 +53,80 @@ pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection:
         .ok_or_else(|| anyhow::anyhow!("Failed to find created collection"))
 }
 
+/// 创建智能收藏夹
+///
+/// `rule_json` 必须先通过规则引擎校验（白名单 + 至少一条规则）方可入库，
+/// 绝不存裸类 SQL。成员不物化，由 `rule_json` 实时求值。
+pub async fn create_smart(
+    db: &DatabaseConnection,
+    name: String,
+    rule_json: String,
+) -> Result<collection::Model> {
+    // 校验规则合法性（非法直接拒绝，不落库）
+    crate::services::smart_rule::SmartRule::parse_and_validate(&rule_json)?;
+
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let model = collection::ActiveModel {
+        name: Set(name),
+        sort_order: Set(0),
+        created_at: Set(now.clone()),
+        updated_at: Set(now),
+        is_builtin: Set(0),
+        kind: Set("smart".to_string()),
+        rule_json: Set(Some(rule_json)),
+        ..Default::default()
+    };
+    let result = collection::Entity::insert(model).exec(db).await?;
+
+    collection::Entity::find_by_id(result.last_insert_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Failed to find created smart collection"))
+}
+
+/// 更新智能收藏夹的规则（可同时改名）
+///
+/// 守卫：目标必须是 smart 收藏夹；新规则须通过白名单校验。
+pub async fn update_smart(
+    db: &DatabaseConnection,
+    id: i32,
+    name: Option<String>,
+    rule_json: String,
+) -> Result<collection::Model> {
+    let existing = collection::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Collection not found"))?;
+    if existing.kind != "smart" {
+        return Err(anyhow::anyhow!("目标不是智能收藏夹，不能更新规则"));
+    }
+
+    crate::services::smart_rule::SmartRule::parse_and_validate(&rule_json)?;
+
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let mut model = collection::ActiveModel {
+        id: Set(id),
+        rule_json: Set(Some(rule_json)),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    if let Some(n) = name {
+        model.name = Set(n);
+    }
+    collection::Entity::update(model).exec(db).await?;
+
+    collection::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Collection not found"))
+}
+
+/// 预览一段规则 JSON 的当前命中数（未落库，供创建 / 编辑时实时提示）
+pub async fn preview_smart_count(db: &DatabaseConnection, rule_json: String) -> Result<u64> {
+    let rule = crate::services::smart_rule::SmartRule::parse_and_validate(&rule_json)?;
+    crate::services::smart_collection_service::count_matched_by_rule(db, &rule).await
+}
+
 /// 重命名收藏夹
 ///
 /// 内置收藏夹（is_builtin = 1）不可重命名，会返回错误。
@@ -120,6 +194,13 @@ pub async fn get_wallpapers(
     db: &DatabaseConnection,
     collection_id: i32,
 ) -> Result<Vec<wallpaper::Model>> {
+    // 智能收藏夹：委托规则引擎实时求值（不物化成员）
+    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+        if model.kind == "smart" {
+            return crate::services::smart_collection_service::matched_wallpapers(db, &model).await;
+        }
+    }
+
     // 通过关联表查询
     let cw_list = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
@@ -235,6 +316,12 @@ pub async fn remove_wallpapers(
 
 /// 获取收藏夹内的壁纸数量
 pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Result<u64> {
+    // 智能收藏夹：命中数由规则参数化 COUNT 求值
+    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+        if model.kind == "smart" {
+            return crate::services::smart_collection_service::count_matched(db, &model).await;
+        }
+    }
     let count = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
         .count(db)
@@ -371,6 +458,19 @@ pub async fn next_wallpaper_id(
     current_wallpaper_id: Option<i32>,
     play_mode: &str,
 ) -> Result<Option<i32>> {
+    // 智能收藏夹：下一张由规则命中集求值（sequential 走 id 游标 / random 走 RANDOM()）
+    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+        if model.kind == "smart" {
+            return crate::services::smart_collection_service::next_matched_id(
+                db,
+                &model,
+                current_wallpaper_id,
+                play_mode,
+            )
+            .await;
+        }
+    }
+
     match play_mode {
         "random" => {
             let result = find_random_wallpaper(db, collection_id, current_wallpaper_id).await?;

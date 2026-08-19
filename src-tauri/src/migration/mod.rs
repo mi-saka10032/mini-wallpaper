@@ -5,6 +5,8 @@ pub mod m004_create_monitor_configs;
 pub mod m005_create_app_settings;
 pub mod m006_seed_builtin_collections;
 pub mod m007_drop_is_favorite;
+pub mod m008_create_tag_system;
+pub mod m009_add_smart_collection;
 
 use sea_orm_migration::prelude::*;
 
@@ -21,6 +23,8 @@ impl MigratorTrait for Migrator {
             Box::new(m005_create_app_settings::Migration),
             Box::new(m006_seed_builtin_collections::Migration),
             Box::new(m007_drop_is_favorite::Migration),
+            Box::new(m008_create_tag_system::Migration),
+            Box::new(m009_add_smart_collection::Migration),
         ]
     }
 }

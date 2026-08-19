@@ -11,6 +11,7 @@ import {
   FolderPlus,
   Monitor,
   Star,
+  Tag as TagIcon,
   Trash2,
   Unlink,
   Heart,
@@ -22,6 +23,7 @@ import { useCollectionStore } from "@/stores/collectionStore";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useFavoritesStore } from "@/stores/favoritesStore";
+import { TagEditorDialog } from "@/components/wallpaper/TagEditorDialog";
 import { cn } from "@/lib/utils";
 
 // ============ Context 类型定义 ============
@@ -70,6 +72,10 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
   const [open, setOpen] = useState(false);
   const [payload, setPayload] = useState<MenuOpenPayload | null>(null);
   const [subMenu, setSubMenu] = useState<"setAs" | "addTo" | null>(null);
+
+  // 单张标签编辑对话框状态
+  const [tagDialogOpen, setTagDialogOpen] = useState(false);
+  const [tagTargetId, setTagTargetId] = useState<number | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
   const subMenuRef = useRef<HTMLDivElement>(null);
@@ -221,6 +227,14 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
     closeMenu();
   }, [payload, toggleFavorite, closeMenu]);
 
+  // 打开单张标签编辑
+  const handleEditTags = useCallback(() => {
+    if (!payload) return;
+    setTagTargetId(payload.wallpaper.id);
+    setTagDialogOpen(true);
+    closeMenu();
+  }, [payload, closeMenu]);
+
   // 计算菜单位置（确保不超出视口，且在鼠标右侧弹出）
   const menuStyle = useMemo((): React.CSSProperties => {
     if (!payload) return { display: "none" };
@@ -334,6 +348,20 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
                 : t("main.favorite")}
             </button>
 
+            {/* 编辑标签（单张，覆盖式） */}
+            <button
+              type="button"
+              className={cn(
+                "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none",
+                "hover:bg-accent hover:text-accent-foreground",
+              )}
+              onMouseEnter={() => setSubMenu(null)}
+              onClick={handleEditTags}
+            >
+              <TagIcon className="size-4 text-muted-foreground" />
+              {t("tags.editTitle")}
+            </button>
+
             {/* 添加到收藏夹（仅全部壁纸视图） */}
             {!payload.isCollectionView && (
               <button
@@ -440,6 +468,19 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
             </div>
           )}
         </>
+      )}
+
+      {/* 单张标签编辑对话框（全局单例） */}
+      {tagTargetId != null && (
+        <TagEditorDialog
+          open={tagDialogOpen}
+          onOpenChange={(v) => {
+            setTagDialogOpen(v);
+            if (!v) setTagTargetId(null);
+          }}
+          mode="single"
+          wallpaperIds={[tagTargetId]}
+        />
       )}
     </WallpaperCardContextMenuContext.Provider>
   );

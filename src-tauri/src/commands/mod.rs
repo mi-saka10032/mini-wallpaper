@@ -5,6 +5,7 @@ pub mod error;
 pub mod fullscreen;
 pub mod monitor_config;
 pub mod shortcut;
+pub mod tag;
 pub mod toast;
 pub mod wallpaper;
 pub mod wallpaper_window;
@@ -18,9 +19,10 @@ pub use wallpaper::{
 };
 #[allow(unused_imports)]
 pub use collection::{
-    add_wallpapers_to_collection, create_collection, delete_collection, get_collection_wallpapers,
-    get_collections, remove_wallpapers_from_collection, rename_collection,
-    reorder_collection_wallpapers, toggle_favorite,
+    add_wallpapers_to_collection, create_collection, create_smart_collection, delete_collection,
+    get_collection_wallpapers, get_collections, preview_smart_count,
+    remove_wallpapers_from_collection, rename_collection, reorder_collection_wallpapers,
+    toggle_favorite, update_smart_collection,
 };
 #[allow(unused_imports)]
 pub use monitor_config::{
@@ -44,6 +46,11 @@ pub use wallpaper_window::{
 };
 #[allow(unused_imports)]
 pub use toast::close_toast_window;
+#[allow(unused_imports)]
+pub use tag::{
+    delete_tag, get_tags, get_wallpaper_tags, rename_tag, set_wallpaper_tags, tag_wallpapers,
+    untag_wallpapers,
+};
 
 /// 聚合所有 command，供 lib.rs 一行调用
 macro_rules! all_handlers {
@@ -67,6 +74,9 @@ macro_rules! all_handlers {
             $crate::commands::collection::remove_wallpapers_from_collection,
             $crate::commands::collection::reorder_collection_wallpapers,
             $crate::commands::collection::toggle_favorite,
+            $crate::commands::collection::create_smart_collection,
+            $crate::commands::collection::update_smart_collection,
+            $crate::commands::collection::preview_smart_count,
             // monitor_config
             $crate::commands::monitor_config::get_monitor_configs,
             $crate::commands::monitor_config::get_monitor_config,
@@ -96,6 +106,14 @@ macro_rules! all_handlers {
             $crate::commands::wallpaper_window::get_active_wallpaper_windows,
             // toast
             $crate::commands::toast::close_toast_window,
+            // tag
+            $crate::commands::tag::get_tags,
+            $crate::commands::tag::get_wallpaper_tags,
+            $crate::commands::tag::tag_wallpapers,
+            $crate::commands::tag::untag_wallpapers,
+            $crate::commands::tag::set_wallpaper_tags,
+            $crate::commands::tag::rename_tag,
+            $crate::commands::tag::delete_tag,
         ]
     };
 }

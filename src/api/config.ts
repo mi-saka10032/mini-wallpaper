@@ -14,6 +14,17 @@ export const COMMANDS = {
   RENAME_COLLECTION: "rename_collection",
   DELETE_COLLECTION: "delete_collection",
   GET_COLLECTION_WALLPAPERS: "get_collection_wallpapers",
+  CREATE_SMART_COLLECTION: "create_smart_collection",
+  UPDATE_SMART_COLLECTION: "update_smart_collection",
+  PREVIEW_SMART_COUNT: "preview_smart_count",
+  // tag
+  GET_TAGS: "get_tags",
+  GET_WALLPAPER_TAGS: "get_wallpaper_tags",
+  TAG_WALLPAPERS: "tag_wallpapers",
+  UNTAG_WALLPAPERS: "untag_wallpapers",
+  SET_WALLPAPER_TAGS: "set_wallpaper_tags",
+  RENAME_TAG: "rename_tag",
+  DELETE_TAG: "delete_tag",
   // collection ↔ wallpaper
   ADD_WALLPAPERS_TO_COLLECTION: "add_wallpapers_to_collection",
   REMOVE_WALLPAPERS_FROM_COLLECTION: "remove_wallpapers_from_collection",
@@ -59,10 +70,25 @@ export interface Wallpaper {
   height: number | null;
   duration: number | null;
   file_size: number | null;
-  tags: string | null;
   play_count: number;
   created_at: string;
   updated_at: string;
+}
+
+/** 标签模型 */
+export interface Tag {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
+/** 标签及引用计数（管理 UI 用） */
+export interface TagWithCount {
+  id: number;
+  name: string;
+  createdAt: string;
+  /** 被多少张壁纸引用 */
+  wallpaperCount: number;
 }
 
 /** 收藏夹模型 */
@@ -74,6 +100,10 @@ export interface Collection {
   updated_at: string;
   /** 是否系统内置（1 = 内置「我喜欢」，不可删除/重命名；0 = 用户自建） */
   is_builtin: number;
+  /** 收藏夹类型：manual（手动）/ smart（智能收藏夹） */
+  kind: "manual" | "smart";
+  /** 智能收藏夹规则 JSON（手动收藏夹为 null） */
+  rule_json: string | null;
 }
 
 /** 显示器配置模型 */
@@ -128,6 +158,89 @@ export interface RemoveWallpapersReq {
 /** 切换壁纸收藏状态请求（内置「我喜欢」收藏夹） */
 export interface ToggleFavoriteReq {
   wallpaperId: number;
+}
+
+// ---------- 智能收藏夹规则 schema（与后端 smart_rule.rs 对齐）----------
+
+/** 规则组合子 */
+export type RuleCombinator = "and" | "or";
+
+/** 规则字段白名单 */
+export type RuleField =
+  | "tag"
+  | "type"
+  | "width"
+  | "height"
+  | "orientation"
+  | "created_at"
+  | "file_size";
+
+/** 单条规则：字段 + 操作符 + 值（值类型随 field/op 变化） */
+export interface RuleItem {
+  field: RuleField;
+  op: string;
+  value: unknown;
+}
+
+/** 智能收藏夹规则顶层结构 */
+export interface SmartRule {
+  version?: number;
+  combinator: RuleCombinator;
+  rules: RuleItem[];
+}
+
+/** 创建智能收藏夹请求 */
+export interface CreateSmartCollectionReq {
+  name: string;
+  ruleJson: string;
+}
+
+/** 更新智能收藏夹请求 */
+export interface UpdateSmartCollectionReq {
+  id: number;
+  name?: string | null;
+  ruleJson: string;
+}
+
+/** 预览规则命中数请求 */
+export interface PreviewSmartCountReq {
+  ruleJson: string;
+}
+
+// ---------- 标签请求 ----------
+
+/** 给一批壁纸打一批标签 */
+export interface TagWallpapersReq {
+  wallpaperIds: number[];
+  tagNames: string[];
+}
+
+/** 从一批壁纸移除一批标签（按 id） */
+export interface UntagWallpapersReq {
+  wallpaperIds: number[];
+  tagIds: number[];
+}
+
+/** 覆盖式设置单张壁纸标签集合 */
+export interface SetWallpaperTagsReq {
+  wallpaperId: number;
+  tagNames: string[];
+}
+
+/** 查某壁纸标签 */
+export interface GetWallpaperTagsReq {
+  wallpaperId: number;
+}
+
+/** 重命名标签 */
+export interface RenameTagReq {
+  id: number;
+  name: string;
+}
+
+/** 删除标签 */
+export interface DeleteTagReq {
+  id: number;
 }
 
 /** 重新排序收藏夹壁纸请求 */
@@ -360,5 +473,45 @@ export interface CommandMap {
   [COMMANDS.GET_ACTIVE_WALLPAPER_WINDOWS]: {
     params: Record<string, never>;
     result: string[];
+  };
+  [COMMANDS.CREATE_SMART_COLLECTION]: {
+    params: { req: CreateSmartCollectionReq };
+    result: Collection;
+  };
+  [COMMANDS.UPDATE_SMART_COLLECTION]: {
+    params: { req: UpdateSmartCollectionReq };
+    result: Collection;
+  };
+  [COMMANDS.PREVIEW_SMART_COUNT]: {
+    params: { req: PreviewSmartCountReq };
+    result: number;
+  };
+  [COMMANDS.GET_TAGS]: {
+    params: Record<string, never>;
+    result: TagWithCount[];
+  };
+  [COMMANDS.GET_WALLPAPER_TAGS]: {
+    params: { req: GetWallpaperTagsReq };
+    result: Tag[];
+  };
+  [COMMANDS.TAG_WALLPAPERS]: {
+    params: { req: TagWallpapersReq };
+    result: number;
+  };
+  [COMMANDS.UNTAG_WALLPAPERS]: {
+    params: { req: UntagWallpapersReq };
+    result: number;
+  };
+  [COMMANDS.SET_WALLPAPER_TAGS]: {
+    params: { req: SetWallpaperTagsReq };
+    result: Tag[];
+  };
+  [COMMANDS.RENAME_TAG]: {
+    params: { req: RenameTagReq };
+    result: Tag;
+  };
+  [COMMANDS.DELETE_TAG]: {
+    params: { req: DeleteTagReq };
+    result: void;
   };
 }

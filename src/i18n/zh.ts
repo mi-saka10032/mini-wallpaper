@@ -36,6 +36,9 @@ export default {
     deleteConfirmDesc: "确定要删除收藏夹「{{name}}」吗？收藏夹内的壁纸不会被删除。",
     /** 内置收藏夹的展示名（数据层名称由 m006 迁移种入为「我喜欢」，此处仅作前端显示回退） */
     builtinFavorites: "我喜欢",
+    newManualCollection: "新建收藏夹",
+    newSmartCollection: "新建智能收藏夹",
+    editRule: "编辑规则",
   },
 
   // MainContent
@@ -171,6 +174,102 @@ export default {
     noResults: "没有找到匹配的壁纸",
     empty: "暂无壁纸",
     alreadyAdded: "已添加",
+  },
+
+  // 标签系统
+  tags: {
+    editTitle: "编辑标签",
+    editDesc: "为该壁纸设置标签，回车或逗号确认，可添加多个",
+    editHint: "保存后将覆盖该壁纸的现有标签",
+    inputPlaceholder: "输入标签后回车...",
+    manageTags: "管理标签",
+    batchTitle: "批量管理标签",
+    batchDesc: "对选中的 {{count}} 张壁纸批量添加或移除标签",
+    addLabel: "添加标签",
+    removeLabel: "移除标签",
+    addPlaceholder: "输入要添加的标签...",
+    removePlaceholder: "输入要移除的标签...",
+    batchApplied: "已添加 {{added}} 项关联，移除 {{removed}} 项关联",
+    saved: "标签已保存",
+    save: "保存",
+    cancel: "取消",
+    loadFailed: "加载标签失败",
+    saveFailed: "保存标签失败",
+  },
+
+  // 智能收藏夹
+  smart: {
+    createTitle: "新建智能收藏夹",
+    editTitle: "编辑智能收藏夹",
+    desc: "根据规则自动收集匹配的壁纸，命中集实时更新",
+    nameLabel: "名称",
+    namePlaceholder: "请输入智能收藏夹名称",
+    tabSimple: "简单",
+    tabAdvanced: "高级",
+    // 简单档
+    tagLabel: "包含标签",
+    tagPlaceholder: "输入标签后回车，任意匹配...",
+    tagHint: "命中含有任意所选标签的壁纸",
+    typeLabel: "类型",
+    typeAny: "不限",
+    presetLabel: "快捷预设",
+    presetLandscape: "仅横屏",
+    preset4k: "4K 以上",
+    presetRecent7d: "最近 7 天",
+    // 高级档
+    matchLabel: "满足",
+    combAnd: "全部条件",
+    combOr: "任一条件",
+    addRule: "添加条件",
+    removeRule: "删除条件",
+    noRules: "暂无条件，点击下方添加",
+    // 字段名
+    fieldTag: "标签",
+    fieldType: "类型",
+    fieldWidth: "宽度",
+    fieldHeight: "高度",
+    fieldOrientation: "方向",
+    fieldCreatedAt: "添加时间",
+    fieldFileSize: "文件大小",
+    // 操作符
+    opIncludesAny: "包含任一",
+    opIncludesAll: "包含全部",
+    opExcludes: "不包含",
+    opEq: "等于",
+    opNeq: "不等于",
+    opGte: "≥",
+    opLte: "≤",
+    opBetween: "介于",
+    opWithinDays: "最近天数",
+    opBefore: "早于",
+    opAfter: "晚于",
+    // 枚举值
+    type_image: "图片",
+    type_video: "视频",
+    type_gif: "GIF",
+    orientation_landscape: "横屏",
+    orientation_portrait: "竖屏",
+    orientation_square: "方形",
+    // 值输入
+    tagValuePlaceholder: "选择标签...",
+    daysValue: "{{count}} 天",
+    // 回显 / 连接词
+    joinAnd: "且",
+    joinOr: "或",
+    noConditions: "无条件（不可保存）",
+    previewLabel: "规则预览",
+    matchCount: "当前匹配 {{count}} 张",
+    // 校验错误
+    errEmpty: "至少需要一条筛选条件",
+    errInvalidOp: "存在非法的字段或操作符组合",
+    errTagEmpty: "标签条件不能为空",
+    errRange: "区间的最小值不能大于最大值",
+    errNameEmpty: "名称不能为空",
+    // 结果提示
+    created: "智能收藏夹已创建",
+    updated: "智能收藏夹已更新",
+    save: "保存",
+    cancel: "取消",
   },
 
   // Common time units

@@ -14,6 +14,7 @@ import DropOverlay from "@/components/wallpaper/DropOverlay";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
+import { TagEditorDialog } from "@/components/wallpaper/TagEditorDialog";
 import { useDropImport } from "@/hooks/useDropImport";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
@@ -21,7 +22,7 @@ import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
 import { cn } from "@/lib/utils";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { ImagePlus, Search } from "lucide-react";
-import { lazy, Suspense, useCallback, useMemo, useRef } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ManageToolbar from "./ManageToolbar";
 import NormalToolbar from "./NormalToolbar";
@@ -70,6 +71,9 @@ const MainContent: React.FC<MainContentProps> = ({
   });
 
   const search = useWallpaperSearch({ activeId });
+
+  // 批量标签编辑对话框
+  const [tagDialogOpen, setTagDialogOpen] = useState(false);
 
   // ===== 进入/退出模式时联动搜索重置 =====
   const enterManageMode = useCallback(() => {
@@ -241,6 +245,7 @@ const MainContent: React.FC<MainContentProps> = ({
               onSortFieldChange={search.setSortField}
               onSortOrderToggle={() => search.setSortOrder(search.sortOrder === "asc" ? "desc" : "asc")}
               onDeleteSelected={() => manage.handleDeleteRequest(Array.from(manage.selectedIds))}
+              onManageTags={() => setTagDialogOpen(true)}
               onCancel={manage.cancelManageMode}
               onDone={exitManageMode}
             />
@@ -345,6 +350,14 @@ const MainContent: React.FC<MainContentProps> = ({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* 批量标签编辑对话框 */}
+        <TagEditorDialog
+          open={tagDialogOpen}
+          onOpenChange={setTagDialogOpen}
+          mode="batch"
+          wallpaperIds={Array.from(manage.selectedIds)}
+        />
       </div>
     </WallpaperCardContextMenuProvider>
   );

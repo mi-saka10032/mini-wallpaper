@@ -36,6 +36,9 @@ export default {
     deleteConfirmDesc: 'Are you sure you want to delete collection "{{name}}"? Wallpapers inside will not be removed.',
     /** Display name of the built-in collection (DB row is seeded as 「我喜欢」 by m006; this i18n key only governs UI rendering) */
     builtinFavorites: "My Favorites",
+    newManualCollection: "New Collection",
+    newSmartCollection: "New Smart Collection",
+    editRule: "Edit Rule",
   },
 
   // MainContent
@@ -171,6 +174,102 @@ export default {
     noResults: "No wallpapers found",
     empty: "No wallpapers",
     alreadyAdded: "Added",
+  },
+
+  // Tag system
+  tags: {
+    editTitle: "Edit Tags",
+    editDesc: "Set tags for this wallpaper. Press Enter or comma to confirm; multiple allowed.",
+    editHint: "Saving overwrites the wallpaper's current tags",
+    inputPlaceholder: "Type a tag and press Enter...",
+    manageTags: "Manage Tags",
+    batchTitle: "Batch Manage Tags",
+    batchDesc: "Add or remove tags for {{count}} selected wallpaper(s)",
+    addLabel: "Add Tags",
+    removeLabel: "Remove Tags",
+    addPlaceholder: "Type tags to add...",
+    removePlaceholder: "Type tags to remove...",
+    batchApplied: "Added {{added}} link(s), removed {{removed}} link(s)",
+    saved: "Tags saved",
+    save: "Save",
+    cancel: "Cancel",
+    loadFailed: "Failed to load tags",
+    saveFailed: "Failed to save tags",
+  },
+
+  // Smart collection
+  smart: {
+    createTitle: "New Smart Collection",
+    editTitle: "Edit Smart Collection",
+    desc: "Automatically collect matching wallpapers by rules; the match set updates in real time",
+    nameLabel: "Name",
+    namePlaceholder: "Enter smart collection name",
+    tabSimple: "Simple",
+    tabAdvanced: "Advanced",
+    // Simple tab
+    tagLabel: "Includes Tags",
+    tagPlaceholder: "Type a tag and press Enter, match any...",
+    tagHint: "Matches wallpapers with any of the selected tags",
+    typeLabel: "Type",
+    typeAny: "Any",
+    presetLabel: "Quick Presets",
+    presetLandscape: "Landscape only",
+    preset4k: "4K and above",
+    presetRecent7d: "Last 7 days",
+    // Advanced tab
+    matchLabel: "Match",
+    combAnd: "All conditions",
+    combOr: "Any condition",
+    addRule: "Add Condition",
+    removeRule: "Remove Condition",
+    noRules: "No conditions yet, click below to add",
+    // Field names
+    fieldTag: "Tag",
+    fieldType: "Type",
+    fieldWidth: "Width",
+    fieldHeight: "Height",
+    fieldOrientation: "Orientation",
+    fieldCreatedAt: "Added Date",
+    fieldFileSize: "File Size",
+    // Operators
+    opIncludesAny: "includes any",
+    opIncludesAll: "includes all",
+    opExcludes: "excludes",
+    opEq: "is",
+    opNeq: "is not",
+    opGte: "≥",
+    opLte: "≤",
+    opBetween: "between",
+    opWithinDays: "within days",
+    opBefore: "before",
+    opAfter: "after",
+    // Enum values
+    type_image: "Image",
+    type_video: "Video",
+    type_gif: "GIF",
+    orientation_landscape: "Landscape",
+    orientation_portrait: "Portrait",
+    orientation_square: "Square",
+    // Value inputs
+    tagValuePlaceholder: "Select tags...",
+    daysValue: "{{count}} day(s)",
+    // Preview / joiners
+    joinAnd: "and",
+    joinOr: "or",
+    noConditions: "No conditions (cannot save)",
+    previewLabel: "Rule Preview",
+    matchCount: "{{count}} matched",
+    // Validation errors
+    errEmpty: "At least one condition is required",
+    errInvalidOp: "Invalid field or operator combination",
+    errTagEmpty: "Tag condition cannot be empty",
+    errRange: "Range min cannot be greater than max",
+    errNameEmpty: "Name cannot be empty",
+    // Result messages
+    created: "Smart collection created",
+    updated: "Smart collection updated",
+    save: "Save",
+    cancel: "Cancel",
   },
 
   // Common time units

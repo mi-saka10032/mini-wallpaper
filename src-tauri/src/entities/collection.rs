@@ -15,6 +15,14 @@ pub struct Model {
     /// 内置收藏夹由 m006 迁移种入，名为「我喜欢」，全表至多一条。
     /// 业务约束：不可重命名、不可删除（service 层守卫 + db unique partial index 兜底）。
     pub is_builtin: i32,
+    /// 收藏夹类型：`manual`（手动）/ `smart`（智能收藏夹）。见 m009。
+    ///
+    /// 手动收藏夹成员走 `collection_wallpapers`；智能收藏夹成员由 `rule_json`
+    /// 实时求值，不物化。默认 `manual`，内置「我喜欢」亦为手动。
+    #[sea_orm(default_value = "manual")]
+    pub kind: String,
+    /// 智能收藏夹规则（结构化 JSON schema，防注入）。手动收藏夹为 NULL。
+    pub rule_json: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

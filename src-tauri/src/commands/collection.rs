@@ -6,9 +6,10 @@ use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
 use crate::dto::collection_dto::{
-    AddWallpapersRequest, CreateCollectionRequest, DeleteCollectionRequest,
-    GetCollectionWallpapersRequest, RemoveWallpapersRequest, RenameCollectionRequest,
-    ReorderWallpapersRequest, ToggleFavoriteRequest,
+    AddWallpapersRequest, CreateCollectionRequest, CreateSmartCollectionRequest,
+    DeleteCollectionRequest, GetCollectionWallpapersRequest, PreviewSmartCountRequest,
+    RemoveWallpapersRequest, RenameCollectionRequest, ReorderWallpapersRequest,
+    ToggleFavoriteRequest, UpdateSmartCollectionRequest,
 };
 use crate::dto::Validated;
 use crate::entities::{collection, wallpaper};
@@ -146,4 +147,36 @@ pub async fn toggle_favorite(
     let req = req.into_inner();
     let mut sched = scheduler.lock().await;
     Ok(sched.toggle_favorite(req.wallpaper_id).await?)
+}
+
+/// 创建智能收藏夹（规则经白名单校验后落库，成员不物化）
+#[tauri::command]
+pub async fn create_smart_collection(
+    ctx: State<'_, AppContext>,
+    req: Validated<CreateSmartCollectionRequest>,
+) -> CommandResult<collection::Model> {
+    let req = req.into_inner();
+    Ok(collection_service::create_smart(&ctx.db, req.name, req.rule_json).await?)
+}
+
+/// 更新智能收藏夹规则（可同时改名）
+///
+/// 规则变更即命中集变更；绑定该收藏夹的显示器会在下一次轮播 tick 自动生效。
+#[tauri::command]
+pub async fn update_smart_collection(
+    ctx: State<'_, AppContext>,
+    req: Validated<UpdateSmartCollectionRequest>,
+) -> CommandResult<collection::Model> {
+    let req = req.into_inner();
+    Ok(collection_service::update_smart(&ctx.db, req.id, req.name, req.rule_json).await?)
+}
+
+/// 预览规则命中数（未落库，供创建 / 编辑时实时提示「当前匹配 N 张」）
+#[tauri::command]
+pub async fn preview_smart_count(
+    ctx: State<'_, AppContext>,
+    req: Validated<PreviewSmartCountRequest>,
+) -> CommandResult<u64> {
+    let req = req.into_inner();
+    Ok(collection_service::preview_smart_count(&ctx.db, req.rule_json).await?)
 }

@@ -1,5 +1,5 @@
 import { memo, type FC } from "react";
-import { Search, SortAsc, Trash2, Unlink, X } from "lucide-react";
+import { Search, SortAsc, Tag as TagIcon, Trash2, Unlink, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,7 @@ interface ManageToolbarProps {
   onSortFieldChange: (value: SortField) => void;
   onSortOrderToggle: () => void;
   onDeleteSelected: () => void;
+  onManageTags: () => void;
   onCancel: () => void;
   onDone: () => void;
 }
@@ -42,6 +43,7 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(({
   onSortFieldChange,
   onSortOrderToggle,
   onDeleteSelected,
+  onManageTags,
   onCancel,
   onDone,
 }) => {
@@ -111,6 +113,16 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(({
       </button>
 
       <div className="flex-1" />
+      {selectedCount > 0 && (
+        <button
+          type="button"
+          onClick={onManageTags}
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-foreground/60 transition-colors hover:bg-primary-hover"
+        >
+          <TagIcon className="size-3.5" />
+          {t("tags.manageTags")}
+        </button>
+      )}
       {selectedCount > 0 && (
         <button
           type="button"

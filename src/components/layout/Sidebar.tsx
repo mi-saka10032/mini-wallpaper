@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, Heart, Pencil, Plus, Star, Trash2 } from "lucide-react";
+import { FolderOpen, Heart, Pencil, Plus, Sparkles, Star, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Separator } from "@/components/ui/separator";
@@ -11,6 +11,12 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,6 +37,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCollectionStore, type Collection } from "@/stores/collectionStore";
+import { SmartCollectionDialog } from "@/components/wallpaper/SmartCollectionDialog";
 import { memo, type FC } from "react";
 
 interface SidebarProps {
@@ -54,6 +61,20 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
 
   // 删除确认
   const [deleteTarget, setDeleteTarget] = useState<Collection | null>(null);
+
+  // 智能收藏夹规则对话框（创建 / 编辑）
+  const [smartDialogOpen, setSmartDialogOpen] = useState(false);
+  const [smartEditing, setSmartEditing] = useState<Collection | null>(null);
+
+  const openCreateSmart = useCallback(() => {
+    setSmartEditing(null);
+    setSmartDialogOpen(true);
+  }, []);
+
+  const openEditSmart = useCallback((collection: Collection) => {
+    setSmartEditing(collection);
+    setSmartDialogOpen(true);
+  }, []);
 
   useEffect(() => {
     fetchCollections();
@@ -136,24 +157,38 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
         {/* 收藏夹标题 + 新建按钮 */}
         <div className="mb-1 flex items-center justify-between px-3">
           <span className="text-xs font-medium uppercase tracking-wide text-foreground/40">{t("sidebar.collections")}</span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-foreground/50 hover:text-foreground hover:bg-primary-hover"
-            onClick={openCreateDialog}
-          >
-            <Plus className="size-3" />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6 text-foreground/50 hover:text-foreground hover:bg-primary-hover"
+              >
+                <Plus className="size-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuItem onClick={openCreateDialog}>
+                <Star className="mr-2 size-3.5" />
+                {t("sidebar.newManualCollection")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={openCreateSmart}>
+                <Sparkles className="mr-2 size-3.5" />
+                {t("sidebar.newSmartCollection")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         {/* 收藏夹列表 */}
         <div className="space-y-0.5">
           {collections.map((collection) => {
             const isBuiltin = collection.is_builtin === 1;
+            const isSmart = collection.kind === "smart";
             // 内置收藏夹的展示名走 i18n（让中英文环境分别显示「我喜欢」/ "My Favorites"），
             // 用户自建收藏夹直接显示 DB 中的名字
             const displayName = isBuiltin ? t("sidebar.builtinFavorites") : collection.name;
-            const Icon = isBuiltin ? Heart : Star;
+            const Icon = isBuiltin ? Heart : isSmart ? Sparkles : Star;
 
             const trigger = (
               <Tooltip>
@@ -173,6 +208,8 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
                         "size-4 shrink-0",
                         // 内置收藏夹用主题红色填充心形，强化"系统级"视觉
                         isBuiltin && "fill-[#ef4444] text-[#ef4444]",
+                        // 智能收藏夹用主题色，强化"规则驱动"视觉
+                        !isBuiltin && isSmart && "text-primary",
                       )}
                     />
                     <span className="block max-w-[120px] truncate">{displayName}</span>
@@ -198,6 +235,12 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
                   {trigger}
                 </ContextMenuTrigger>
                 <ContextMenuContent className="w-32">
+                  {isSmart && (
+                    <ContextMenuItem onClick={() => openEditSmart(collection)}>
+                      <Sparkles className="mr-2 size-3.5" />
+                      {t("sidebar.editRule")}
+                    </ContextMenuItem>
+                  )}
                   <ContextMenuItem onClick={() => openRenameDialog(collection)}>
                     <Pencil className="mr-2 size-3.5" />
                     {t("sidebar.rename")}
@@ -276,6 +319,13 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 智能收藏夹规则构建器（创建 / 编辑） */}
+      <SmartCollectionDialog
+        open={smartDialogOpen}
+        onOpenChange={setSmartDialogOpen}
+        editing={smartEditing}
+      />
     </div>
   );
 });

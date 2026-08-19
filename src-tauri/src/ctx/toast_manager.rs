@@ -32,7 +32,10 @@ pub struct ToastEntry {
 
 /// Toast 窗口尺寸与布局常量
 const TOAST_WIDTH: u32 = 320;
-const TOAST_HEIGHT: u32 = 72;
+/// 窗口高度必须容纳卡片完整盒模型，否则底部会被 overflow-hidden 裁掉：
+/// my-2 外边距 16 + py-3 内边距 24 + 上下 border 2 + 内容行 32（图标 p-2+size-4）= 74px。
+/// 取 76px 留 2px 余量，避免不同 DPI 缩放下行高取整误差再次溢出。
+const TOAST_HEIGHT: u32 = 76;
 const TOAST_MARGIN_RIGHT: i32 = 16;
 const TOAST_MARGIN_BOTTOM: i32 = 16;
 const TOAST_GAP: i32 = 8;
@@ -115,7 +118,7 @@ impl ToastManager {
         // 必须显式关闭系统窗口投影：
         // tauri.conf.json 里的 "shadow": false 只作用于配置中声明的主窗口，
         // Toast 窗口由 builder 动态创建，不继承该配置，会拿到 OS 默认投影。
-        // 在 72px 高的透明小窗口上，这层投影表现为圆角卡片外的灰色模糊矩形边框。
+        // 在这种透明小窗口上，这层投影表现为圆角卡片外的灰色模糊矩形边框。
         .shadow(false)
         .resizable(false)
         .visible(false)

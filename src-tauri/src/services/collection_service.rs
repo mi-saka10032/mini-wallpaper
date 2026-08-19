@@ -503,12 +503,26 @@ pub async fn next_wallpaper_id(
 ///
 /// - sequential: 按 sort_order 取当前 wallpaper_id 的前一张，首部回末尾
 /// - random: 同 next（随机取一张排除当前）
+/// - 智能收藏夹: 委托规则命中集求值（sequential 走 id 逆向游标 / random 走 RANDOM()）
 pub async fn prev_wallpaper_id(
     db: &DatabaseConnection,
     collection_id: i32,
     current_wallpaper_id: Option<i32>,
     play_mode: &str,
 ) -> Result<Option<i32>> {
+    // 智能收藏夹在 collection_wallpaper 表中无记录，必须先分流，否则 sort_order 查询恒为 None
+    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+        if model.kind == "smart" {
+            return crate::services::smart_collection_service::prev_matched_id(
+                db,
+                &model,
+                current_wallpaper_id,
+                play_mode,
+            )
+            .await;
+        }
+    }
+
     match play_mode {
         "random" => {
             // 随机模式下上一张等同于随机取一张

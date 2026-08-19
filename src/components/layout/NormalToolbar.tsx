@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState, type FC } from "react";
-import { GripVertical, Plus, RefreshCw, Search, Settings2, X } from "lucide-react";
+import { GripVertical, Plus, RefreshCw, Search, Settings2, Sparkles, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
@@ -9,6 +9,8 @@ import type { Wallpaper } from "@/api/config";
 
 interface NormalToolbarProps {
   isCollectionView: boolean;
+  /** 当前收藏夹是否为智能收藏夹（成员按规则实时求值，不支持手动排序） */
+  isSmartCollection: boolean;
   isEmpty: boolean;
   searchExpanded: boolean;
   normalKeyword: string;
@@ -22,6 +24,8 @@ interface NormalToolbarProps {
   onNormalKeywordChange: (value: string) => void;
   onEnterSortMode: () => void;
   onEnterManageMode: () => void;
+  /** 智能收藏夹：打开规则编辑对话框（替代壁纸管理模式） */
+  onEditSmartRule: () => void;
   /** picker 确认后的回调 */
   onPickerConfirm: () => void;
 }
@@ -29,6 +33,7 @@ interface NormalToolbarProps {
 /** 常态模式下的操作栏 */
 const NormalToolbar: FC<NormalToolbarProps> = memo(({
   isCollectionView,
+  isSmartCollection,
   isEmpty,
   searchExpanded,
   normalKeyword,
@@ -40,6 +45,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(({
   onNormalKeywordChange,
   onEnterSortMode,
   onEnterManageMode,
+  onEditSmartRule,
   onPickerConfirm,
 }) => {
   const { t } = useTranslation();
@@ -147,8 +153,8 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(({
         </div>
       )}
 
-      {/* 收藏夹视图：拖拽排序按钮 */}
-      {!isEmpty && isCollectionView && (
+      {/* 收藏夹视图：拖拽排序按钮（智能收藏夹成员由规则求值，不支持手动排序） */}
+      {!isEmpty && isCollectionView && !isSmartCollection && (
         <Button
           variant="ghost"
           size="sm"
@@ -160,16 +166,30 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(({
         </Button>
       )}
 
-      {!isEmpty && (
+      {/* 智能收藏夹：管理即编辑规则（成员由规则求值，无需壁纸增删管理）。
+          空结果时同样要显示，因为此时正是需要修正规则的场景。 */}
+      {isSmartCollection ? (
         <Button
           variant="ghost"
           size="sm"
-          onClick={onEnterManageMode}
+          onClick={onEditSmartRule}
           className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
         >
-          <Settings2 className="size-3.5" />
-          {t("main.manageWallpapers")}
+          <Sparkles className="size-3.5" />
+          {t("sidebar.editRule")}
         </Button>
+      ) : (
+        !isEmpty && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEnterManageMode}
+            className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
+          >
+            <Settings2 className="size-3.5" />
+            {t("main.manageWallpapers")}
+          </Button>
+        )
       )}
     </>
   );

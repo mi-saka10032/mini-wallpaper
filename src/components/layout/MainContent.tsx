@@ -15,11 +15,13 @@ import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
 import { TagEditorDialog } from "@/components/wallpaper/TagEditorDialog";
+import { SmartCollectionDialog } from "@/components/wallpaper/SmartCollectionDialog";
 import { useDropImport } from "@/hooks/useDropImport";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
 import { cn } from "@/lib/utils";
+import { useCollectionStore } from "@/stores/collectionStore";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { ImagePlus, Search } from "lucide-react";
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
@@ -55,6 +57,16 @@ const MainContent: React.FC<MainContentProps> = ({
   const collectionId = isCollectionView ? activeId : null;
   const isEmpty = wallpapers.length === 0;
 
+  // 智能收藏夹成员由规则实时求值，不物化到 collection_wallpapers，
+  // 因此手动拖拽排序无落库目标（reorder 会静默失败），需屏蔽排序入口；
+  // 其「管理」入口也不再进入壁纸管理模式，而是直接编辑规则（见 smartDialogOpen）。
+  const collections = useCollectionStore((s) => s.collections);
+  const activeCollection = useMemo(
+    () => (isCollectionView ? collections.find((c) => c.id === activeId) ?? null : null),
+    [isCollectionView, collections, activeId],
+  );
+  const isSmartCollection = activeCollection?.kind === "smart";
+
   // ===== 独立 hooks 组合 =====
   const manage = useManageMode({
     isCollectionView,
@@ -74,6 +86,18 @@ const MainContent: React.FC<MainContentProps> = ({
 
   // 批量标签编辑对话框
   const [tagDialogOpen, setTagDialogOpen] = useState(false);
+
+  // 智能收藏夹规则编辑对话框（替代智能收藏夹下的壁纸管理模式）
+  const [smartDialogOpen, setSmartDialogOpen] = useState(false);
+
+  const handleSmartDialogOpenChange = useCallback(
+    (open: boolean) => {
+      setSmartDialogOpen(open);
+      // 关闭即可能已保存新规则，命中成员随之变化，需刷新当前列表
+      if (!open) onCollectionChanged?.();
+    },
+    [onCollectionChanged],
+  );
 
   // ===== 进入/退出模式时联动搜索重置 =====
   const enterManageMode = useCallback(() => {
@@ -252,6 +276,7 @@ const MainContent: React.FC<MainContentProps> = ({
           ) : (
             <NormalToolbar
               isCollectionView={isCollectionView}
+              isSmartCollection={isSmartCollection}
               isEmpty={isEmpty}
               searchExpanded={search.searchExpanded}
               normalKeyword={search.normalKeyword}
@@ -263,6 +288,7 @@ const MainContent: React.FC<MainContentProps> = ({
               onNormalKeywordChange={search.setNormalKeyword}
               onEnterSortMode={enterSortMode}
               onEnterManageMode={enterManageMode}
+              onEditSmartRule={() => setSmartDialogOpen(true)}
               onPickerConfirm={() => {
                 search.resetNormalSearch();
                 onCollectionChanged?.();
@@ -358,7 +384,15 @@ const MainContent: React.FC<MainContentProps> = ({
           mode="batch"
           wallpaperIds={Array.from(manage.selectedIds)}
         />
-      </div>
+
+        {/* 智能收藏夹规则编辑对话框（复用创建/编辑共用的构建器） */}
+        {isSmartCollection && (
+          <SmartCollectionDialog
+            open={smartDialogOpen}
+            onOpenChange={handleSmartDialogOpenChange}
+            editing={activeCollection}
+          />
+        )}      </div>
     </WallpaperCardContextMenuProvider>
   );
 };

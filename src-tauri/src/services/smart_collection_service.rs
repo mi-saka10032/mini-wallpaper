@@ -125,3 +125,43 @@ pub async fn next_matched_id(
         }
     }
 }
+
+/// 轮播「上一张」求值
+///
+/// sequential：命中集升序中取 current 的前驱，首部 wrap 回末张；
+/// random：与 next 同义（命中集内随机排除 current），直接委托 `next_matched_id`。
+pub async fn prev_matched_id(
+    db: &DatabaseConnection,
+    model: &collection::Model,
+    current: Option<i32>,
+    play_mode: &str,
+) -> Result<Option<i32>> {
+    if play_mode == "random" {
+        return next_matched_id(db, model, current, play_mode).await;
+    }
+
+    let rule = load_rule(model)?;
+    let base_cond = rule.build_condition()?;
+
+    // sequential：取 id 严格小于 current 的最大者；找不到则 wrap 回末张
+    if let Some(c) = current {
+        let prev = wallpaper::Entity::find()
+            .filter(base_cond.clone())
+            .filter(wallpaper::Column::Id.lt(c))
+            .order_by_desc(wallpaper::Column::Id)
+            .one(db)
+            .await?
+            .map(|w| w.id);
+        if prev.is_some() {
+            return Ok(prev);
+        }
+    }
+    // current 为空 / 已到首部 / current 不在命中集 → 回末张
+    let last = wallpaper::Entity::find()
+        .filter(base_cond)
+        .order_by_desc(wallpaper::Column::Id)
+        .one(db)
+        .await?
+        .map(|w| w.id);
+    Ok(last)
+}

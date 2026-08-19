@@ -14,6 +14,12 @@
 //! ## Vec 索引与位置关系
 //! - Vec 索引越大 → 越新 → offsetY 越小（越靠近底部/任务栏）
 //! - 即新 Toast 出现在最底部，旧的往上推
+//!
+//! ## 坐标系约定
+//! 本模块所有尺寸与位置常量、运算一律使用**逻辑像素**，并通过
+//! `inner_size` / `LogicalPosition` 提交给 Tauri，由 Tauri 统一乘以 scale_factor。
+//! 切勿混入 `monitor.size()` 等物理像素值或 `PhysicalPosition`，
+//! 否则在 125%/150% 缩放屏上会出现右边距偏大、Toast 堆叠重叠。
 
 use log::{info, warn};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -100,10 +106,10 @@ impl ToastManager {
             action, encoded_message, label, TOAST_DURATION_MS
         );
 
-        // 计算初始位置（先放到屏幕外，创建后统一重排）
+        // 计算初始位置（逻辑像素，与 inner_size 同坐标系），创建后统一重排
         let (base_x, base_y) = self.get_base_position();
         let index = self.toasts.len(); // 新 Toast 将在末尾
-        let y = base_y - ((index as i32 + 1) * (TOAST_HEIGHT as i32 + TOAST_GAP));
+        let y = base_y - ((index as f64 + 1.0) * (TOAST_HEIGHT as f64 + TOAST_GAP as f64));
 
         // 创建窗口
         match WebviewWindowBuilder::new(
@@ -124,14 +130,14 @@ impl ToastManager {
         .visible(false)
         .always_on_top(true)
         .focused(false)
-        .position(base_x as f64, y as f64)
+        .position(base_x, y)
         .inner_size(TOAST_WIDTH as f64, TOAST_HEIGHT as f64)
         .build()
         {
             Ok(window) => {
                 let _ = window.show();
                 info!(
-                    "[ToastManager] 创建 Toast 窗口: label='{}', action='{}', pos=({}, {})",
+                    "[ToastManager] 创建 Toast 窗口: label='{}', action='{}', pos=({:.0}, {:.0})",
                     label, action, base_x, y
                 );
             }
@@ -208,44 +214,49 @@ impl ToastManager {
         for (i, entry) in self.toasts.iter().enumerate() {
             // i=0 是最旧的（最上面），i=total-1 是最新的（最下面）
             // 从底部往上计算：最新的距离底部最近
-            let distance_from_bottom = (total - 1 - i) as i32;
-            let y = base_y - ((distance_from_bottom + 1) * (TOAST_HEIGHT as i32 + TOAST_GAP));
+            let distance_from_bottom = (total - 1 - i) as f64;
+            let y = base_y - ((distance_from_bottom + 1.0) * (TOAST_HEIGHT as f64 + TOAST_GAP as f64));
 
             if let Some(window) = self.app_handle.get_webview_window(&entry.label) {
-                let _ = window.set_position(tauri::PhysicalPosition::new(base_x, y));
+                // 必须用 LogicalPosition：base_y 与 TOAST_HEIGHT/TOAST_GAP 均为逻辑像素，
+                // 若按 PhysicalPosition 提交，缩放屏上步进会小于窗口实际物理高度而互相重叠。
+                let _ = window.set_position(tauri::LogicalPosition::new(base_x, y));
             }
         }
     }
 
-    /// 获取 Toast 窗口的基准位置（主显示器右下角）
+    /// 获取 Toast 窗口的基准位置（主显示器右下角），单位为**逻辑像素**
+    ///
+    /// 统一使用逻辑像素是为了和 `inner_size` 保持同一坐标系：
+    /// `inner_size` 接受逻辑尺寸并由 Tauri 内部乘以 scale_factor，
+    /// 而 `monitor.size()` / `monitor.position()` 返回的是物理像素，
+    /// 因此这里先把显示器物理尺寸除以 scale 换算回逻辑像素，
+    /// 让 TOAST_WIDTH / TOAST_MARGIN_* / TOAST_HEIGHT / TOAST_GAP 这些
+    /// 常量全部按逻辑像素参与运算，缩放屏上才不会出现边距偏大或堆叠重叠。
     ///
     /// 返回 (base_x, base_y)：
     /// - base_x: 屏幕右边缘 - Toast 宽度 - 右边距
     /// - base_y: 屏幕底部边缘 - 底部边距（任务栏上方）
-    fn get_base_position(&self) -> (i32, i32) {
+    fn get_base_position(&self) -> (f64, f64) {
         // 尝试获取主显示器信息
         if let Some(monitor) = self.app_handle.primary_monitor().ok().flatten() {
             let size = monitor.size();
             let position = monitor.position();
             let scale = monitor.scale_factor();
 
-            // 使用物理像素计算
-            let screen_width = size.width as i32;
-            let screen_height = size.height as i32;
-            let monitor_x = position.x;
-            let monitor_y = position.y;
+            // 物理像素 → 逻辑像素
+            let logical = size.to_logical::<f64>(scale);
+            let logical_pos = position.to_logical::<f64>(scale);
 
-            let base_x = monitor_x + screen_width
-                - (TOAST_WIDTH as f64 * scale) as i32
-                - (TOAST_MARGIN_RIGHT as f64 * scale) as i32;
-            let base_y = monitor_y + screen_height
-                - (TOAST_MARGIN_BOTTOM as f64 * scale) as i32;
+            let base_x =
+                logical_pos.x + logical.width - TOAST_WIDTH as f64 - TOAST_MARGIN_RIGHT as f64;
+            let base_y = logical_pos.y + logical.height - TOAST_MARGIN_BOTTOM as f64;
 
             (base_x, base_y)
         } else {
-            // 回退：假设 1920x1080 主显示器
-            let base_x = 1920 - TOAST_WIDTH as i32 - TOAST_MARGIN_RIGHT;
-            let base_y = 1080 - TOAST_MARGIN_BOTTOM;
+            // 回退：假设 1920x1080 逻辑分辨率的主显示器
+            let base_x = 1920.0 - TOAST_WIDTH as f64 - TOAST_MARGIN_RIGHT as f64;
+            let base_y = 1080.0 - TOAST_MARGIN_BOTTOM as f64;
             (base_x, base_y)
         }
     }

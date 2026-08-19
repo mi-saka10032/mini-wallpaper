@@ -47,8 +47,19 @@ pub async fn get_all_with_count(db: &DatabaseConnection) -> Result<Vec<TagWithCo
 
     let mut out = Vec::with_capacity(tags.len());
     for t in tags {
+        // 排除回收站内的壁纸：wallpaper_tags 关联行在软删除时保留（以便恢复后
+        // 标签不丢），故计数必须显式过滤，否则标签数会虚高。
         let count = wallpaper_tag::Entity::find()
             .filter(wallpaper_tag::Column::TagId.eq(t.id))
+            .filter(
+                wallpaper_tag::Column::WallpaperId.in_subquery(
+                    sea_orm::sea_query::Query::select()
+                        .column(wallpaper::Column::Id)
+                        .from(wallpaper::Entity)
+                        .and_where(wallpaper::Column::DeletedAt.is_null())
+                        .to_owned(),
+                ),
+            )
             .count(db)
             .await? as i64;
         out.push(TagWithCount {
@@ -292,8 +303,13 @@ pub async fn all_tag_ids_exist(db: &DatabaseConnection, ids: &[i32]) -> Result<b
 }
 
 /// 便于其他 service 复用：确保 wallpaper 存在（打标签前的存在性兜底）
+///
+/// 回收站内的壁纸视为不存在——不允许对已删除的壁纸打标签。
 #[allow(dead_code)]
 pub async fn wallpaper_exists(db: &DatabaseConnection, wallpaper_id: i32) -> Result<bool> {
-    let count = wallpaper::Entity::find_by_id(wallpaper_id).count(db).await?;
+    let count = crate::services::wallpaper_service::active()
+        .filter(wallpaper::Column::Id.eq(wallpaper_id))
+        .count(db)
+        .await?;
     Ok(count > 0)
 }

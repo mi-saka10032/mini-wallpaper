@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { TRASH_VIEW_ID } from "@/constants/views";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCollectionStore, type Collection } from "@/stores/collectionStore";
 import { SmartCollectionDialog } from "@/components/wallpaper/SmartCollectionDialog";
@@ -260,6 +261,25 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
           {collections.length === 0 && (
             <p className="px-3 py-2 text-xs text-foreground/35">{t("sidebar.noCollections")}</p>
           )}
+        </div>
+
+        <Separator className="my-1" />
+
+        {/* 回收站（固定入口，activeId = TRASH_VIEW_ID） */}
+        <div className="h-8">
+          <button
+            type="button"
+            onClick={() => onActiveIdChange(TRASH_VIEW_ID)}
+            className={cn(
+              "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
+              activeId === TRASH_VIEW_ID
+                ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
+                : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
+            )}
+          >
+            <Trash2 className="size-4" />
+            <span>{t("sidebar.trash")}</span>
+          </button>
         </div>
       </div>
 

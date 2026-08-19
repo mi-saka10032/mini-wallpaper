@@ -50,7 +50,27 @@ export async function saveVideoThumbnail(
   });
 }
 
-/** 批量删除壁纸（彻底删除文件+缩略图+数据库记录） */
+/** 批量删除壁纸 —— 语义为「移入回收站」（可恢复，不删磁盘文件） */
 export async function deleteBatch(ids: number[]): Promise<number> {
   return invoke(COMMANDS.DELETE_WALLPAPERS, { ids });
+}
+
+/** 获取回收站内的壁纸列表（按移入时间倒序） */
+export async function getTrashed(): Promise<Wallpaper[]> {
+  return invoke(COMMANDS.GET_TRASHED_WALLPAPERS);
+}
+
+/** 从回收站恢复壁纸（恢复后追加到原收藏夹末尾） */
+export async function restoreBatch(ids: number[]): Promise<number> {
+  return invoke(COMMANDS.RESTORE_WALLPAPERS, { ids });
+}
+
+/** 彻底删除壁纸（不可恢复：删数据库记录 + 关联 + 磁盘文件） */
+export async function purgeBatch(ids: number[]): Promise<number> {
+  return invoke(COMMANDS.PURGE_WALLPAPERS, { ids });
+}
+
+/** 清空回收站（彻底删除其中全部壁纸，不可恢复） */
+export async function emptyTrash(): Promise<number> {
+  return invoke(COMMANDS.EMPTY_TRASH);
 }

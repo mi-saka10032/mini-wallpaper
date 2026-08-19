@@ -122,7 +122,11 @@ pub async fn save_video_thumbnail(
     )
 }
 
-/// 批量删除壁纸（删文件 + 删缩略图 + 删数据库记录 + 窗口/定时器联动）
+/// 批量删除壁纸 —— 语义为「移入回收站」（软删除 + 窗口/定时器联动）
+///
+/// 不删除磁盘文件、不解除收藏夹与标签关联，以便恢复。但仍会解除
+/// `monitor_configs.wallpaper_id` 引用并触发联动：正在显示的壁纸进了回收站，
+/// 桌面必须立刻切走或清空，这一用户可感知行为与硬删除时保持一致。
 ///
 /// 删除后的联动逻辑委托给 `Scheduler::on_wallpapers_deleted`，
 /// Command 层只负责数据操作 + 一行调度器调用。
@@ -138,12 +142,65 @@ pub async fn delete_wallpapers(
     // 1. 预先查出引用这些壁纸的完整 config（内存快照，删除后 wallpaper_id 会被置空）
     let affected_configs = monitor_config_service::get_configs_by_wallpaper_ids(&ctx.db, &req.ids).await?;
 
-    // 2. 执行数据层删除（删文件 + 缩略图 + collection_wallpapers 关联 + monitor_config.wallpaper_id 置空 + 数据库记录）
-    let deleted = wallpaper_service::delete_batch(&ctx.db, req.ids).await?;
+    // 2. 执行数据层软删除（打 deleted_at 标记 + sort_order 哨兵与连续化重排 + monitor_config.wallpaper_id 置空）
+    let deleted = wallpaper_service::trash_batch(&ctx.db, req.ids).await?;
 
     // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
     let mut sched = scheduler.lock().await;
     sched.on_wallpapers_deleted(&affected_configs, &deleted_ids).await;
 
     Ok(deleted)
+}
+
+/// 获取回收站内的壁纸列表（按移入时间倒序）
+#[tauri::command]
+pub async fn get_trashed_wallpapers(
+    ctx: State<'_, AppContext>,
+) -> CommandResult<Vec<wallpaper::Model>> {
+    Ok(wallpaper_service::get_trashed(&ctx.db).await?)
+}
+
+/// 从回收站恢复壁纸（批量）
+///
+/// 恢复后壁纸重新出现在主网格，并按 `max(sort_order) + 1` 追加回原收藏夹末尾。
+/// 无需调度器联动：恢复不会改变任何显示器当前的绑定状态。
+#[tauri::command]
+pub async fn restore_wallpapers(
+    ctx: State<'_, AppContext>,
+    req: Validated<DeleteWallpapersRequest>,
+) -> CommandResult<u64> {
+    let req = req.into_inner();
+    Ok(wallpaper_service::restore_batch(&ctx.db, req.ids).await?)
+}
+
+/// 彻底删除壁纸（不可恢复：删数据库记录 + 关联 + 磁盘文件）
+///
+/// 目标壁纸已在回收站中，其 `monitor_configs` 引用在移入时已被解除，
+/// 故此处仍走一次联动以覆盖「直接对未入回收站记录调用」的边界情形。
+#[tauri::command]
+pub async fn purge_wallpapers(
+    ctx: State<'_, AppContext>,
+    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    req: Validated<DeleteWallpapersRequest>,
+) -> CommandResult<u64> {
+    let req = req.into_inner();
+    let deleted_ids: HashSet<i32> = req.ids.iter().copied().collect();
+
+    let affected_configs =
+        monitor_config_service::get_configs_by_wallpaper_ids(&ctx.db, &req.ids).await?;
+
+    let deleted = wallpaper_service::delete_batch(&ctx.db, req.ids).await?;
+
+    let mut sched = scheduler.lock().await;
+    sched.on_wallpapers_deleted(&affected_configs, &deleted_ids).await;
+
+    Ok(deleted)
+}
+
+/// 清空回收站（彻底删除其中全部壁纸，不可恢复）
+#[tauri::command]
+pub async fn empty_trash(
+    ctx: State<'_, AppContext>,
+) -> CommandResult<u64> {
+    Ok(wallpaper_service::empty_trash(&ctx.db).await?)
 }

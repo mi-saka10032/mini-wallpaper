@@ -75,6 +75,13 @@ pub fn run() {
                 global_shortcut::register_default_shortcuts(&app_handle_for_shortcut).await;
             });
 
+            // ===== 回收站过期项清理（一次性扫描，不引入常驻定时任务）=====
+            // 异步 spawn，不阻塞启动流程；失败仅记录日志，不影响应用可用性。
+            let app_handle_for_purge = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                services::trash_maintenance::purge_expired_on_startup(&app_handle_for_purge).await;
+            });
+
             // ===== 开机自启时隐藏主窗口到托盘 =====
             if is_autostart_launch() {
                 if let Some(window) = app.get_webview_window("main") {

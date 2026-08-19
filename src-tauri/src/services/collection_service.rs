@@ -3,6 +3,7 @@ use sea_orm::prelude::Expr;
 use sea_orm::*;
 
 use crate::entities::{collection, collection_wallpaper, monitor_config, wallpaper};
+use crate::services::wallpaper_service;
 
 /// 标记：业务尝试修改/删除内置收藏夹时返回的错误信息
 ///
@@ -214,7 +215,7 @@ pub async fn get_wallpapers(
 
     let wallpaper_ids: Vec<i32> = cw_list.iter().map(|cw| cw.wallpaper_id).collect();
 
-    let wallpapers = wallpaper::Entity::find()
+    let wallpapers = wallpaper_service::active()
         .filter(wallpaper::Column::Id.is_in(wallpaper_ids.iter().copied()))
         .all(db)
         .await?;
@@ -276,7 +277,11 @@ pub async fn add_wallpapers(
 
 /// 重新排序收藏夹内的壁纸（事务保护）
 ///
-/// 接收按新顺序排列的 wallpaper_ids，按索引写入 sort_order
+/// 接收按新顺序排列的 wallpaper_ids，按索引写入 sort_order。
+///
+/// 前端传入的数组只含可见成员（回收站内的已被过滤），而回收站成员的关联行
+/// 仍在表中、其 sort_order 为哨兵 `-1`。此处按索引写 `0..n-1` 不会与哨兵冲突，
+/// 且显式排除哨兵行，避免把回收站成员误拉回可见序列。
 pub async fn reorder_wallpapers(
     db: &DatabaseConnection,
     collection_id: i32,
@@ -292,6 +297,10 @@ pub async fn reorder_wallpapers(
             )
             .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
             .filter(collection_wallpaper::Column::WallpaperId.eq(*wp_id))
+            .filter(
+                collection_wallpaper::Column::SortOrder
+                    .ne(wallpaper_service::TRASH_SORT_ORDER),
+            )
             .exec(&txn)
             .await?;
     }
@@ -324,6 +333,7 @@ pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Re
     }
     let count = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(active_member_filter())
         .count(db)
         .await?;
     Ok(count)
@@ -352,6 +362,27 @@ pub async fn has_enough_wallpapers(db: &DatabaseConnection, collection_id: i32) 
 }
 
 // ==================== 可复用的 ORM 辅助函数 ====================
+
+/// 「成员壁纸未进回收站」条件（子查询）
+///
+/// 手动收藏夹的成员关系存放在 `collection_wallpapers`，该表本身不含删除标记。
+/// 壁纸移入回收站时其关联行会被**保留**（以便恢复后仍属于原收藏夹），因此所有
+/// 面向播放/展示的成员查询都必须额外排除「关联仍在、但壁纸已进回收站」的行，
+/// 否则轮播会切到回收站内的壁纸、数量统计也会虚高。
+///
+/// 用 `wallpaper_id IN (SELECT id FROM wallpapers WHERE deleted_at IS NULL)`
+/// 表达，避免为 6 个游标辅助函数逐一改写 join。
+fn active_member_filter() -> Condition {
+    Condition::all().add(
+        collection_wallpaper::Column::WallpaperId.in_subquery(
+            sea_orm::sea_query::Query::select()
+                .column(wallpaper::Column::Id)
+                .from(wallpaper::Entity)
+                .and_where(wallpaper::Column::DeletedAt.is_null())
+                .to_owned(),
+        ),
+    )
+}
 
 /// 查询某壁纸在收藏夹中的 sort_order
 async fn find_sort_order(
@@ -382,10 +413,12 @@ async fn find_adjacent_wallpaper(
         Direction::Next => collection_wallpaper::Entity::find()
             .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
             .filter(collection_wallpaper::Column::SortOrder.gt(current_order))
+            .filter(active_member_filter())
             .order_by_asc(collection_wallpaper::Column::SortOrder),
         Direction::Prev => collection_wallpaper::Entity::find()
             .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
             .filter(collection_wallpaper::Column::SortOrder.lt(current_order))
+            .filter(active_member_filter())
             .order_by_desc(collection_wallpaper::Column::SortOrder),
     };
 
@@ -400,7 +433,8 @@ async fn find_random_wallpaper(
     exclude_id: Option<i32>,
 ) -> Result<Option<i32>> {
     let mut query = collection_wallpaper::Entity::find()
-        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id));
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(active_member_filter());
 
     if let Some(eid) = exclude_id {
         query = query.filter(collection_wallpaper::Column::WallpaperId.ne(eid));
@@ -421,6 +455,7 @@ async fn first_wallpaper_id(
 ) -> Result<Option<i32>> {
     let record = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(active_member_filter())
         .order_by_asc(collection_wallpaper::Column::SortOrder)
         .one(db)
         .await?;
@@ -434,6 +469,7 @@ async fn last_wallpaper_id(
 ) -> Result<Option<i32>> {
     let record = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(active_member_filter())
         .order_by_desc(collection_wallpaper::Column::SortOrder)
         .one(db)
         .await?;

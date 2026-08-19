@@ -21,6 +21,7 @@ use sea_orm::*;
 
 use crate::entities::{collection, wallpaper};
 use crate::services::smart_rule::SmartRule;
+use crate::services::wallpaper_service;
 
 /// 从收藏夹模型加载并校验规则；非 smart 或规则缺失时报错
 fn load_rule(model: &collection::Model) -> Result<SmartRule> {
@@ -34,13 +35,22 @@ fn load_rule(model: &collection::Model) -> Result<SmartRule> {
     SmartRule::parse_and_validate(json)
 }
 
+/// 编译规则为查询条件，并叠加「未进回收站」过滤
+///
+/// 本模块所有查询都必须经由此函数获得基础条件，而非直接调用
+/// `rule.build_condition()`——回收站内的壁纸不应出现在任何智能收藏夹的
+/// 命中集与命中数中（含轮播游标求值），这是单一收敛点。
+fn rule_condition(rule: &SmartRule) -> Result<Condition> {
+    Ok(rule.build_condition()?.add(wallpaper_service::not_deleted()))
+}
+
 /// 求值命中的完整壁纸列表（按 id 升序）
 pub async fn matched_wallpapers(
     db: &DatabaseConnection,
     model: &collection::Model,
 ) -> Result<Vec<wallpaper::Model>> {
     let rule = load_rule(model)?;
-    let cond = rule.build_condition()?;
+    let cond = rule_condition(&rule)?;
     let rows = wallpaper::Entity::find()
         .filter(cond)
         .order_by_asc(wallpaper::Column::Id)
@@ -57,7 +67,7 @@ pub async fn count_matched(db: &DatabaseConnection, model: &collection::Model) -
 
 /// 按规则直接计数（供保存前预览）
 pub async fn count_matched_by_rule(db: &DatabaseConnection, rule: &SmartRule) -> Result<u64> {
-    let cond = rule.build_condition()?;
+    let cond = rule_condition(rule)?;
     let count = wallpaper::Entity::find().filter(cond).count(db).await?;
     Ok(count)
 }
@@ -73,7 +83,7 @@ pub async fn next_matched_id(
     play_mode: &str,
 ) -> Result<Option<i32>> {
     let rule = load_rule(model)?;
-    let base_cond = rule.build_condition()?;
+    let base_cond = rule_condition(&rule)?;
 
     match play_mode {
         "random" => {
@@ -141,7 +151,7 @@ pub async fn prev_matched_id(
     }
 
     let rule = load_rule(model)?;
-    let base_cond = rule.build_condition()?;
+    let base_cond = rule_condition(&rule)?;
 
     // sequential：取 id 严格小于 current 的最大者；找不到则 wrap 回末张
     if let Some(c) = current {

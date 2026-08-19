@@ -20,11 +20,13 @@ import { COMMANDS } from "@/api/config";
 import type { Wallpaper } from "@/api/config";
 import { getCollectionWallpapers } from "@/api/collection";
 import AppLoading from "@/components/ui/AppLoading";
+import { TRASH_VIEW_ID } from "@/constants/views";
 import { cn } from "./lib/utils";
 
 // 非首屏组件懒加载
 const PreviewDialog = lazy(() => import("@/components/wallpaper/PreviewDialog"));
 const MonitorSettingsPanel = lazy(() => import("@/components/settings/MonitorSettingsPanel"));
+const TrashView = lazy(() => import("@/components/wallpaper/TrashView"));
 
 /**
  * AppShell - 外层容器，负责初始化逻辑
@@ -99,6 +101,13 @@ const App: React.FC = () => {
 
   // 管理模式状态（用于蒙层遮挡）
   const [manageMode, setManageMode] = useState(false);
+
+  // 回收站首次访问后才挂载（避免未使用时就拉取回收站数据），
+  // 挂载后保持常驻，切走仅隐藏，保留选中态与滚动位置。
+  const [trashMounted, setTrashMounted] = useState(false);
+  useEffect(() => {
+    if (activeId === TRASH_VIEW_ID) setTrashMounted(true);
+  }, [activeId]);
 
   // 跳过首次执行的标记（AppShell 已完成初始化，无需重复）
   const langInitRef = useRef(true);
@@ -183,6 +192,18 @@ const App: React.FC = () => {
                   )}
                 >
                   <MonitorSettingsPanel />
+                </div>
+              </Suspense>
+
+              {/* 回收站 - 懒加载覆盖层，仅在选中回收站时展示 */}
+              <Suspense fallback={null}>
+                <div
+                  className={cn(
+                    "absolute inset-0 z-30 overflow-hidden bg-background",
+                    activeId === TRASH_VIEW_ID ? "block" : "hidden",
+                  )}
+                >
+                  {trashMounted && <TrashView />}
                 </div>
               </Suspense>
 

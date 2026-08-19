@@ -7,6 +7,10 @@ import {
   importFiles as importWallpaperFiles,
   importWallpaperBytes,
   deleteBatch as deleteWallpaperBatch,
+  getTrashed as fetchTrashedWallpapers,
+  restoreBatch as restoreWallpaperBatch,
+  purgeBatch as purgeWallpaperBatch,
+  emptyTrash as emptyTrashApi,
   getSupportedExtensions as fetchSupportedExtensions,
   getById as fetchWallpaperById,
   saveVideoThumbnail,
@@ -21,6 +25,10 @@ interface WallpaperState {
   loading: boolean;
   /** 后端返回的支持扩展名列表（懒加载缓存） */
   supportedExtensions: string[];
+  /** 回收站内的壁纸（按移入时间倒序），仅回收站视图使用 */
+  trashed: Wallpaper[];
+  /** 回收站列表加载中 */
+  trashLoading: boolean;
 
   fetchSupportedExtensions: () => Promise<string[]>;
   fetchWallpapers: () => Promise<void>;
@@ -36,7 +44,16 @@ interface WallpaperState {
     skipped: number;
     rejectedBySize: number;
   }>;
+  /** 移入回收站（可恢复） */
   deleteWallpapers: (ids: number[]) => Promise<void>;
+  /** 拉取回收站列表 */
+  fetchTrashed: () => Promise<void>;
+  /** 从回收站恢复（追加到原收藏夹末尾） */
+  restoreWallpapers: (ids: number[]) => Promise<number>;
+  /** 彻底删除（不可恢复） */
+  purgeWallpapers: (ids: number[]) => Promise<number>;
+  /** 清空回收站（不可恢复） */
+  emptyTrash: () => Promise<number>;
 }
 
 /**
@@ -76,6 +93,8 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   wallpapers: [],
   loading: false,
   supportedExtensions: [],
+  trashed: [],
+  trashLoading: false,
 
   /** 获取支持的扩展名（带缓存，仅首次调用时请求后端） */
   fetchSupportedExtensions: async () => {
@@ -245,10 +264,63 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   deleteWallpapers: async (ids: number[]) => {
     try {
       const count = await deleteWallpaperBatch(ids);
-      console.log(`[Delete] ${count} wallpapers deleted`);
+      console.log(`[Trash] ${count} wallpapers moved to trash`);
       await get().fetchWallpapers();
+      // 回收站列表已加载过时保持同步，避免用户切到回收站看到旧数据
+      if (get().trashed.length > 0) {
+        await get().fetchTrashed();
+      }
     } catch (e) {
       console.error("[deleteWallpapers]", e);
+    }
+  },
+
+  fetchTrashed: async () => {
+    try {
+      set({ trashLoading: true });
+      const list = await fetchTrashedWallpapers();
+      set({ trashed: list });
+    } catch (e) {
+      console.error("[fetchTrashed]", e);
+    } finally {
+      set({ trashLoading: false });
+    }
+  },
+
+  restoreWallpapers: async (ids: number[]) => {
+    try {
+      const count = await restoreWallpaperBatch(ids);
+      console.log(`[Trash] ${count} wallpapers restored`);
+      // 恢复影响两个列表：主网格新增、回收站减少
+      await Promise.all([get().fetchWallpapers(), get().fetchTrashed()]);
+      return count;
+    } catch (e) {
+      console.error("[restoreWallpapers]", e);
+      return 0;
+    }
+  },
+
+  purgeWallpapers: async (ids: number[]) => {
+    try {
+      const count = await purgeWallpaperBatch(ids);
+      console.log(`[Trash] ${count} wallpapers permanently deleted`);
+      await get().fetchTrashed();
+      return count;
+    } catch (e) {
+      console.error("[purgeWallpapers]", e);
+      return 0;
+    }
+  },
+
+  emptyTrash: async () => {
+    try {
+      const count = await emptyTrashApi();
+      console.log(`[Trash] emptied, ${count} wallpapers permanently deleted`);
+      await get().fetchTrashed();
+      return count;
+    } catch (e) {
+      console.error("[emptyTrash]", e);
+      return 0;
     }
   },
 }));

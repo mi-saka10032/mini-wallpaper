@@ -39,6 +39,7 @@ export default {
     newManualCollection: "New Collection",
     newSmartCollection: "New Smart Collection",
     editRule: "Edit Rule",
+    trash: "Recycle Bin",
   },
 
   // MainContent
@@ -333,5 +334,40 @@ export default {
     exportFailed: "Export failed",
     importSuccess: "Import complete. {{count}} files restored. Restart the app to apply.",
     importFailed: "Import failed",
+  },
+  trash: {
+    title: "Recycle Bin",
+    loading: "Loading...",
+    empty: "Recycle Bin is empty",
+    itemCount: "{{count}} items",
+    selectedCount: "{{count}} selected",
+    selectAll: "Select All",
+    clearSelection: "Clear Selection",
+    restore: "Restore",
+    restoreSelected: "Restore Selected",
+    purgeSelected: "Delete Permanently",
+    emptyTrash: "Empty Recycle Bin",
+    daysLeft: "{{count}} days left",
+    expiringToday: "Expiring soon",
+    retentionHint:
+      "Wallpapers in the Recycle Bin are permanently deleted after {{days}} days. Restored items are appended to the end of their original collection.",
+    retentionDisabledHint:
+      "Auto cleanup is off. Items stay in the Recycle Bin until you empty it manually.",
+    restoredCount: "{{count}} wallpapers restored",
+    purgedCount: "{{count}} wallpapers permanently deleted",
+    purgeConfirmTitle: "Delete Permanently",
+    purgeConfirmDesc:
+      "This will permanently delete {{count}} selected wallpapers and their files. This cannot be undone.",
+    emptyConfirmTitle: "Empty Recycle Bin",
+    emptyConfirmDesc:
+      "This will permanently delete all {{count}} wallpapers and their files. This cannot be undone.",
+    confirmPurge: "Delete Permanently",
+    cancel: "Cancel",
+    settingsTitle: "Recycle Bin",
+    settingsDesc: "Deleted wallpapers go to the Recycle Bin first and can be restored anytime",
+    autoPurgeLabel: "Auto-delete expired items",
+    retentionLabel: "Retention period",
+    retentionUnit: "days",
+    retentionRange: "Enter a number between 1 and 3650",
   },
 } as const;

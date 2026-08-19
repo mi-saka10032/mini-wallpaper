@@ -17,6 +17,10 @@ pub mod keys {
     pub const SHORTCUT_OPEN_MAIN: &str = "shortcut_open_main";
     pub const SHORTCUT_TOGGLE_FAVORITE: &str = "shortcut_toggle_favorite";
     pub const ACCENT_COLOR: &str = "accent_color";
+    /// 回收站保留天数（字符串形式的正整数，1~3650）
+    pub const TRASH_RETENTION_DAYS: &str = "trash_retention_days";
+    /// 回收站是否自动清理过期项（true/false）
+    pub const TRASH_AUTO_PURGE: &str = "trash_auto_purge";
 }
 
 /// 已知的 setting key 白名单（由 keys 模块常量自动组成）
@@ -33,7 +37,12 @@ const VALID_KEYS: &[&str] = &[
     keys::SHORTCUT_OPEN_MAIN,
     keys::SHORTCUT_TOGGLE_FAVORITE,
     keys::ACCENT_COLOR,
+    keys::TRASH_RETENTION_DAYS,
+    keys::TRASH_AUTO_PURGE,
 ];
+
+/// 回收站保留天数默认值（天）
+pub const DEFAULT_TRASH_RETENTION_DAYS: i64 = 30;
 
 /// 允许的 display_mode 枚举值
 const VALID_DISPLAY_MODES: &[&str] = &["independent", "mirror", "extend"];
@@ -77,11 +86,17 @@ impl SetSettingRequest {
     /// 跨字段校验：按 key 校验 value 的格式
     pub fn validate_value_format(&self) -> Result<(), String> {
         match self.key.as_str() {
-            "pause_on_fullscreen" | "close_to_tray" => {
+            "pause_on_fullscreen" | "close_to_tray" | "trash_auto_purge" => {
                 if self.value != "true" && self.value != "false" {
                     return Err(format!("{} 的值仅支持 true/false", self.key));
                 }
             }
+            "trash_retention_days" => match self.value.parse::<i64>() {
+                Ok(v) if (1..=3650).contains(&v) => {}
+                _ => {
+                    return Err("trash_retention_days 的值必须为 1~3650 的整数".to_string());
+                }
+            },
             "global_volume" => match self.value.parse::<u32>() {
                 Ok(v) if v <= 100 => {}
                 _ => {

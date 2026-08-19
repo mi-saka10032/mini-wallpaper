@@ -8,6 +8,10 @@ export const COMMANDS = {
   IMPORT_WALLPAPER_BYTES: "import_wallpaper_bytes",
   SAVE_VIDEO_THUMBNAIL: "save_video_thumbnail",
   DELETE_WALLPAPERS: "delete_wallpapers",
+  GET_TRASHED_WALLPAPERS: "get_trashed_wallpapers",
+  RESTORE_WALLPAPERS: "restore_wallpapers",
+  PURGE_WALLPAPERS: "purge_wallpapers",
+  EMPTY_TRASH: "empty_trash",
   // collection
   GET_COLLECTIONS: "get_collections",
   CREATE_COLLECTION: "create_collection",
@@ -73,6 +77,8 @@ export interface Wallpaper {
   play_count: number;
   created_at: string;
   updated_at: string;
+  /** 回收站标记：null = 正常；否则为移入回收站的时刻（YYYY-MM-DD HH:mm:ss） */
+  deleted_at: string | null;
 }
 
 /** 标签模型 */
@@ -360,6 +366,22 @@ export interface CommandMap {
   };
   [COMMANDS.DELETE_WALLPAPERS]: {
     params: { req: DeleteWallpapersReq };
+    result: number;
+  };
+  [COMMANDS.GET_TRASHED_WALLPAPERS]: {
+    params: Record<string, never>;
+    result: Wallpaper[];
+  };
+  [COMMANDS.RESTORE_WALLPAPERS]: {
+    params: { req: DeleteWallpapersReq };
+    result: number;
+  };
+  [COMMANDS.PURGE_WALLPAPERS]: {
+    params: { req: DeleteWallpapersReq };
+    result: number;
+  };
+  [COMMANDS.EMPTY_TRASH]: {
+    params: Record<string, never>;
     result: number;
   };
   [COMMANDS.GET_COLLECTIONS]: {

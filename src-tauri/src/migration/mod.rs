@@ -7,6 +7,7 @@ pub mod m006_seed_builtin_collections;
 pub mod m007_drop_is_favorite;
 pub mod m008_create_tag_system;
 pub mod m009_add_smart_collection;
+pub mod m010_add_soft_delete;
 
 use sea_orm_migration::prelude::*;
 
@@ -25,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m007_drop_is_favorite::Migration),
             Box::new(m008_create_tag_system::Migration),
             Box::new(m009_add_smart_collection::Migration),
+            Box::new(m010_add_soft_delete::Migration),
         ]
     }
 }

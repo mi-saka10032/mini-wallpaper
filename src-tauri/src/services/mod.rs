@@ -5,4 +5,5 @@ pub mod monitor_config_service;
 pub mod smart_collection_service;
 pub mod smart_rule;
 pub mod tag_service;
+pub mod trash_maintenance;
 pub mod wallpaper_service;

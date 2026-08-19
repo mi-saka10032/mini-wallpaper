@@ -14,8 +14,9 @@ pub mod action;
 // 重导出所有 command 函数，便于 rust-analyzer 提供跳转支持（IDE 导航用途）
 #[allow(unused_imports)]
 pub use wallpaper::{
-    delete_wallpapers, get_supported_extensions, get_wallpaper, get_wallpapers, import_wallpapers,
-    import_wallpaper_bytes, save_video_thumbnail,
+    delete_wallpapers, empty_trash, get_supported_extensions, get_trashed_wallpapers,
+    get_wallpaper, get_wallpapers, import_wallpapers, import_wallpaper_bytes, purge_wallpapers,
+    restore_wallpapers, save_video_thumbnail,
 };
 #[allow(unused_imports)]
 pub use collection::{
@@ -64,6 +65,10 @@ macro_rules! all_handlers {
             $crate::commands::wallpaper::import_wallpaper_bytes,
             $crate::commands::wallpaper::save_video_thumbnail,
             $crate::commands::wallpaper::delete_wallpapers,
+            $crate::commands::wallpaper::get_trashed_wallpapers,
+            $crate::commands::wallpaper::restore_wallpapers,
+            $crate::commands::wallpaper::purge_wallpapers,
+            $crate::commands::wallpaper::empty_trash,
             // collection
             $crate::commands::collection::get_collections,
             $crate::commands::collection::create_collection,

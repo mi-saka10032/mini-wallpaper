@@ -4,6 +4,7 @@ import {
   HardDrive,
   Keyboard,
   Power,
+  Trash2,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -20,9 +21,10 @@ import { useGlobalSettings } from "@/hooks/useGlobalSettings";
 import { useBackup } from "@/hooks/useBackup";
 import ShortcutsSection from "./ShortcutsSection";
 import BackupSection from "./BackupSection";
+import TrashSection from "./TrashSection";
 
 /** 设置分组 ID */
-type SettingSection = "startup" | "tray" | "shortcuts" | "audio" | "backup";
+type SettingSection = "startup" | "tray" | "shortcuts" | "audio" | "trash" | "backup";
 
 const GlobalSettingsDialog: React.FC = () => {
   const { t } = useTranslation();
@@ -63,6 +65,7 @@ const GlobalSettingsDialog: React.FC = () => {
     { id: "tray", icon: AppWindow, labelKey: "settings.navTray" },
     { id: "shortcuts", icon: Keyboard, labelKey: "settings.navShortcuts" },
     { id: "audio", icon: Volume2, labelKey: "settings.navAudio" },
+    { id: "trash", icon: Trash2, labelKey: "trash.settingsTitle" },
     { id: "backup", icon: HardDrive, labelKey: "settings.navBackup" },
   ];
 
@@ -225,6 +228,8 @@ const GlobalSettingsDialog: React.FC = () => {
                 </div>
               </section>
             )}
+
+            {activeSection === "trash" && <TrashSection />}
 
             {activeSection === "backup" && (
               <BackupSection

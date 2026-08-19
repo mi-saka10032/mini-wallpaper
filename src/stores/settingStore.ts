@@ -15,6 +15,8 @@ export const SETTING_KEYS = {
   SHORTCUT_TOGGLE_PAUSE: "shortcut_toggle_pause",
   SHORTCUT_OPEN_MAIN: "shortcut_open_main",
   SHORTCUT_TOGGLE_FAVORITE: "shortcut_toggle_favorite",
+  TRASH_RETENTION_DAYS: "trash_retention_days",
+  TRASH_AUTO_PURGE: "trash_auto_purge",
 } as const;
 
 interface SettingState {

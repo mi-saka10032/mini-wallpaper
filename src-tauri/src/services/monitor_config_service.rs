@@ -1,7 +1,29 @@
 use anyhow::{Context, Result};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use crate::{dto::monitor_config_dto::UpsertMonitorConfigRequest, entities::monitor_config};
+use crate::{
+    dto::monitor_config_dto::UpsertMonitorConfigRequest, entities::monitor_config,
+    services::wallpaper_service,
+};
+
+/// 校验壁纸可被设为桌面壁纸（存在且不在回收站）
+///
+/// `monitor_configs.wallpaper_id` 代表「当前真实显示在桌面上的壁纸」，而回收站内的
+/// 壁纸在语义上应视为不存在。数据库层面 `deleted_at` 不会阻止此处写入，因此把校验
+/// 收归到 service 写入入口，使「回收站壁纸不可上桌」成为后端不变量，而非仅靠前端
+/// 视图约定（前端状态滞后、双屏并发、未来新增入口都可能绕过 UI 限制）。
+async fn ensure_wallpaper_settable(db: &DatabaseConnection, wallpaper_id: i32) -> Result<()> {
+    let exists = wallpaper_service::get_active_by_id(db, wallpaper_id)
+        .await?
+        .is_some();
+    if !exists {
+        anyhow::bail!(
+            "Wallpaper {} is not available (missing or in trash)",
+            wallpaper_id
+        );
+    }
+    Ok(())
+}
 
 /// 获取所有显示器配置
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<monitor_config::Model>> {
@@ -34,6 +56,11 @@ pub async fn upsert(
     req: &UpsertMonitorConfigRequest
 ) -> Result<monitor_config::Model> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // 写入前守卫：拒绝把不存在或回收站内的壁纸设为桌面壁纸（覆盖 update / insert 两个分支）
+    if let Some(wid) = req.wallpaper_id {
+        ensure_wallpaper_settable(db, wid).await?;
+    }
 
     let existing = get_by_monitor_id(db, &req.monitor_id).await?;
 
@@ -103,6 +130,9 @@ pub async fn update_wallpaper_id(
     wallpaper_id: i32,
 ) -> Result<monitor_config::Model> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // 写入前守卫：轮播定时器持有的 id 可能已被移入回收站，此处兜底拦截
+    ensure_wallpaper_settable(db, wallpaper_id).await?;
 
     let existing = get_by_monitor_id(db, monitor_id)
         .await?

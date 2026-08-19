@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use image::GenericImageView;
 use log::{info, warn};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, Select, Set,
+};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -18,20 +21,76 @@ const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov"];
 /// 支持的 GIF 扩展名
 const GIF_EXTENSIONS: &[&str] = &["gif"];
 
-/// 获取所有壁纸
+// ==================== 软删除统一过滤入口 ====================
+//
+// 回收站引入后，壁纸存在「正常」与「已移入回收站」两种状态。全仓所有壁纸
+// 查询都必须显式选择其中一种视图，任何一处遗漏都会让回收站内的壁纸从主网格、
+// 智能收藏夹或轮播中「诈尸」。因此过滤逻辑收敛到本节的三个函数，
+// 禁止在各 service 里手写 `deleted_at` 字面条件。
+
+/// 未删除条件：`deleted_at IS NULL`
+///
+/// 供需要自行拼装 `Condition` 的场景复用（如智能收藏夹规则引擎，
+/// 它已有一个由 rule_json 编译出的 Condition，只需再 and 上本条件）。
+pub fn not_deleted() -> Condition {
+    Condition::all().add(wallpaper::Column::DeletedAt.is_null())
+}
+
+/// 已删除条件：`deleted_at IS NOT NULL`
+pub fn is_deleted() -> Condition {
+    Condition::all().add(wallpaper::Column::DeletedAt.is_not_null())
+}
+
+/// 默认视图：仅正常壁纸（不含回收站）
+///
+/// 主网格、收藏夹成员、轮播、标签计数等一切面向用户的常规链路都应使用它。
+pub fn active() -> Select<wallpaper::Entity> {
+    wallpaper::Entity::find().filter(not_deleted())
+}
+
+/// 回收站视图：仅已移入回收站的壁纸
+pub fn trashed() -> Select<wallpaper::Entity> {
+    wallpaper::Entity::find().filter(is_deleted())
+}
+
+/// 获取所有壁纸（不含回收站）
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<wallpaper::Model>> {
-    wallpaper::Entity::find()
+    active()
         .all(db)
         .await
         .context("Failed to fetch wallpapers")
 }
 
-/// 根据 ID 获取单个壁纸详情
+/// 获取回收站内的壁纸（按移入时间倒序，最近删除的在前）
+pub async fn get_trashed(db: &DatabaseConnection) -> Result<Vec<wallpaper::Model>> {
+    trashed()
+        .order_by_desc(wallpaper::Column::DeletedAt)
+        .all(db)
+        .await
+        .context("Failed to fetch trashed wallpapers")
+}
+
+/// 根据 ID 获取单个壁纸详情（**含回收站内的记录**）
+///
+/// 恢复、彻底删除等回收站操作需要读取已删记录，故此处不加过滤。
+/// 播放链路请改用 `get_active_by_id`，避免把回收站内的壁纸设为桌面壁纸。
 pub async fn get_by_id(db: &DatabaseConnection, id: i32) -> Result<Option<wallpaper::Model>> {
     wallpaper::Entity::find_by_id(id)
         .one(db)
         .await
         .context("Failed to fetch wallpaper by id")
+}
+
+/// 根据 ID 获取单个正常壁纸（回收站内的视为不存在）
+pub async fn get_active_by_id(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<wallpaper::Model>> {
+    active()
+        .filter(wallpaper::Column::Id.eq(id))
+        .one(db)
+        .await
+        .context("Failed to fetch active wallpaper by id")
 }
 
 /// 获取所有支持的壁纸文件扩展名
@@ -469,13 +528,238 @@ pub async fn save_video_thumbnail(
     Ok(thumb_path_str)
 }
 
-/// 批量删除壁纸（事务保护 DB 操作，文件删除在事务提交后执行）
+/// `sort_order` 哨兵值：标记「该关联行的壁纸已进回收站」
+///
+/// 软删除时把关联行的 sort_order 置为该值，使可见成员的 sort_order 始终保持
+/// 无重复的连续区间 `0..n-1`。这是必需的：`sort_order` 不只是展示顺序，还是
+/// 顺序轮播的游标（`find_adjacent_wallpaper` 用严格不等比较取上/下一张），
+/// 一旦出现重复值就会静默跳图、或造成 next/prev 不对称。
+/// `-1` 天然排在所有可见值之前且不与之冲突。
+pub const TRASH_SORT_ORDER: i32 = -1;
+
+/// 移入回收站（软删除，批量；事务保护）
+///
+/// 只打 DB 标记，不删除磁盘文件，也不解除收藏夹 / 标签关联——以便恢复后壁纸
+/// 仍属于原收藏夹、仍带原标签。但仍会清空 `monitor_configs.wallpaper_id`
+/// 中对该壁纸的引用，因为正在显示的壁纸进了回收站，桌面必须立刻切走或清空。
+///
+/// 事务内依次完成：
+/// 1. 置 `deleted_at`
+/// 2. 关联行 `sort_order` 置哨兵，并对受影响收藏夹的剩余可见成员连续化重排
+/// 3. 解除 monitor_configs 引用
+///
+/// 第 2 步必须与第 1 步同事务，否则中断会留下重复的 sort_order。
+pub async fn trash_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64> {
+    use sea_orm::TransactionTrait;
+
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let txn = db.begin().await?;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // 收集受影响的收藏夹，稍后统一连续化重排
+    let mut affected_collections: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    let mut trashed_count = 0u64;
+
+    for id in &ids {
+        // 仅处理存在且尚未在回收站中的壁纸
+        let model = wallpaper::Entity::find_by_id(*id)
+            .one(&txn)
+            .await
+            .context("Failed to query wallpaper")?;
+
+        let Some(model) = model else {
+            warn!("[Trash] Wallpaper not found: {}", id);
+            continue;
+        };
+        if model.deleted_at.is_some() {
+            continue;
+        }
+
+        // 1. 打软删除标记
+        let mut active: wallpaper::ActiveModel = model.into();
+        active.deleted_at = Set(Some(now.clone()));
+        active.updated_at = Set(now.clone());
+        active
+            .update(&txn)
+            .await
+            .context("Failed to mark wallpaper as deleted")?;
+
+        // 2. 记录受影响收藏夹，并把关联行的 sort_order 置哨兵
+        let rows = collection_wallpaper::Entity::find()
+            .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
+            .all(&txn)
+            .await
+            .context("Failed to query collection_wallpapers")?;
+        for row in rows {
+            affected_collections.insert(row.collection_id);
+        }
+
+        collection_wallpaper::Entity::update_many()
+            .col_expr(
+                collection_wallpaper::Column::SortOrder,
+                sea_orm::prelude::Expr::value(TRASH_SORT_ORDER),
+            )
+            .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
+            .exec(&txn)
+            .await
+            .context("Failed to reset sort_order for trashed wallpaper")?;
+
+        // 3. 解除 monitor_configs 引用（桌面需立刻切走）
+        monitor_config::Entity::update_many()
+            .col_expr(
+                monitor_config::Column::WallpaperId,
+                sea_orm::prelude::Expr::value(sea_orm::Value::Int(None)),
+            )
+            .filter(monitor_config::Column::WallpaperId.eq(*id))
+            .exec(&txn)
+            .await
+            .context("Failed to clean up monitor_configs wallpaper_id")?;
+
+        trashed_count += 1;
+    }
+
+    // 对受影响收藏夹的剩余可见成员做连续化重排，消除 sort_order 空洞
+    for cid in &affected_collections {
+        resequence_collection(&txn, *cid).await?;
+    }
+
+    txn.commit().await?;
+
+    info!("[Trash] {} wallpapers moved to trash", trashed_count);
+    Ok(trashed_count)
+}
+
+/// 将某收藏夹内「可见成员」的 sort_order 连续化为 0..n-1
+///
+/// 哨兵行（sort_order = -1，对应回收站内的壁纸）不参与重排，保持哨兵值。
+/// 在同一事务内调用，保证不产生重复值的中间态。
+async fn resequence_collection<C>(txn: &C, collection_id: i32) -> Result<()>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    let mut rows = collection_wallpaper::Entity::find()
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(collection_wallpaper::Column::SortOrder.ne(TRASH_SORT_ORDER))
+        .order_by_asc(collection_wallpaper::Column::SortOrder)
+        .all(txn)
+        .await
+        .context("Failed to query collection members for resequencing")?;
+
+    rows.sort_by_key(|r| r.sort_order);
+
+    for (index, row) in rows.iter().enumerate() {
+        let new_order = index as i32;
+        if row.sort_order == new_order {
+            continue;
+        }
+        collection_wallpaper::Entity::update_many()
+            .col_expr(
+                collection_wallpaper::Column::SortOrder,
+                sea_orm::prelude::Expr::value(new_order),
+            )
+            .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+            .filter(collection_wallpaper::Column::WallpaperId.eq(row.wallpaper_id))
+            .exec(txn)
+            .await
+            .context("Failed to resequence sort_order")?;
+    }
+
+    Ok(())
+}
+
+/// 从回收站恢复（批量；事务保护）
+///
+/// 清空 `deleted_at`，并把仍存在的收藏夹关联行按 `max(sort_order) + 1`
+/// **追加到末尾**——原位置在数据上已不存在（其他成员可能已被重排过），
+/// 追加是唯一可预测、可向用户解释的语义。
+pub async fn restore_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64> {
+    use sea_orm::TransactionTrait;
+
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let txn = db.begin().await?;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let mut restored_count = 0u64;
+
+    for id in &ids {
+        let model = wallpaper::Entity::find_by_id(*id)
+            .one(&txn)
+            .await
+            .context("Failed to query wallpaper")?;
+
+        let Some(model) = model else {
+            warn!("[Restore] Wallpaper not found: {}", id);
+            continue;
+        };
+        // 仅处理确实在回收站中的记录
+        if model.deleted_at.is_none() {
+            continue;
+        }
+
+        // 1. 清除软删除标记
+        let mut active: wallpaper::ActiveModel = model.into();
+        active.deleted_at = Set(None);
+        active.updated_at = Set(now.clone());
+        active
+            .update(&txn)
+            .await
+            .context("Failed to clear deleted_at")?;
+
+        // 2. 关联行按 max+1 追加回收藏夹末尾
+        let rows = collection_wallpaper::Entity::find()
+            .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
+            .all(&txn)
+            .await
+            .context("Failed to query collection_wallpapers")?;
+
+        for row in rows {
+            let max_order = collection_wallpaper::Entity::find()
+                .filter(collection_wallpaper::Column::CollectionId.eq(row.collection_id))
+                .filter(collection_wallpaper::Column::SortOrder.ne(TRASH_SORT_ORDER))
+                .order_by_desc(collection_wallpaper::Column::SortOrder)
+                .one(&txn)
+                .await
+                .context("Failed to query max sort_order")?
+                .map(|r| r.sort_order)
+                .unwrap_or(-1);
+
+            collection_wallpaper::Entity::update_many()
+                .col_expr(
+                    collection_wallpaper::Column::SortOrder,
+                    sea_orm::prelude::Expr::value(max_order + 1),
+                )
+                .filter(collection_wallpaper::Column::CollectionId.eq(row.collection_id))
+                .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
+                .exec(&txn)
+                .await
+                .context("Failed to append restored wallpaper to collection tail")?;
+        }
+
+        restored_count += 1;
+    }
+
+    txn.commit().await?;
+
+    info!("[Restore] {} wallpapers restored from trash", restored_count);
+    Ok(restored_count)
+}
+
+/// 彻底删除壁纸（事务保护 DB 操作，文件删除在事务提交后执行）
+///
+/// 真正清理数据库记录、关联表与磁盘文件，不可恢复。
+/// 由「彻底删除」「清空回收站」「过期自动清理」三处调用。
 pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64> {
     use sea_orm::TransactionTrait;
 
     // 第一阶段：在事务内完成所有 DB 操作，同时收集待删除的文件路径
     let mut files_to_delete: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
     let mut deleted_count = 0u64;
+    let mut affected_collections: std::collections::HashSet<i32> = std::collections::HashSet::new();
 
     let txn = db.begin().await?;
 
@@ -497,6 +781,15 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
         files_to_delete.push((file_path, thumb_path));
 
         // 2. 清理关联表：collection_wallpapers 中引用该壁纸的记录
+        let rows = collection_wallpaper::Entity::find()
+            .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
+            .all(&txn)
+            .await
+            .context("Failed to query collection_wallpapers")?;
+        for row in rows {
+            affected_collections.insert(row.collection_id);
+        }
+
         collection_wallpaper::Entity::delete_many()
             .filter(collection_wallpaper::Column::WallpaperId.eq(*id))
             .exec(&txn)
@@ -523,6 +816,11 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
         deleted_count += 1;
     }
 
+    // 关联行被移除后，补一次连续化重排，保证游标序列无空洞
+    for cid in &affected_collections {
+        resequence_collection(&txn, *cid).await?;
+    }
+
     txn.commit().await?;
 
     // 第二阶段：事务提交成功后，删除物理文件（best-effort，失败仅打印警告）
@@ -541,6 +839,57 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
         }
     }
 
-    info!("[Delete] {} wallpapers deleted", deleted_count);
+    info!("[Delete] {} wallpapers permanently deleted", deleted_count);
     Ok(deleted_count)
+}
+
+/// 清空回收站：彻底删除回收站内的全部壁纸
+pub async fn empty_trash(db: &DatabaseConnection) -> Result<u64> {
+    let ids: Vec<i32> = trashed()
+        .all(db)
+        .await
+        .context("Failed to list trashed wallpapers")?
+        .into_iter()
+        .map(|w| w.id)
+        .collect();
+
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    delete_batch(db, ids).await
+}
+
+/// 清理超过保留期的回收站壁纸
+///
+/// `retention_days` 为保留天数；移入时间早于 `now - retention_days` 的记录
+/// 会被彻底删除。由应用启动时的一次性扫描调用，不引入常驻定时任务。
+pub async fn purge_expired(db: &DatabaseConnection, retention_days: i64) -> Result<u64> {
+    if retention_days <= 0 {
+        return Ok(0);
+    }
+
+    let cutoff = chrono::Local::now() - chrono::Duration::days(retention_days);
+    let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // deleted_at 为 `%Y-%m-%d %H:%M:%S` 定长格式，字典序与时间序一致，可直接比较
+    let ids: Vec<i32> = trashed()
+        .filter(wallpaper::Column::DeletedAt.lt(cutoff_str.clone()))
+        .all(db)
+        .await
+        .context("Failed to list expired trashed wallpapers")?
+        .into_iter()
+        .map(|w| w.id)
+        .collect();
+
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    info!(
+        "[Trash] Purging {} wallpapers older than {}",
+        ids.len(),
+        cutoff_str
+    );
+    delete_batch(db, ids).await
 }

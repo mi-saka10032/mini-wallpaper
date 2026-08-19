@@ -18,6 +18,8 @@ pub struct Model {
     pub play_count: i32,
     pub created_at: String,
     pub updated_at: String,
+    /// 回收站标记：None = 正常可见；Some(时刻) = 已移入回收站
+    pub deleted_at: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

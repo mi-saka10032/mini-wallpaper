@@ -97,8 +97,7 @@ const ActionToast: React.FC = () => {
         className={`
           flex items-center gap-3 mx-2 my-2 px-4 py-3
           rounded-xl border border-white/10
-          bg-[#2d2d2d]/95 backdrop-blur-xl
-          shadow-[0_8px_32px_rgba(0,0,0,0.4),0_2px_8px_rgba(0,0,0,0.3)]
+          bg-[#2d2d2d]/95
           transition-all duration-300 ease-out
           ${visible && !exiting
             ? "opacity-100 translate-x-0"

@@ -112,6 +112,11 @@ impl ToastManager {
         .decorations(false)
         .skip_taskbar(true)
         .transparent(true)
+        // 必须显式关闭系统窗口投影：
+        // tauri.conf.json 里的 "shadow": false 只作用于配置中声明的主窗口，
+        // Toast 窗口由 builder 动态创建，不继承该配置，会拿到 OS 默认投影。
+        // 在 72px 高的透明小窗口上，这层投影表现为圆角卡片外的灰色模糊矩形边框。
+        .shadow(false)
         .resizable(false)
         .visible(false)
         .always_on_top(true)

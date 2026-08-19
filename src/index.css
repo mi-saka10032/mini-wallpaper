@@ -187,6 +187,15 @@
   body.wallpaper-body {
     background: transparent !important;
   }
+  /* Toast 通知窗口：整条链路强制透明，避免圆角卡片外露出灰色矩形底 */
+  body.toast-body,
+  body.toast-body #root {
+    background: transparent !important;
+    background-color: transparent !important;
+    /* Toast 圆角由内部卡片自行控制，根容器不得裁剪出实心边界 */
+    border-radius: 0 !important;
+    overflow: hidden;
+  }
 
   /* ===== 页面安全防护：禁止文本选中 & 拖拽 ===== */
   *,

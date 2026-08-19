@@ -36,9 +36,22 @@ const ActionToast: React.FC = () => {
   const action = searchParams.get("action") || "next";
   const message = searchParams.get("message") || "";
   const label = searchParams.get("label") || "";
+  /** 自动关闭时长（毫秒），由 Rust 端透传，缺省 3000ms */
+  const duration = (() => {
+    const raw = Number(searchParams.get("duration"));
+    return Number.isFinite(raw) && raw > 0 ? raw : 3000;
+  })();
 
   const [visible, setVisible] = useState(false);
   const [exiting, setExiting] = useState(false);
+
+  // Toast 窗口专属 body class：保证根容器完全透明，无灰色底
+  useEffect(() => {
+    document.body.classList.add("toast-body");
+    return () => {
+      document.body.classList.remove("toast-body");
+    };
+  }, []);
 
   // 入场动画
   useEffect(() => {
@@ -59,6 +72,14 @@ const ActionToast: React.FC = () => {
       }
     }, 200);
   }, [label]);
+
+  // duration 到点后自动关闭（含退场动画），用户手动关闭时定时器随卸载清理
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void handleClose();
+    }, duration);
+    return () => clearTimeout(timer);
+  }, [duration, handleClose]);
 
   // 解析动作配置
   const configKey = action === "togglePause"

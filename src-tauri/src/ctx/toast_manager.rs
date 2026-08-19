@@ -69,7 +69,17 @@ impl ToastManager {
     /// 3. 加入 Vec 末尾（最新 = 最底部）
     /// 4. 重新计算所有存活窗口的位置
     /// 5. spawn 定时器，duration 后自动销毁
-    pub fn show_toast(&mut self, action: &str, message: &str) {
+    ///
+    /// `self_arc` 为管理器自身的 `Arc` 句柄，供超时定时器回调时重新加锁使用。
+    /// 不可改用 `app_handle.try_state::<Arc<Mutex<ToastManager>>>()`：
+    /// `ToastManager` 仅作为 `AppContext` 的字段存在，从未单独 `manage()` 注册，
+    /// 那样取到的永远是 `None`，会导致定时器空转、Toast 永不自动关闭。
+    pub fn show_toast(
+        &mut self,
+        self_arc: &std::sync::Arc<tokio::sync::Mutex<ToastManager>>,
+        action: &str,
+        message: &str,
+    ) {
         // 超出最大数量时，移除最早的
         while self.toasts.len() >= MAX_TOASTS {
             let oldest = self.toasts.remove(0);
@@ -83,8 +93,8 @@ impl ToastManager {
         // 构建 URL（通过 query 传参给前端）
         let encoded_message = urlencoding::encode(message);
         let url = format!(
-            "/toast?action={}&message={}&label={}",
-            action, encoded_message, label
+            "/toast?action={}&message={}&label={}&duration={}",
+            action, encoded_message, label, TOAST_DURATION_MS
         );
 
         // 计算初始位置（先放到屏幕外，创建后统一重排）
@@ -136,17 +146,15 @@ impl ToastManager {
         // spawn 定时器：duration 后自动关闭
         let app_handle = self.app_handle.clone();
         let toast_label = label.clone();
+        let manager = self_arc.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(TOAST_DURATION_MS)).await;
 
             // 检查窗口是否仍然存在（可能已被用户手动关闭）
             if app_handle.get_webview_window(&toast_label).is_some() {
-                // 通过 command 路径关闭，确保 Vec 状态同步
-                // 这里直接操作 state 来关闭
-                if let Some(manager) = app_handle.try_state::<std::sync::Arc<tokio::sync::Mutex<ToastManager>>>() {
-                    let mut mgr = manager.lock().await;
-                    mgr.close_toast(&toast_label);
-                }
+                // 通过自身 Arc 加锁关闭，确保 Vec 状态与窗口销毁同步、剩余 Toast 正确重排
+                let mut mgr = manager.lock().await;
+                mgr.close_toast(&toast_label);
             }
         });
     }

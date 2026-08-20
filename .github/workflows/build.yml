@@ -106,14 +106,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 草稿 release 的资产无法用 `gh release download` 按 pattern 稳定拉取，
-          # 直接使用 tauri 构建时在本地生成的 latest.json。
-          SRC="$(find src-tauri/target -name latest.json -print -quit)"
-          if [ -z "$SRC" ]; then
-            echo "::error::未找到构建产物 latest.json，请确认 createUpdaterArtifacts 已开启且签名密钥有效"
+          # latest.json 不是 tauri build 的落盘产物：tauri build 只生成 .exe 和 .exe.sig，
+          # latest.json 由 tauri-action 在 JS 层组装（读 .sig + 拼 release 下载 URL）后
+          # 直接经 API 上传到 release，本地 target 目录下并不存在。
+          # 因此只能从上一步创建的草稿 release 把它取回来。
+          SRC=src-latest.json
+          if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --output "$SRC"; then
+            echo "::error::无法从 release $TAG 下载 latest.json，请确认上一步 includeUpdaterJson 已开启且资产上传成功"
             exit 1
           fi
-          echo "找到构建产物: $SRC"
+          echo "已从 release 下载: $SRC"
           echo "----- 原始 latest.json -----"
           cat "$SRC"
 

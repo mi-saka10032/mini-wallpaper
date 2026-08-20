@@ -22,6 +22,9 @@
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
     "dialog:default",
-    "process:allow-exit"
+    "process:allow-exit",
+    "process:allow-restart",
+    "updater:allow-check",
+    "updater:allow-download-and-install"
   ]
 }

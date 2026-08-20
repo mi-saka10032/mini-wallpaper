@@ -13,6 +13,7 @@ import { listen, EVENTS } from "@/api/event";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
 import { useWebGuard } from "@/hooks/useWebGuard";
 import { useAccentColor } from "@/hooks/useAccentColor";
+import { useStartupUpdateCheck } from "@/hooks/useStartupUpdateCheck";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
@@ -78,6 +79,7 @@ const App: React.FC = () => {
   useMonitorHotPlug();
   useWebGuard();
   useAccentColor(); // 初始化主题色（启动时应用持久化的 accent color）
+  useStartupUpdateCheck(); // 启动后台静默检查更新（最新/失败均无提示）
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const importing = useWallpaperStore((s) => s.loading);
   const language = useSettingStore((s) => s.settings[SETTING_KEYS.LANGUAGE]);

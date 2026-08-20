@@ -4,6 +4,7 @@ import {
   HardDrive,
   Keyboard,
   Power,
+  RefreshCw,
   Trash2,
   Volume2,
   VolumeX,
@@ -22,9 +23,10 @@ import { useBackup } from "@/hooks/useBackup";
 import ShortcutsSection from "./ShortcutsSection";
 import BackupSection from "./BackupSection";
 import TrashSection from "./TrashSection";
+import UpdateSection from "./UpdateSection";
 
 /** 设置分组 ID */
-type SettingSection = "startup" | "tray" | "shortcuts" | "audio" | "trash" | "backup";
+type SettingSection = "startup" | "tray" | "shortcuts" | "audio" | "trash" | "backup" | "update";
 
 const GlobalSettingsDialog: React.FC = () => {
   const { t } = useTranslation();
@@ -67,6 +69,7 @@ const GlobalSettingsDialog: React.FC = () => {
     { id: "audio", icon: Volume2, labelKey: "settings.navAudio" },
     { id: "trash", icon: Trash2, labelKey: "trash.settingsTitle" },
     { id: "backup", icon: HardDrive, labelKey: "settings.navBackup" },
+    { id: "update", icon: RefreshCw, labelKey: "update.navUpdate" },
   ];
 
   return (
@@ -230,6 +233,8 @@ const GlobalSettingsDialog: React.FC = () => {
             )}
 
             {activeSection === "trash" && <TrashSection />}
+
+            {activeSection === "update" && <UpdateSection />}
 
             {activeSection === "backup" && (
               <BackupSection

@@ -9,6 +9,7 @@ import WindowControls from "./WindowControls";
 import ThemeToggle from "./ThemeToggle";
 import LanguageToggle from "./LanguageToggle";
 import AccentColorToggle from "./AccentColorToggle";
+import UpdateToast from "./UpdateToast";
 
 const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
 
@@ -41,7 +42,9 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
       <div data-tauri-drag-region className="flex-1" />
 
       {/* 右侧语言切换 + 主题切换 + 窗口控制 */}
-      <div className="flex items-center gap-0.5">
+      <div className="relative flex items-center gap-0.5">
+        {/* 新版本提示浮窗：锚定在设置图标下方 */}
+        <UpdateToast />
         <LanguageToggle />
         <ThemeToggle />
         <AccentColorToggle />

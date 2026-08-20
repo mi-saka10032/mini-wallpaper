@@ -366,4 +366,28 @@ export default {
     retentionUnit: "天",
     retentionRange: "请输入 1~3650 之间的天数",
   },
+
+  // 应用更新
+  update: {
+    navUpdate: "关于与更新",
+    sectionDesc: "检查并安装 Mini Wallpaper 的新版本",
+    currentVersion: "当前版本",
+    versionUnknown: "未知",
+    checkNow: "检查更新",
+    checking: "检查中...",
+    isLatest: "已是最新版本",
+    checkFailed: "检查更新失败，请稍后重试或检查网络连接",
+    foundNew: "发现新版本 v{{version}}",
+    publishedAt: "发布于 {{date}}",
+    downloadNow: "下载更新",
+    downloading: "下载中...",
+    installing: "正在安装...",
+    installHint: "安装完成后应用将自动重启，请勿关闭窗口",
+    autoCheckHint: "应用启动时会自动在后台检查更新，发现新版本才会提示。",
+    // 右上角浮窗
+    toastTitle: "新版本 v{{version}} 可用",
+    toastDesc: "点击下载更新，安装后自动重启",
+    downloadingHint: "正在下载，安装后将自动重启...",
+    dismiss: "关闭提示",
+  },
 } as const;

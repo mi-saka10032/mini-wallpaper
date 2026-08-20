@@ -75,11 +75,64 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # updater 签名密钥：缺失时不会生成 .sig，latest.json 内的 signature 为空导致更新校验失败
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Mini Wallpaper ${{ github.ref_name }}"
           releaseBody: "See the assets to download and install this version."
-          releaseDraft: false
+          # 先以草稿创建：latest.json 内的 url 此时仍是裸 github.com 地址，
+          # 必须等下一步重写为代理链接后再公开，否则存在「用户拿到未代理链接」的竞态窗口。
+          releaseDraft: true
           prerelease: false
           includeRelease: true
-          includeUpdaterJson: false
+          # 生成并上传 latest.json（updater endpoint 依赖此文件，关闭时访问会 404）
+          includeUpdaterJson: true
+
+      # ─────────────────────────────────────────
+      # 🌏 为 latest.json 内的下载链接加代理前缀，然后正式发布
+      # ─────────────────────────────────────────
+      # tauri-action 生成的 latest.json 里 platforms.*.url 是 github.com 绝对地址，
+      # updater 插件下载安装包时按该 url 原样请求，配置里的 endpoints 代理管不到这一跳。
+      # 因此这里把 url 重写为代理前缀形式后覆盖上传，让「取 json」和「下载包」两跳都走代理。
+      # 重写完成后才把 release 从草稿转为公开，规避竞态。
+      - name: Rewrite latest.json download URLs and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          PROXY_PREFIX: https://gh-proxy.com/
+        run: |
+          set -euo pipefail
+
+          # 草稿 release 的资产无法用 `gh release download` 按 pattern 稳定拉取，
+          # 直接使用 tauri 构建时在本地生成的 latest.json。
+          SRC="$(find src-tauri/target -name latest.json -print -quit)"
+          if [ -z "$SRC" ]; then
+            echo "::error::未找到构建产物 latest.json，请确认 createUpdaterArtifacts 已开启且签名密钥有效"
+            exit 1
+          fi
+          echo "找到构建产物: $SRC"
+          echo "----- 原始 latest.json -----"
+          cat "$SRC"
+
+          # 校验签名非空：签名缺失说明私钥未正确注入，此时发布出去会导致客户端验签失败
+          if [ "$(jq -r '[.platforms[].signature | select(. != null and . != "")] | length' "$SRC")" -eq 0 ]; then
+            echo "::error::latest.json 内 signature 为空，检查 TAURI_SIGNING_PRIVATE_KEY 配置"
+            exit 1
+          fi
+
+          jq --arg p "$PROXY_PREFIX" '
+            .platforms |= with_entries(
+              .value.url |= (
+                if startswith($p) then . else $p + . end
+              )
+            )
+          ' "$SRC" > latest.json
+          echo "----- 重写后 latest.json -----"
+          cat latest.json
+
+          gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY" --clobber
+          # 资产就位后再公开，确保任何时刻对外可见的 latest.json 都是代理版
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

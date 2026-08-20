@@ -50,6 +50,13 @@ pub fn run() {
             )
             .init();
 
+            // ===== 应用内更新检查 =====
+            // updater 插件仅支持桌面端，故在 setup 内按 cfg 注册而非链式挂载。
+            // 仅提供检测/下载能力，实际触发时机由前端控制（启动静默检测 + 手动检测）。
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             let handle = app.handle().clone();
 
             // 构造 AppContext（内部完成 DB 初始化）并注册为全局 state

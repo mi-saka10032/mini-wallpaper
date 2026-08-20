@@ -370,4 +370,29 @@ export default {
     retentionUnit: "days",
     retentionRange: "Enter a number between 1 and 3650",
   },
+
+  // App update
+  update: {
+    navUpdate: "About & Update",
+    sectionDesc: "Check for and install new versions of Mini Wallpaper",
+    currentVersion: "Current version",
+    versionUnknown: "Unknown",
+    checkNow: "Check for Updates",
+    checking: "Checking...",
+    isLatest: "You are on the latest version",
+    checkFailed: "Update check failed. Please retry later or check your network connection.",
+    foundNew: "New version v{{version}} available",
+    publishedAt: "Published on {{date}}",
+    downloadNow: "Download Update",
+    downloading: "Downloading...",
+    installing: "Installing...",
+    installHint: "The app will restart automatically after installation. Please keep the window open.",
+    autoCheckHint:
+      "Updates are checked in the background at startup. You will only be notified when a new version is found.",
+    // Top-right popover
+    toastTitle: "Version v{{version}} available",
+    toastDesc: "Download now; the app restarts after installing",
+    downloadingHint: "Downloading, the app will restart after installing...",
+    dismiss: "Dismiss",
+  },
 } as const;

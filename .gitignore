@@ -28,3 +28,6 @@ src-tauri/bin
 # Tauri updater 签名密钥（私钥绝对不可入库，泄露后无法撤回）
 .tauri-updater.key
 .tauri-updater.key.pub
+
+# 构建进程崩溃遗留的 core dump
+core.*

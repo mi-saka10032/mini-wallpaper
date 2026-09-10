@@ -8,11 +8,21 @@ export function useGlobalSettings() {
   const volumeStr = useSettingStore((s) => s.settings[SETTING_KEYS.GLOBAL_VOLUME]);
   const closeToTray = useSettingStore((s) => s.settings[SETTING_KEYS.CLOSE_TO_TRAY]);
   const pauseOnFullscreen = useSettingStore((s) => s.settings[SETTING_KEYS.PAUSE_ON_FULLSCREEN]);
-  const shortcutNext = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_NEXT]) || DEFAULT_SHORTCUTS.nextWallpaper;
-  const shortcutPrev = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_PREV]) || DEFAULT_SHORTCUTS.prevWallpaper;
-  const shortcutTogglePause = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_TOGGLE_PAUSE]) || DEFAULT_SHORTCUTS.togglePause;
-  const shortcutOpenMain = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_OPEN_MAIN]) || DEFAULT_SHORTCUTS.openMain;
-  const shortcutToggleFavorite = useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_TOGGLE_FAVORITE]) || DEFAULT_SHORTCUTS.toggleFavorite;
+  const shortcutNext =
+    useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_NEXT]) ||
+    DEFAULT_SHORTCUTS.nextWallpaper;
+  const shortcutPrev =
+    useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_PREV]) ||
+    DEFAULT_SHORTCUTS.prevWallpaper;
+  const shortcutTogglePause =
+    useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_TOGGLE_PAUSE]) ||
+    DEFAULT_SHORTCUTS.togglePause;
+  const shortcutOpenMain =
+    useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_OPEN_MAIN]) ||
+    DEFAULT_SHORTCUTS.openMain;
+  const shortcutToggleFavorite =
+    useSettingStore((s) => s.settings[SETTING_KEYS.SHORTCUT_TOGGLE_FAVORITE]) ||
+    DEFAULT_SHORTCUTS.toggleFavorite;
 
   const volume = Number(volumeStr ?? "0");
   const isMuted = volume === 0;

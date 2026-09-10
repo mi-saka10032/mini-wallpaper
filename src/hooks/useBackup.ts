@@ -25,7 +25,9 @@ export function useBackup(activeSection: string) {
   // 进入 backup 分组时获取数据大小
   useEffect(() => {
     if (activeSection === "backup") {
-      invoke(COMMANDS.GET_DATA_SIZE).then(setDataSize).catch(() => {});
+      invoke(COMMANDS.GET_DATA_SIZE)
+        .then(setDataSize)
+        .catch(() => {});
     }
   }, [activeSection]);
 

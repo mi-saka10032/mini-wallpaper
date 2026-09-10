@@ -8,9 +8,7 @@ const appWindow = getCurrentWindow();
 
 const WindowControls: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false);
-  const closeToTray = useSettingStore(
-    (s) => s.settings[SETTING_KEYS.CLOSE_TO_TRAY],
-  );
+  const closeToTray = useSettingStore((s) => s.settings[SETTING_KEYS.CLOSE_TO_TRAY]);
 
   useEffect(() => {
     const checkMaximized = async () => {

@@ -47,6 +47,8 @@ export function useVideoSync(
       }
     });
 
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [isSlave, wallpaperType, videoRef]);
 }

@@ -56,13 +56,9 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
-            <p className="text-sm font-medium text-destructive">
-              该模块出现异常
-            </p>
+            <p className="text-sm font-medium text-destructive">该模块出现异常</p>
             {this.state.error && (
-              <p className="max-w-xs text-xs text-foreground/50">
-                {this.state.error.message}
-              </p>
+              <p className="max-w-xs text-xs text-foreground/50">{this.state.error.message}</p>
             )}
           </div>
         </div>

@@ -131,9 +131,7 @@ function VirtualCombobox({
           )}
         >
           <span className="flex min-w-0 flex-1 items-center gap-2 truncate">
-            {selectedRender || (
-              <span className="text-muted-foreground">{placeholder}</span>
-            )}
+            {selectedRender || <span className="text-muted-foreground">{placeholder}</span>}
           </span>
           <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
         </button>
@@ -199,9 +197,7 @@ function VirtualCombobox({
                     <span className="flex min-w-0 flex-1 items-center gap-2 truncate">
                       {opt.render ?? opt.label}
                     </span>
-                    {isSelected && (
-                      <CheckIcon className="size-4 shrink-0 text-primary" />
-                    )}
+                    {isSelected && <CheckIcon className="size-4 shrink-0 text-primary" />}
                   </div>
                 );
               })}
@@ -223,9 +219,7 @@ function VirtualCombobox({
                     <span className="flex min-w-0 flex-1 items-center gap-2 truncate">
                       {opt.render ?? opt.label}
                     </span>
-                    {isSelected && (
-                      <CheckIcon className="size-4 shrink-0 text-primary" />
-                    )}
+                    {isSelected && <CheckIcon className="size-4 shrink-0 text-primary" />}
                   </div>
                 );
               })}

@@ -47,54 +47,51 @@ interface SelectableCardProps {
   onClick: () => void;
 }
 
-const SelectableCard: React.FC<SelectableCardProps> = memo(({
-  wallpaper,
-  selected,
-  disabled,
-  onClick,
-}) => {
-  const { t } = useTranslation();
+const SelectableCard: React.FC<SelectableCardProps> = memo(
+  ({ wallpaper, selected, disabled, onClick }) => {
+    const { t } = useTranslation();
 
-  // 左上角叠加层
-  const overlayTopLeft = useMemo(() => {
-    if (selected && !disabled) {
-      return (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
-          <Check className="size-3" />
-        </div>
-      );
-    }
-    if (!selected && !disabled) {
-      return (
-        <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
-      );
-    }
-    if (disabled) {
-      return (
-        <div className="absolute left-1.5 top-1.5 z-10 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
-          {t("grid.alreadyAdded")}
-        </div>
-      );
-    }
-    return null;
-  }, [selected, disabled, t]);
+    // 左上角叠加层
+    const overlayTopLeft = useMemo(() => {
+      if (selected && !disabled) {
+        return (
+          <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
+            <Check className="size-3" />
+          </div>
+        );
+      }
+      if (!selected && !disabled) {
+        return (
+          <div className="absolute left-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full border-2 border-white/60 bg-black/20 opacity-0 transition-opacity group-hover:opacity-100" />
+        );
+      }
+      if (disabled) {
+        return (
+          <div className="absolute left-1.5 top-1.5 z-10 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+            {t("grid.alreadyAdded")}
+          </div>
+        );
+      }
+      return null;
+    }, [selected, disabled, t]);
 
-  return (
-    <ThumbnailCard
-      wallpaper={wallpaper}
-      disabled={disabled}
-      className={cn(
-        disabled
-          ? "opacity-50"
-          : selected
-            ? "border-primary/70 ring-1 ring-primary/30 bg-primary/3"
-            : "",
-      )}
-      onClick={() => onClick()}
-      overlayTopLeft={overlayTopLeft}
-    />
-  );
-});
+    return (
+      <ThumbnailCard
+        wallpaper={wallpaper}
+        disabled={disabled}
+        className={cn(
+          disabled
+            ? "opacity-50"
+            : selected
+              ? "border-primary/70 ring-1 ring-primary/30 bg-primary/3"
+              : "",
+        )}
+        onClick={() => onClick()}
+        overlayTopLeft={overlayTopLeft}
+      />
+    );
+  },
+);
 SelectableCard.displayName = "SelectableCard";
 
 // ============ BrowseCard 组件（browse 模式下的默认卡片） ============
@@ -105,12 +102,7 @@ interface BrowseCardProps {
 }
 
 const BrowseCard: React.FC<BrowseCardProps> = memo(({ wallpaper, onClick }) => {
-  return (
-    <ThumbnailCard
-      wallpaper={wallpaper}
-      onClick={onClick}
-    />
-  );
+  return <ThumbnailCard wallpaper={wallpaper} onClick={onClick} />;
 });
 BrowseCard.displayName = "BrowseCard";
 
@@ -242,12 +234,7 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
                 return renderCard(wp, index);
               }
 
-              return (
-                <BrowseCard
-                  wallpaper={wp}
-                  onClick={() => onCardClick?.(wp, index)}
-                />
-              );
+              return <BrowseCard wallpaper={wp} onClick={() => onCardClick?.(wp, index)} />;
             }}
           />
         )}

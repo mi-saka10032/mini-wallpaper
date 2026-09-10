@@ -39,10 +39,7 @@ function Dialog({ ...props }: ComponentProps<typeof DialogPrimitive.Root>) {
   );
 }
 
-function DialogTrigger({
-  ref,
-  ...props
-}: ComponentProps<typeof DialogPrimitive.Trigger>) {
+function DialogTrigger({ ref, ...props }: ComponentProps<typeof DialogPrimitive.Trigger>) {
   const { triggerRef } = useContext(DialogContext);
 
   const composedRef = useCallback(
@@ -68,10 +65,7 @@ function DialogClose({ ...props }: ComponentProps<typeof DialogPrimitive.Close>)
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
 }
 
-function DialogOverlay({
-  className,
-  ...props
-}: ComponentProps<typeof DialogPrimitive.Overlay>) {
+function DialogOverlay({ className, ...props }: ComponentProps<typeof DialogPrimitive.Overlay>) {
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
@@ -127,11 +121,13 @@ function DialogContent({
           "dialog-animate",
           className,
         )}
-        style={{
-          "--dialog-offset-x": `${offset?.x ?? 0}px`,
-          "--dialog-offset-y": `${offset?.y ?? 0}px`,
-          ...style,
-        } as CSSProperties}
+        style={
+          {
+            "--dialog-offset-x": `${offset?.x ?? 0}px`,
+            "--dialog-offset-y": `${offset?.y ?? 0}px`,
+            ...style,
+          } as CSSProperties
+        }
         {...props}
       >
         {children}

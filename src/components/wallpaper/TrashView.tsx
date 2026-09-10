@@ -88,7 +88,11 @@ const TrashCard: React.FC<TrashCardProps> = ({
           />
         ) : (
           <div className="flex size-full items-center justify-center text-foreground/25">
-            {isVideo ? <Film className="size-8" strokeWidth={1.25} /> : <ImageIcon className="size-8" strokeWidth={1.25} />}
+            {isVideo ? (
+              <Film className="size-8" strokeWidth={1.25} />
+            ) : (
+              <ImageIcon className="size-8" strokeWidth={1.25} />
+            )}
           </div>
         )}
 
@@ -229,8 +233,7 @@ const TrashView: React.FC = () => {
   const handlePurgeConfirm = useCallback(async () => {
     if (purgeTarget === null) return;
 
-    const count =
-      purgeTarget === "all" ? await emptyTrash() : await purgeWallpapers(purgeTarget);
+    const count = purgeTarget === "all" ? await emptyTrash() : await purgeWallpapers(purgeTarget);
 
     if (count > 0) {
       toast.success(t("trash.purgedCount", { count }));

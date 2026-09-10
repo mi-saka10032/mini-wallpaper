@@ -12,9 +12,7 @@ const TIMEOUT = 15_000;
  * @param filePath 本地视频文件绝对路径（Tauri asset 协议转换）
  * @returns WebP 格式的字节数组；加载/解码失败时返回 null
  */
-export async function extractVideoThumbnail(
-  filePath: string,
-): Promise<Uint8Array | null> {
+export async function extractVideoThumbnail(filePath: string): Promise<Uint8Array | null> {
   const videoUrl = convertFileSrc(filePath);
 
   return new Promise<Uint8Array | null>((resolve) => {
@@ -144,9 +142,7 @@ export async function extractVideoThumbnail(
  */
 export async function batchExtractVideoThumbnails(
   items: { wallpaperId: number; filePath: string }[],
-  onBatch: (
-    results: { wallpaperId: number; data: Uint8Array | null }[],
-  ) => Promise<void>,
+  onBatch: (results: { wallpaperId: number; data: Uint8Array | null }[]) => Promise<void>,
   batchSize = 10,
 ): Promise<void> {
   for (let i = 0; i < items.length; i += batchSize) {
@@ -160,9 +156,7 @@ export async function batchExtractVideoThumbnails(
     );
 
     const batchResults = results.map((r, idx) =>
-      r.status === "fulfilled"
-        ? r.value
-        : { wallpaperId: batch[idx].wallpaperId, data: null },
+      r.status === "fulfilled" ? r.value : { wallpaperId: batch[idx].wallpaperId, data: null },
     );
 
     await onBatch(batchResults);

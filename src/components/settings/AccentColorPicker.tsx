@@ -113,7 +113,10 @@ const AccentColorPicker: React.FC = () => {
               )}
               style={
                 isCustomActive
-                  ? { backgroundColor: `oklch(0.6 ${currentConfig.chroma} ${currentConfig.hue})`, borderColor: "transparent" }
+                  ? {
+                      backgroundColor: `oklch(0.6 ${currentConfig.chroma} ${currentConfig.hue})`,
+                      borderColor: "transparent",
+                    }
                   : undefined
               }
               title={t("accentColor.custom")}
@@ -162,9 +165,7 @@ const AccentColorPicker: React.FC = () => {
 
               {/* 色相滑块 */}
               <div className="space-y-2">
-                <label className="text-xs text-foreground/50">
-                  {t("accentColor.hue")}
-                </label>
+                <label className="text-xs text-foreground/50">{t("accentColor.hue")}</label>
                 <div className="relative">
                   <div
                     className="absolute inset-0 rounded-full"
@@ -189,9 +190,7 @@ const AccentColorPicker: React.FC = () => {
 
               {/* 饱和度滑块 */}
               <div className="space-y-2">
-                <label className="text-xs text-foreground/50">
-                  {t("accentColor.saturation")}
-                </label>
+                <label className="text-xs text-foreground/50">{t("accentColor.saturation")}</label>
                 <div className="relative">
                   <div
                     className="absolute inset-0 rounded-full"
@@ -214,11 +213,7 @@ const AccentColorPicker: React.FC = () => {
               </div>
 
               {/* 确认按钮 */}
-              <Button
-                size="sm"
-                className="w-full"
-                onClick={handleCustomConfirm}
-              >
+              <Button size="sm" className="w-full" onClick={handleCustomConfirm}>
                 {t("accentColor.apply")}
               </Button>
             </div>
@@ -230,7 +225,10 @@ const AccentColorPicker: React.FC = () => {
       <p className="text-xs text-foreground/50">
         {isCustomActive
           ? t("accentColor.customActive")
-          : t(ACCENT_PRESETS.find((p) => p.id === (activePresetId || "default"))?.label || "accentColor.default")}
+          : t(
+              ACCENT_PRESETS.find((p) => p.id === (activePresetId || "default"))?.label ||
+                "accentColor.default",
+            )}
       </p>
     </div>
   );

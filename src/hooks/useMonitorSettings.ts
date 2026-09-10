@@ -18,14 +18,13 @@ export function useMonitorSettings() {
   const wallpapers = useWallpaperStore((s) => s.wallpapers);
 
   // 全局 display_mode（从 app_setting 读取）
-  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
+  const displayMode = useSettingStore(
+    (s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent",
+  );
   const updateSetting = useSettingStore((s) => s.updateSetting);
 
   // 只使用 active 的 config 作为显示器列表
-  const activeConfigs = useMemo(
-    () => configs.filter((c) => c.active),
-    [configs],
-  );
+  const activeConfigs = useMemo(() => configs.filter((c) => c.active), [configs]);
 
   // 选中的 monitor index（内部 raw 状态）
   const [rawSelectedIndex, setSelectedIndex] = useState<number>(0);
@@ -37,7 +36,8 @@ export function useMonitorSettings() {
 
   // 安全的 selectedIndex：通过 useMemo 派生，避免越界
   const selectedIndex = useMemo(
-    () => (activeConfigs.length > 0 && rawSelectedIndex >= activeConfigs.length) ? 0 : rawSelectedIndex,
+    () =>
+      activeConfigs.length > 0 && rawSelectedIndex >= activeConfigs.length ? 0 : rawSelectedIndex,
     [rawSelectedIndex, activeConfigs.length],
   );
 

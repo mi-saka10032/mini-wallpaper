@@ -207,9 +207,7 @@ function isDarkMode(): boolean {
  */
 export function useAccentColor() {
   // 直接从 store 精确订阅 accent_color 值，不再维护本地 state
-  const accentValue = useSettingStore(
-    (s) => s.settings[SETTING_KEYS.ACCENT_COLOR] || "default",
-  );
+  const accentValue = useSettingStore((s) => s.settings[SETTING_KEYS.ACCENT_COLOR] || "default");
   const updateSetting = useSettingStore((s) => s.updateSetting);
 
   // 应用 accent color（监听 accentValue 变化 + 明暗模式变化）

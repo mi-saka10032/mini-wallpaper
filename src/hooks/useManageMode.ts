@@ -136,13 +136,16 @@ export function useManageMode({
     setSelectedIds(new Set());
   }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId, onCollectionChanged]);
 
-  const handleAddToCollection = useCallback(async (wallpaperId: number, targetCollectionId: number) => {
-    try {
-      await addWallpapers(targetCollectionId, [wallpaperId]);
-    } catch (e) {
-      console.error("[addToCollection]", e);
-    }
-  }, []);
+  const handleAddToCollection = useCallback(
+    async (wallpaperId: number, targetCollectionId: number) => {
+      try {
+        await addWallpapers(targetCollectionId, [wallpaperId]);
+      } catch (e) {
+        console.error("[addToCollection]", e);
+      }
+    },
+    [],
+  );
 
   return {
     manageMode,

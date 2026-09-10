@@ -281,7 +281,9 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
             <div className="flex flex-col gap-4">
               {/* 标签 */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">{t("smart.tagLabel")}</label>
+                <label className="text-xs font-medium text-foreground/70">
+                  {t("smart.tagLabel")}
+                </label>
                 <TagInput
                   value={simpleTagNames}
                   onChange={setSimpleTags}
@@ -293,7 +295,9 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
 
               {/* 类型 */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">{t("smart.typeLabel")}</label>
+                <label className="text-xs font-medium text-foreground/70">
+                  {t("smart.typeLabel")}
+                </label>
                 <div className="flex gap-1.5">
                   <button
                     type="button"
@@ -327,7 +331,9 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
 
               {/* 预设开关 */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">{t("smart.presetLabel")}</label>
+                <label className="text-xs font-medium text-foreground/70">
+                  {t("smart.presetLabel")}
+                </label>
                 <div className="flex flex-wrap gap-1.5">
                   {SIMPLE_PRESETS.map((preset) => {
                     const active = rules.some((r) => preset.matches(r));
@@ -386,7 +392,9 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
                   />
                 ))}
                 {rules.length === 0 && (
-                  <p className="py-2 text-center text-xs text-foreground/40">{t("smart.noRules")}</p>
+                  <p className="py-2 text-center text-xs text-foreground/40">
+                    {t("smart.noRules")}
+                  </p>
                 )}
               </div>
 
@@ -401,7 +409,9 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
         {/* 自然语言回显 + 命中数 */}
         <div className="flex flex-col gap-1.5 rounded-md border border-border/50 bg-muted/30 p-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-foreground/60">{t("smart.previewLabel")}</span>
+            <span className="text-xs font-medium text-foreground/60">
+              {t("smart.previewLabel")}
+            </span>
             <span className="text-xs text-primary">
               {previewing ? (
                 <Loader2 className="size-3 animate-spin" />

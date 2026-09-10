@@ -8,39 +8,39 @@ import { useEffect } from "react";
  */
 const BLOCKED_SHORTCUTS: { ctrl?: boolean; shift?: boolean; alt?: boolean; key: string }[] = [
   // --- 查找 / 替换 ---
-  { ctrl: true, key: "f" },           // Ctrl+F  查找
-  { ctrl: true, key: "g" },           // Ctrl+G  查找下一个
+  { ctrl: true, key: "f" }, // Ctrl+F  查找
+  { ctrl: true, key: "g" }, // Ctrl+G  查找下一个
   { ctrl: true, shift: true, key: "g" }, // Ctrl+Shift+G 查找上一个
-  { ctrl: true, key: "h" },           // Ctrl+H  替换
+  { ctrl: true, key: "h" }, // Ctrl+H  替换
 
   // --- 刷新 ---
-  { key: "F5" },                       // F5      刷新
-  { ctrl: true, key: "r" },           // Ctrl+R  刷新
+  { key: "F5" }, // F5      刷新
+  { ctrl: true, key: "r" }, // Ctrl+R  刷新
   { ctrl: true, shift: true, key: "r" }, // Ctrl+Shift+R 强制刷新
 
   // --- 保存 / 打印 ---
-  { ctrl: true, key: "s" },           // Ctrl+S  保存
-  { ctrl: true, key: "p" },           // Ctrl+P  打印
+  { ctrl: true, key: "s" }, // Ctrl+S  保存
+  { ctrl: true, key: "p" }, // Ctrl+P  打印
 
   // --- 查看源码 ---
-  { ctrl: true, key: "u" },           // Ctrl+U  查看源码
+  { ctrl: true, key: "u" }, // Ctrl+U  查看源码
 
   // --- 缩放 ---
-  { ctrl: true, key: "+" },           // Ctrl++  放大
-  { ctrl: true, key: "=" },           // Ctrl+=  放大（部分键盘）
-  { ctrl: true, key: "-" },           // Ctrl+-  缩小
-  { ctrl: true, key: "0" },           // Ctrl+0  重置缩放
+  { ctrl: true, key: "+" }, // Ctrl++  放大
+  { ctrl: true, key: "=" }, // Ctrl+=  放大（部分键盘）
+  { ctrl: true, key: "-" }, // Ctrl+-  缩小
+  { ctrl: true, key: "0" }, // Ctrl+0  重置缩放
 
   // --- 全选 ---
-  { ctrl: true, key: "a" },           // Ctrl+A  全选
+  { ctrl: true, key: "a" }, // Ctrl+A  全选
 
   // --- 导航 ---
-  { alt: true, key: "ArrowLeft" },    // Alt+←   后退
-  { alt: true, key: "ArrowRight" },   // Alt+→   前进
+  { alt: true, key: "ArrowLeft" }, // Alt+←   后退
+  { alt: true, key: "ArrowRight" }, // Alt+→   前进
 
   // --- 功能键 ---
-  { key: "F3" },                       // F3      查找下一个
-  { key: "F7" },                       // F7      光标浏览模式
+  { key: "F3" }, // F3      查找下一个
+  { key: "F7" }, // F7      光标浏览模式
 ];
 
 /**
@@ -50,7 +50,7 @@ function matchShortcut(
   e: KeyboardEvent,
   rule: { ctrl?: boolean; shift?: boolean; alt?: boolean; key: string },
 ): boolean {
-  const ctrlMatch = rule.ctrl ? (e.ctrlKey || e.metaKey) : !(e.ctrlKey || e.metaKey);
+  const ctrlMatch = rule.ctrl ? e.ctrlKey || e.metaKey : !(e.ctrlKey || e.metaKey);
   const shiftMatch = rule.shift ? e.shiftKey : !e.shiftKey;
   const altMatch = rule.alt ? e.altKey : !e.altKey;
   const keyMatch = e.key.toLowerCase() === rule.key.toLowerCase();
@@ -72,9 +72,7 @@ export function useWebGuard() {
       // 如果焦点在 input / textarea / contenteditable 中，放行部分快捷键
       const target = e.target as HTMLElement;
       const isEditable =
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable;
+        target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
       for (const rule of BLOCKED_SHORTCUTS) {
         if (matchShortcut(e, rule)) {
@@ -83,7 +81,11 @@ export function useWebGuard() {
             return;
           }
           // 管理模式下放行 Ctrl+A（全选卡片）
-          if (rule.ctrl && rule.key.toLowerCase() === "a" && document.body.hasAttribute("data-manage-mode")) {
+          if (
+            rule.ctrl &&
+            rule.key.toLowerCase() === "a" &&
+            document.body.hasAttribute("data-manage-mode")
+          ) {
             return;
           }
           e.preventDefault();

@@ -72,9 +72,7 @@ export const SmartRuleRow: React.FC<SmartRuleRowProps> = ({ rule, tags, onChange
     // 允许输入新标签名：用负数占位 id 不可行（后端按 id 求值），故规则里标签必须已存在。
     // 这里策略：把不存在的名字也保留为「待创建」——但规则存 id，故仅收已存在 id。
     const idByName = new Map(tags.map((tenta) => [tenta.name, tenta.id]));
-    const ids = names
-      .map((n) => idByName.get(n))
-      .filter((id): id is number => id != null);
+    const ids = names.map((n) => idByName.get(n)).filter((id): id is number => id != null);
     onChange({ ...rule, value: ids });
   };
 

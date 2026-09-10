@@ -91,9 +91,7 @@ const TrashSection: FC = memo(() => {
         <div className="flex items-center justify-between gap-3 px-4 py-3.5">
           <span
             className={
-              autoPurgeEnabled
-                ? "text-[13px] text-foreground/80"
-                : "text-[13px] text-foreground/35"
+              autoPurgeEnabled ? "text-[13px] text-foreground/80" : "text-[13px] text-foreground/35"
             }
           >
             {t("trash.retentionLabel")}

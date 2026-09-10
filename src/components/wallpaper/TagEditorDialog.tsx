@@ -133,9 +133,7 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
   }, [mode, wallpaperIds, singleTags, addTags, removeTags, allTags, onSaved, onOpenChange, t]);
 
   const isBatch = mode === "batch";
-  const nothingToDo = isBatch
-    ? addTags.length === 0 && removeTags.length === 0
-    : false;
+  const nothingToDo = isBatch ? addTags.length === 0 && removeTags.length === 0 : false;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -143,9 +141,7 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
         <DialogHeader>
           <DialogTitle>{isBatch ? t("tags.batchTitle") : t("tags.editTitle")}</DialogTitle>
           <DialogDescription>
-            {isBatch
-              ? t("tags.batchDesc", { count: wallpaperIds.length })
-              : t("tags.editDesc")}
+            {isBatch ? t("tags.batchDesc", { count: wallpaperIds.length }) : t("tags.editDesc")}
           </DialogDescription>
         </DialogHeader>
 

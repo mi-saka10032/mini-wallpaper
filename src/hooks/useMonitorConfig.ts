@@ -129,7 +129,10 @@ export function useMonitorConfig({ selectedMonitorId, isSyncMode }: UseMonitorCo
 export const INTERVAL_PRESETS = [10, 30, 60, 300, 600, 1800, 3600, 7200];
 
 /** 格式化间隔显示 */
-export function formatInterval(seconds: number, t: (key: string, opts?: Record<string, unknown>) => string): string {
+export function formatInterval(
+  seconds: number,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
   if (seconds < 60) return t("time.seconds", { count: seconds });
   if (seconds < 3600) return t("time.minutes", { count: Math.round(seconds / 60) });
   return t("time.hours", { count: Math.round(seconds / 3600) });

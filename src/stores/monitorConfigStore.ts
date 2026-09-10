@@ -2,11 +2,7 @@ import { create } from "zustand";
 import { availableMonitors } from "@tauri-apps/api/window";
 import { listen, EVENTS } from "@/api/event";
 import type { MonitorConfig } from "@/api/config";
-import {
-  getMonitorConfigs,
-  upsertMonitorConfig,
-  deleteMonitorConfig,
-} from "@/api/monitorConfig";
+import { getMonitorConfigs, upsertMonitorConfig, deleteMonitorConfig } from "@/api/monitorConfig";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
 import { syncWallpaperWindows, doSyncMonitors } from "./monitorSync";
@@ -39,7 +35,9 @@ interface MonitorConfigState {
    * 批量 upsert：对所有 active 显示器执行相同的更新参数
    * 用于 mirror/extend 模式下修改设置时同步到所有显示器
    */
-  upsertAll: (params: Omit<Parameters<MonitorConfigState["upsert"]>[0], "monitorId">) => Promise<void>;
+  upsertAll: (
+    params: Omit<Parameters<MonitorConfigState["upsert"]>[0], "monitorId">,
+  ) => Promise<void>;
   remove: (id: number, monitorId?: string) => Promise<void>;
 }
 
@@ -80,33 +78,25 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
 
       // 监听 thumbnail-changed 事件（主窗口缩略图更新）
       if (!_eventUnlisten) {
-        _eventUnlisten = await listen(
-          EVENTS.THUMBNAIL_CHANGED,
-          ({ monitor_id, wallpaper_id }) => {
-            set((state) => ({
-              configs: state.configs.map((c) =>
-                c.monitor_id === monitor_id
-                  ? { ...c, wallpaper_id }
-                  : c,
-              ),
-            }));
-          },
-        );
+        _eventUnlisten = await listen(EVENTS.THUMBNAIL_CHANGED, ({ monitor_id, wallpaper_id }) => {
+          set((state) => ({
+            configs: state.configs.map((c) =>
+              c.monitor_id === monitor_id ? { ...c, wallpaper_id } : c,
+            ),
+          }));
+        });
       }
 
       // 监听 monitor-config-refreshed 事件（后端删除操作导致 config 变更，重新拉取）
       if (!_configRefreshUnlisten) {
-        _configRefreshUnlisten = await listen(
-          EVENTS.MONITOR_CONFIG_REFRESHED,
-          async () => {
-            try {
-              const configs = await getMonitorConfigs();
-              set({ configs });
-            } catch (e) {
-              console.error("[monitorConfigStore] config refresh failed:", e);
-            }
-          },
-        );
+        _configRefreshUnlisten = await listen(EVENTS.MONITOR_CONFIG_REFRESHED, async () => {
+          try {
+            const configs = await getMonitorConfigs();
+            set({ configs });
+          } catch (e) {
+            console.error("[monitorConfigStore] config refresh failed:", e);
+          }
+        });
       }
     } catch (e) {
       console.error("[monitorConfigStore.init]", e);
@@ -162,14 +152,10 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
 
   syncConfigToAll: async (sourceMonitorId) => {
     const state = useMonitorConfigStore.getState();
-    const source = state.configs.find(
-      (c) => c.monitor_id === sourceMonitorId && c.active,
-    );
+    const source = state.configs.find((c) => c.monitor_id === sourceMonitorId && c.active);
     if (!source) return;
 
-    const others = state.configs.filter(
-      (c) => c.active && c.monitor_id !== sourceMonitorId,
-    );
+    const others = state.configs.filter((c) => c.active && c.monitor_id !== sourceMonitorId);
     if (others.length === 0) return;
 
     const promises = others.map((c) =>

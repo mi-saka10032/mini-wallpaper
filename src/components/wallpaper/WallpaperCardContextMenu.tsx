@@ -7,15 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  FolderPlus,
-  Monitor,
-  Star,
-  Tag as TagIcon,
-  Trash2,
-  Unlink,
-  Heart,
-} from "lucide-react";
+import { FolderPlus, Monitor, Star, Tag as TagIcon, Trash2, Unlink, Heart } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Wallpaper } from "@/api/config";
 import { getCollectionWallpapers } from "@/api/collection";
@@ -48,7 +40,9 @@ const WallpaperCardContextMenuContext = createContext<ContextMenuState | null>(n
 export function useWallpaperCardContextMenu() {
   const ctx = useContext(WallpaperCardContextMenuContext);
   if (!ctx) {
-    throw new Error("useWallpaperCardContextMenu must be used within WallpaperCardContextMenuProvider");
+    throw new Error(
+      "useWallpaperCardContextMenu must be used within WallpaperCardContextMenuProvider",
+    );
   }
   return ctx;
 }
@@ -85,7 +79,9 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
   const configs = useMonitorConfigStore((s) => s.configs);
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
-  const displayMode = useSettingStore((s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent");
+  const displayMode = useSettingStore(
+    (s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent",
+  );
   const favoriteIds = useFavoritesStore((s) => s.favoriteIds);
   const toggleFavorite = useFavoritesStore((s) => s.toggle);
 
@@ -133,7 +129,8 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
 
     const handleClickOutside = (e: MouseEvent) => {
       if (
-        menuRef.current && !menuRef.current.contains(e.target as Node) &&
+        menuRef.current &&
+        !menuRef.current.contains(e.target as Node) &&
         (!subMenuRef.current || !subMenuRef.current.contains(e.target as Node))
       ) {
         closeMenu();
@@ -144,7 +141,8 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
     const handleContextMenuOutside = (e: MouseEvent) => {
       // 如果右键点击在菜单外部，关闭当前菜单
       if (
-        menuRef.current && !menuRef.current.contains(e.target as Node) &&
+        menuRef.current &&
+        !menuRef.current.contains(e.target as Node) &&
         (!subMenuRef.current || !subMenuRef.current.contains(e.target as Node))
       ) {
         closeMenu();
@@ -187,18 +185,42 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
           else await upsert({ monitorId, wallpaperId: wallpaper.id });
         } else {
           try {
-            const wallpapersInCollection = await getCollectionWallpapers(targetConfig.collection_id);
+            const wallpapersInCollection = await getCollectionWallpapers(
+              targetConfig.collection_id,
+            );
             const isInCollection = wallpapersInCollection.some((w) => w.id === wallpaper.id);
             if (isInCollection) {
               if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id });
               else await upsert({ monitorId, wallpaperId: wallpaper.id });
             } else {
-              if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id, clearCollection: true, isEnabled: false });
-              else await upsert({ monitorId, wallpaperId: wallpaper.id, clearCollection: true, isEnabled: false });
+              if (isSyncMode)
+                await upsertAll({
+                  wallpaperId: wallpaper.id,
+                  clearCollection: true,
+                  isEnabled: false,
+                });
+              else
+                await upsert({
+                  monitorId,
+                  wallpaperId: wallpaper.id,
+                  clearCollection: true,
+                  isEnabled: false,
+                });
             }
           } catch {
-            if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id, clearCollection: true, isEnabled: false });
-            else await upsert({ monitorId, wallpaperId: wallpaper.id, clearCollection: true, isEnabled: false });
+            if (isSyncMode)
+              await upsertAll({
+                wallpaperId: wallpaper.id,
+                clearCollection: true,
+                isEnabled: false,
+              });
+            else
+              await upsert({
+                monitorId,
+                wallpaperId: wallpaper.id,
+                clearCollection: true,
+                isEnabled: false,
+              });
           }
         }
       } else {
@@ -343,9 +365,7 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
                     : "text-muted-foreground",
                 )}
               />
-              {favoriteIds.has(payload.wallpaper.id)
-                ? t("main.unfavorite")
-                : t("main.favorite")}
+              {favoriteIds.has(payload.wallpaper.id) ? t("main.unfavorite") : t("main.favorite")}
             </button>
 
             {/* 编辑标签（单张，覆盖式） */}
@@ -385,7 +405,8 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
               className={cn(
                 "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none",
                 "hover:bg-accent hover:text-accent-foreground",
-                !payload.isCollectionView && "text-destructive hover:bg-destructive/10 hover:text-destructive",
+                !payload.isCollectionView &&
+                  "text-destructive hover:bg-destructive/10 hover:text-destructive",
               )}
               onMouseEnter={() => setSubMenu(null)}
               onClick={() => {

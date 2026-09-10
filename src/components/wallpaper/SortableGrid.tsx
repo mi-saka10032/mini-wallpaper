@@ -1,14 +1,5 @@
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  rectSortingStrategy,
-} from "@dnd-kit/sortable";
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableWallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import type { Wallpaper } from "@/api/config";
@@ -49,11 +40,7 @@ const SortableGrid: React.FC<SortableGridProps> = ({
   );
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={onDragEnd}
-    >
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
       <SortableContext items={wallpaperIds} strategy={rectSortingStrategy}>
         <div className="grid grid-cols-3 gap-3 xl:grid-cols-4 2xl:grid-cols-5">
           {wallpapers.map((wp, index) => (

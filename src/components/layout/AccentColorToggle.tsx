@@ -78,7 +78,8 @@ const AccentColorToggle: React.FC = () => {
 
   // 自定义颜色预览（oklch 格式）
   const customPreviewColor = useMemo(
-    () => `oklch(0.6 ${saturationToChroma(Math.round(hsbColor.s * 100))} ${Math.round(hsbColor.h)})`,
+    () =>
+      `oklch(0.6 ${saturationToChroma(Math.round(hsbColor.s * 100))} ${Math.round(hsbColor.h)})`,
     [hsbColor],
   );
 

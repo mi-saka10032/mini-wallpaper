@@ -176,7 +176,12 @@
 
   body {
     @apply text-foreground;
-    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-family:
+      "Segoe UI Variable",
+      "Segoe UI",
+      system-ui,
+      -apple-system,
+      sans-serif;
     background: transparent !important;
   }
   /* Loading 阶段：body 背景透明，让 Tauri transparent 窗口穿透可见桌面 */
@@ -272,7 +277,9 @@
     border-radius: 2px;
     background-color: var(--primary);
     opacity: 0;
-    transition: opacity 0.2s ease, height 0.2s ease;
+    transition:
+      opacity 0.2s ease,
+      height 0.2s ease;
   }
   .fluent-indicator-active::before {
     opacity: 1;
@@ -324,9 +331,10 @@
   from {
     opacity: 0;
     transform: translate(
-      calc(-50% + var(--dialog-offset-x, 0px)),
-      calc(-50% + var(--dialog-offset-y, 0px))
-    ) scale(0.85);
+        calc(-50% + var(--dialog-offset-x, 0px)),
+        calc(-50% + var(--dialog-offset-y, 0px))
+      )
+      scale(0.85);
   }
   to {
     opacity: 1;
@@ -342,9 +350,10 @@
   to {
     opacity: 0;
     transform: translate(
-      calc(-50% + var(--dialog-offset-x, 0px)),
-      calc(-50% + var(--dialog-offset-y, 0px))
-    ) scale(0.85);
+        calc(-50% + var(--dialog-offset-x, 0px)),
+        calc(-50% + var(--dialog-offset-y, 0px))
+      )
+      scale(0.85);
   }
 }
 

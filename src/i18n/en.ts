@@ -33,7 +33,8 @@ export default {
     confirm: "Confirm",
     cancel: "Cancel",
     deleteConfirmTitle: "Delete Collection",
-    deleteConfirmDesc: 'Are you sure you want to delete collection "{{name}}"? Wallpapers inside will not be removed.',
+    deleteConfirmDesc:
+      'Are you sure you want to delete collection "{{name}}"? Wallpapers inside will not be removed.',
     /** Display name of the built-in collection (DB row is seeded as 「我喜欢」 by m006; this i18n key only governs UI rendering) */
     builtinFavorites: "My Favorites",
     newManualCollection: "New Collection",
@@ -68,8 +69,10 @@ export default {
     addTo: "Add to",
     deleteConfirmTitle: "Move to Recycle Bin",
     removeConfirmTitle: "Remove from Collection",
-    deleteConfirmDesc: "Move {{count}} selected wallpaper(s) to the Recycle Bin? You can restore them later.",
-    removeConfirmDesc: "Remove {{count}} selected wallpaper(s) from this collection? Files will not be deleted.",
+    deleteConfirmDesc:
+      "Move {{count}} selected wallpaper(s) to the Recycle Bin? You can restore them later.",
+    removeConfirmDesc:
+      "Remove {{count}} selected wallpaper(s) from this collection? Files will not be deleted.",
     setAs: "Set as",
     favorite: "Favorite",
     unfavorite: "Unfavorite",
@@ -309,12 +312,15 @@ export default {
     navShortcuts: "Shortcuts",
     navAudio: "Audio",
     closeToTray: "Minimize to tray on close",
-    closeToTrayDesc: "Hide the window instead of quitting when the close button is clicked. Reopen from the tray icon.",
+    closeToTrayDesc:
+      "Hide the window instead of quitting when the close button is clicked. Reopen from the tray icon.",
     pauseOnFullscreen: "Pause on fullscreen apps",
-    pauseOnFullscreenDesc: "Automatically pause wallpaper playback when a fullscreen app (game, video, etc.) is detected to save resources",
+    pauseOnFullscreenDesc:
+      "Automatically pause wallpaper playback when a fullscreen app (game, video, etc.) is detected to save resources",
     autoStart: "Launch at startup",
     autoStartDesc: "Automatically run Mini Wallpaper when the system starts",
-    shortcutsDesc: "Click the shortcut area and press a new key combination to change. Works even when the window is hidden.",
+    shortcutsDesc:
+      "Click the shortcut area and press a new key combination to change. Works even when the window is hidden.",
     shortcutNext: "Next wallpaper",
     shortcutPrev: "Previous wallpaper",
     shortcutTogglePause: "Pause/Resume rotation",
@@ -322,12 +328,13 @@ export default {
     shortcutToggleFavorite: "Favorite/Unfavorite current wallpaper",
     shortcutRecording: "Press shortcut...",
     shortcutReset: "Reset",
-    shortcutConflict: "This shortcut is already used by \"{{name}}\"",
+    shortcutConflict: 'This shortcut is already used by "{{name}}"',
     volume: "Wallpaper Volume",
     volumeMuted: "Muted",
     navBackup: "Backup",
     dataSize: "App data size",
-    backupDesc: "Export all wallpapers, thumbnails, and settings as a ZIP file for migration to another device",
+    backupDesc:
+      "Export all wallpapers, thumbnails, and settings as a ZIP file for migration to another device",
     export: "Export Backup",
     import: "Import Backup",
     exportSuccess: "Backup exported successfully",
@@ -386,7 +393,8 @@ export default {
     downloadNow: "Download Update",
     downloading: "Downloading...",
     installing: "Installing...",
-    installHint: "The app will restart automatically after installation. Please keep the window open.",
+    installHint:
+      "The app will restart automatically after installation. Please keep the window open.",
     autoCheckHint:
       "Updates are checked in the background at startup. You will only be notified when a new version is found.",
     // Top-right popover

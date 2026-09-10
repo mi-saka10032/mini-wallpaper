@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { getAll as fetchAllCollections, getCollectionWallpapers, toggleFavorite as toggleFavoriteApi } from "@/api/collection";
+import {
+  getAll as fetchAllCollections,
+  getCollectionWallpapers,
+  toggleFavorite as toggleFavoriteApi,
+} from "@/api/collection";
 
 /**
  * 收藏状态 store

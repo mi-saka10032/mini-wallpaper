@@ -1,5 +1,13 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 // ============ 断点配置 ============
 
@@ -7,7 +15,7 @@ import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type Re
 const BREAKPOINTS = [
   { minWidth: 1536, cols: 5 }, // 2xl
   { minWidth: 1280, cols: 4 }, // xl
-  { minWidth: 0, cols: 3 },    // 默认
+  { minWidth: 0, cols: 3 }, // 默认
 ] as const;
 
 /** 网格间距（与 gap-3 = 12px 对应） */
@@ -86,9 +94,7 @@ function VirtualRowInner<T>({
       >
         {rowItems.map((item, colIndex) => {
           const originalIndex = rowIndex * cols + colIndex;
-          return (
-            <div key={getKey(item)}>{renderItem(item, originalIndex)}</div>
-          );
+          return <div key={getKey(item)}>{renderItem(item, originalIndex)}</div>;
         })}
       </div>
     </div>
@@ -99,11 +105,7 @@ function VirtualRowInner<T>({
 function virtualRowAreEqual<T>(prev: VirtualRowProps<T>, next: VirtualRowProps<T>): boolean {
   // renderVersion 变化时强制重渲染
   if (prev.renderVersion !== next.renderVersion) return false;
-  if (
-    prev.cols !== next.cols ||
-    prev.rowIndex !== next.rowIndex ||
-    prev.gap !== next.gap
-  ) {
+  if (prev.cols !== next.cols || prev.rowIndex !== next.rowIndex || prev.gap !== next.gap) {
     return false;
   }
   // 比较 style 对象的关键属性
@@ -220,11 +222,7 @@ function VirtualGrid<T>({
   const totalHeight = virtualizer.getTotalSize();
 
   return (
-    <div
-      ref={containerRef}
-      className={className}
-      style={{ overflow: "auto" }}
-    >
+    <div ref={containerRef} className={className} style={{ overflow: "auto" }}>
       <div
         style={{
           height: `${totalHeight}px`,

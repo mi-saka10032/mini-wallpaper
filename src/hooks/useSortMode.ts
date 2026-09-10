@@ -30,7 +30,10 @@ export function useSortMode({
   const exitSortMode = useCallback(async () => {
     if (collectionId !== null && orderDirty && localOrder) {
       try {
-        await reorderWallpapers(collectionId, localOrder.map((w) => w.id));
+        await reorderWallpapers(
+          collectionId,
+          localOrder.map((w) => w.id),
+        );
         onCollectionChanged?.();
       } catch (e) {
         console.error("[exitSortMode]", e);

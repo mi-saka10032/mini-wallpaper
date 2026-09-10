@@ -46,7 +46,7 @@ export async function createSmart(name: string, ruleJson: string): Promise<Colle
 export async function updateSmart(
   id: number,
   ruleJson: string,
-  name?: string | null
+  name?: string | null,
 ): Promise<Collection> {
   return invoke(COMMANDS.UPDATE_SMART_COLLECTION, { id, name: name ?? null, ruleJson });
 }

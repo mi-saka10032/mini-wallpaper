@@ -57,7 +57,7 @@ export async function invoke<K extends keyof CommandMap>(
     }
     return await tauriInvoke(command, { req: reqArg });
   } catch (err: unknown) {
-    const message = typeof err === "string" ? err : (err as Error)?.message ?? String(err);
+    const message = typeof err === "string" ? err : ((err as Error)?.message ?? String(err));
     if (!options.silent) {
       toast.error(`[${command}] ${message}`);
     }

@@ -27,10 +27,7 @@ export async function importFiles(paths: string[]): Promise<Wallpaper[]> {
  * 字节数据通过 Tauri v2 raw body 直传（Uint8Array），避免 JSON 数组
  * 序列化开销；文件名经 fileName 请求头传入（encodeURIComponent 编码）。
  */
-export async function importWallpaperBytes(
-  name: string,
-  data: Uint8Array,
-): Promise<Wallpaper> {
+export async function importWallpaperBytes(name: string, data: Uint8Array): Promise<Wallpaper> {
   return tauriInvoke(COMMANDS.IMPORT_WALLPAPER_BYTES, data, {
     headers: { fileName: encodeURIComponent(name) },
   });
@@ -41,10 +38,7 @@ export async function importWallpaperBytes(
  * 字节数据通过 Tauri v2 raw body 直传（Uint8Array），避免 JSON
  * 序列化开销；wallpaperId 经请求头传入。
  */
-export async function saveVideoThumbnail(
-  wallpaperId: number,
-  data: Uint8Array,
-): Promise<string> {
+export async function saveVideoThumbnail(wallpaperId: number, data: Uint8Array): Promise<string> {
   return tauriInvoke(COMMANDS.SAVE_VIDEO_THUMBNAIL, data, {
     headers: { wallpaperId: String(wallpaperId) },
   });

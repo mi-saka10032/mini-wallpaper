@@ -2,14 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  SkipForward,
-  SkipBack,
-  Pause,
-  Play,
-  AppWindow,
-  X,
-} from "lucide-react";
+import { SkipForward, SkipBack, Pause, Play, AppWindow, X } from "lucide-react";
 
 /** 动作类型 → 图标 & 颜色映射 */
 const ACTION_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string }> = {
@@ -82,9 +75,12 @@ const ActionToast: React.FC = () => {
   }, [duration, handleClose]);
 
   // 解析动作配置
-  const configKey = action === "togglePause"
-    ? (message.includes("暂停") || message.includes("Paused") ? "togglePause_paused" : "togglePause_resumed")
-    : action;
+  const configKey =
+    action === "togglePause"
+      ? message.includes("暂停") || message.includes("Paused")
+        ? "togglePause_paused"
+        : "togglePause_resumed"
+      : action;
   const config = ACTION_CONFIG[configKey] || ACTION_CONFIG.next;
   const Icon = config.icon;
 
@@ -99,10 +95,7 @@ const ActionToast: React.FC = () => {
           rounded-xl border border-white/10
           bg-[#2d2d2d]/95
           transition-all duration-300 ease-out
-          ${visible && !exiting
-            ? "opacity-100 translate-x-0"
-            : "opacity-0 translate-x-8"
-          }
+          ${visible && !exiting ? "opacity-100 translate-x-0" : "opacity-0 translate-x-8"}
         `}
       >
         {/* 动作图标 */}
@@ -112,12 +105,8 @@ const ActionToast: React.FC = () => {
 
         {/* 消息内容 */}
         <div className="flex-1 min-w-0">
-          <p className="text-[12px] font-medium text-white/90 truncate">
-            {message}
-          </p>
-          <p className="text-[10px] text-white/40 mt-0.5">
-            Mini Wallpaper
-          </p>
+          <p className="text-[12px] font-medium text-white/90 truncate">{message}</p>
+          <p className="text-[10px] text-white/40 mt-0.5">Mini Wallpaper</p>
         </div>
 
         {/* 关闭按钮 */}

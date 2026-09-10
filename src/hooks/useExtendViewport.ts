@@ -29,8 +29,10 @@ export function useExtendViewport(monitorId: string | null, displayMode: string)
 
       const scaleFactor = await getCurrentWindow().scaleFactor();
 
-      let minX = Infinity, minY = Infinity;
-      let maxX = -Infinity, maxY = -Infinity;
+      let minX = Infinity,
+        minY = Infinity;
+      let maxX = -Infinity,
+        maxY = -Infinity;
 
       for (const m of monitors) {
         const x = m.position.x;
@@ -47,7 +49,7 @@ export function useExtendViewport(monitorId: string | null, displayMode: string)
       const totalHeight = (maxY - minY) / scaleFactor;
 
       const currentMonitor = monitors.find(
-        (m) => (m.name ?? `monitor_${monitors.indexOf(m)}`) === monitorId
+        (m) => (m.name ?? `monitor_${monitors.indexOf(m)}`) === monitorId,
       );
 
       if (!currentMonitor) {
@@ -62,9 +64,12 @@ export function useExtendViewport(monitorId: string | null, displayMode: string)
 
       console.log("[useExtendViewport] viewport computed:", {
         scaleFactor,
-        totalWidth, totalHeight,
-        offsetX, offsetY,
-        myWidth, myHeight,
+        totalWidth,
+        totalHeight,
+        offsetX,
+        offsetY,
+        myWidth,
+        myHeight,
         rawPhysical: { totalW: maxX - minX, totalH: maxY - minY },
       });
 

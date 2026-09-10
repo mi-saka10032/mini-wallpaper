@@ -10,11 +10,7 @@ interface SortToolbarProps {
 }
 
 /** 排序模式下的操作栏 */
-const SortToolbar: FC<SortToolbarProps> = memo(({
-  orderDirty,
-  onCancel,
-  onSave,
-}) => {
+const SortToolbar: FC<SortToolbarProps> = memo(({ orderDirty, onCancel, onSave }) => {
   const { t } = useTranslation();
 
   return (

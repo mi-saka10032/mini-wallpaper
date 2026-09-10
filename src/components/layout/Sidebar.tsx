@@ -157,7 +157,9 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
 
         {/* 收藏夹标题 + 新建按钮 */}
         <div className="mb-1 flex items-center justify-between px-3">
-          <span className="text-xs font-medium uppercase tracking-wide text-foreground/40">{t("sidebar.collections")}</span>
+          <span className="text-xs font-medium uppercase tracking-wide text-foreground/40">
+            {t("sidebar.collections")}
+          </span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -232,9 +234,7 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
             // 用户自建收藏夹：挂载完整的右键菜单
             return (
               <ContextMenu key={collection.id}>
-                <ContextMenuTrigger className="block w-full min-w-0">
-                  {trigger}
-                </ContextMenuTrigger>
+                <ContextMenuTrigger className="block w-full min-w-0">{trigger}</ContextMenuTrigger>
                 <ContextMenuContent className="w-32">
                   {isSmart && (
                     <ContextMenuItem onClick={() => openEditSmart(collection)}>
@@ -283,13 +283,13 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
         </div>
       </div>
 
-
-
       {/* 新建/重命名 Dialog */}
       <Dialog open={dialogMode !== null} onOpenChange={() => closeDialog()}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>{dialogMode === "create" ? t("sidebar.newCollection") : t("sidebar.renameCollection")}</DialogTitle>
+            <DialogTitle>
+              {dialogMode === "create" ? t("sidebar.newCollection") : t("sidebar.renameCollection")}
+            </DialogTitle>
           </DialogHeader>
           <div className="py-2">
             <Input

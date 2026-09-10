@@ -14,12 +14,29 @@ export function useInputBlock() {
     };
 
     const mouseEvents = [
-      "contextmenu", "click", "dblclick", "mousedown", "mouseup",
-      "mousemove", "mouseover", "mouseout", "mouseenter", "mouseleave",
-      "wheel", "auxclick",
+      "contextmenu",
+      "click",
+      "dblclick",
+      "mousedown",
+      "mouseup",
+      "mousemove",
+      "mouseover",
+      "mouseout",
+      "mouseenter",
+      "mouseleave",
+      "wheel",
+      "auxclick",
     ];
     const keyEvents = ["keydown", "keyup", "keypress"];
-    const dragEvents = ["dragover", "dragenter", "dragleave", "drop", "drag", "dragstart", "dragend"];
+    const dragEvents = [
+      "dragover",
+      "dragenter",
+      "dragleave",
+      "drop",
+      "drag",
+      "dragstart",
+      "dragend",
+    ];
     const otherEvents = ["selectstart", "copy", "cut", "paste", "focus", "blur"];
 
     const allEvents = [...mouseEvents, ...keyEvents, ...dragEvents, ...otherEvents];

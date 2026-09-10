@@ -13,9 +13,7 @@ function applyTheme(theme: Theme) {
 }
 
 export function useTheme() {
-  const storedTheme = useSettingStore(
-    (s) => s.settings[SETTING_KEYS.THEME] as Theme | undefined,
-  );
+  const storedTheme = useSettingStore((s) => s.settings[SETTING_KEYS.THEME] as Theme | undefined);
   const updateSetting = useSettingStore((s) => s.updateSetting);
 
   const [theme, setThemeState] = useState<Theme>(storedTheme || "system");
@@ -26,9 +24,7 @@ export function useTheme() {
       setThemeState(storedTheme);
       applyTheme(storedTheme);
     }
-  }, [
-    
-  ]);
+  }, []);
 
   const setTheme = useCallback(
     (newTheme: Theme) => {

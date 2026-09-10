@@ -62,7 +62,7 @@ const MainContent: React.FC<MainContentProps> = ({
   // 其「管理」入口也不再进入壁纸管理模式，而是直接编辑规则（见 smartDialogOpen）。
   const collections = useCollectionStore((s) => s.collections);
   const activeCollection = useMemo(
-    () => (isCollectionView ? collections.find((c) => c.id === activeId) ?? null : null),
+    () => (isCollectionView ? (collections.find((c) => c.id === activeId) ?? null) : null),
     [isCollectionView, collections, activeId],
   );
   const isSmartCollection = activeCollection?.kind === "smart";
@@ -136,10 +136,15 @@ const MainContent: React.FC<MainContentProps> = ({
     // 常态模式：normalKeyword 过滤
     return search.getNormalFilteredWallpapers(wallpapers);
   }, [
-    sort.sortMode, sort.localOrder,
-    manage.manageMode, manage.pendingRemovals, manage.pendingDeletions,
-    wallpapers, isCollectionView,
-    search.getFilteredWallpapers, search.getNormalFilteredWallpapers,
+    sort.sortMode,
+    sort.localOrder,
+    manage.manageMode,
+    manage.pendingRemovals,
+    manage.pendingDeletions,
+    wallpapers,
+    isCollectionView,
+    search.getFilteredWallpapers,
+    search.getNormalFilteredWallpapers,
   ]);
 
   const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
@@ -179,8 +184,7 @@ const MainContent: React.FC<MainContentProps> = ({
 
   // ===== 拖拽导入（H5 drag）=====
   // 仅本地壁纸普通模式生效：非收藏夹 + 非管理模式 + 非排序模式 + 非加载中
-  const dropEnabled =
-    !isCollectionView && !manage.manageMode && !sort.sortMode && !search.loading;
+  const dropEnabled = !isCollectionView && !manage.manageMode && !sort.sortMode && !search.loading;
 
   const handleDropImport = useCallback(
     async (files: File[]) => {
@@ -247,7 +251,7 @@ const MainContent: React.FC<MainContentProps> = ({
 
   return (
     <WallpaperCardContextMenuProvider>
-      <div className={cn('flex flex-1 flex-col overflow-hidden', className)}>
+      <div className={cn("flex flex-1 flex-col overflow-hidden", className)}>
         {/* 操作栏 */}
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/40 px-4">
           {sort.sortMode ? (
@@ -267,7 +271,9 @@ const MainContent: React.FC<MainContentProps> = ({
               onClearSelection={manage.clearSelection}
               onKeywordChange={search.setKeyword}
               onSortFieldChange={search.setSortField}
-              onSortOrderToggle={() => search.setSortOrder(search.sortOrder === "asc" ? "desc" : "asc")}
+              onSortOrderToggle={() =>
+                search.setSortOrder(search.sortOrder === "asc" ? "desc" : "asc")
+              }
               onDeleteSelected={() => manage.handleDeleteRequest(Array.from(manage.selectedIds))}
               onManageTags={() => setTagDialogOpen(true)}
               onCancel={manage.cancelManageMode}
@@ -296,12 +302,11 @@ const MainContent: React.FC<MainContentProps> = ({
             />
           )}
         </div>
-
         {/* 内容区 */}
         <div
           className={cn(
             "relative min-h-0 flex-1",
-            (search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled)
+            search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled
               ? "overflow-y-auto p-4"
               : "overflow-hidden",
           )}
@@ -336,7 +341,6 @@ const MainContent: React.FC<MainContentProps> = ({
           {/* 拖拽导入蒙层（仅启用时根据 isDragOver 显示） */}
           {dropEnabled && <DropOverlay visible={isDragOver} />}
         </div>
-
         {/* 底部状态栏 */}
         <StatusBar
           manageMode={manage.manageMode}
@@ -349,12 +353,13 @@ const MainContent: React.FC<MainContentProps> = ({
           pendingRemovalsCount={manage.pendingRemovals.length}
           pendingDeletionsCount={manage.pendingDeletions.length}
         />
-
         {/* 删除确认 */}
         <AlertDialog open={manage.deleteDialogOpen} onOpenChange={manage.setDeleteDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>{isCollectionView ? t("main.removeConfirmTitle") : t("main.deleteConfirmTitle")}</AlertDialogTitle>
+              <AlertDialogTitle>
+                {isCollectionView ? t("main.removeConfirmTitle") : t("main.deleteConfirmTitle")}
+              </AlertDialogTitle>
               <AlertDialogDescription>
                 {isCollectionView
                   ? t("main.removeConfirmDesc", { count: manage.pendingDeleteIds.length })
@@ -376,7 +381,6 @@ const MainContent: React.FC<MainContentProps> = ({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-
         {/* 批量标签编辑对话框 */}
         <TagEditorDialog
           open={tagDialogOpen}
@@ -384,7 +388,6 @@ const MainContent: React.FC<MainContentProps> = ({
           mode="batch"
           wallpaperIds={Array.from(manage.selectedIds)}
         />
-
         {/* 智能收藏夹规则编辑对话框（复用创建/编辑共用的构建器） */}
         {isSmartCollection && (
           <SmartCollectionDialog
@@ -392,7 +395,8 @@ const MainContent: React.FC<MainContentProps> = ({
             onOpenChange={handleSmartDialogOpenChange}
             editing={activeCollection}
           />
-        )}      </div>
+        )}{" "}
+      </div>
     </WallpaperCardContextMenuProvider>
   );
 };

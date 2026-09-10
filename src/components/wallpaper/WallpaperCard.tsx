@@ -1,8 +1,4 @@
-import {
-  Check,
-  GripVertical,
-  Heart,
-} from "lucide-react";
+import { Check, GripVertical, Heart } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -54,9 +50,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   const handleToggleFavorite = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      toggleFavorite(wallpaper.id).catch((err) =>
-        console.error("[toggleFavorite]", err),
-      );
+      toggleFavorite(wallpaper.id).catch((err) => console.error("[toggleFavorite]", err));
     },
     [toggleFavorite, wallpaper.id],
   );
@@ -125,9 +119,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
       wallpaper={wallpaper}
       style={style}
       className={cn(
-        manageMode && selected
-          ? "border-primary/70 ring-1 ring-primary/30 bg-primary/3"
-          : "",
+        manageMode && selected ? "border-primary/70 ring-1 ring-primary/30 bg-primary/3" : "",
         isDragging && "opacity-50 fluent-shadow-lg ring-1 ring-primary/40",
       )}
       onClick={(e) => {
@@ -143,35 +135,27 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
 // ============ 导出组件（带 React.memo） ============
 
 /** 普通壁纸卡片（无拖拽），使用 React.memo 避免不必要的重渲染 */
-export const WallpaperCard = memo(
-  WallpaperCardContent,
-  (prev, next) => {
-    // 仅在影响渲染的 props 变化时才重渲染
-    return (
-      prev.wallpaper === next.wallpaper &&
-      prev.index === next.index &&
-      prev.activeId === next.activeId &&
-      prev.manageMode === next.manageMode &&
-      prev.selected === next.selected &&
-      prev.isCollectionView === next.isCollectionView &&
-      prev.onClick === next.onClick &&
-      prev.onDelete === next.onDelete &&
-      prev.onAddToCollection === next.onAddToCollection
-    );
-  },
-);
+export const WallpaperCard = memo(WallpaperCardContent, (prev, next) => {
+  // 仅在影响渲染的 props 变化时才重渲染
+  return (
+    prev.wallpaper === next.wallpaper &&
+    prev.index === next.index &&
+    prev.activeId === next.activeId &&
+    prev.manageMode === next.manageMode &&
+    prev.selected === next.selected &&
+    prev.isCollectionView === next.isCollectionView &&
+    prev.onClick === next.onClick &&
+    prev.onDelete === next.onDelete &&
+    prev.onAddToCollection === next.onAddToCollection
+  );
+});
 WallpaperCard.displayName = "WallpaperCard";
 
 /** 可排序壁纸卡片（dnd-kit sortable） */
 const SortableWallpaperCardInner: React.FC<WallpaperCardProps> = (props) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: props.wallpaper.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: props.wallpaper.id,
+  });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -182,27 +166,20 @@ const SortableWallpaperCardInner: React.FC<WallpaperCardProps> = (props) => {
 
   return (
     <div ref={setNodeRef} style={style} {...attributes}>
-      <WallpaperCardContent
-        {...props}
-        isDragging={isDragging}
-        dragHandleProps={listeners}
-      />
+      <WallpaperCardContent {...props} isDragging={isDragging} dragHandleProps={listeners} />
     </div>
   );
 };
 
-export const SortableWallpaperCard = memo(
-  SortableWallpaperCardInner,
-  (prev, next) => {
-    // 排序模式下仅关注数据变化，跳过回调引用比较
-    return (
-      prev.wallpaper === next.wallpaper &&
-      prev.index === next.index &&
-      prev.activeId === next.activeId &&
-      prev.manageMode === next.manageMode &&
-      prev.selected === next.selected &&
-      prev.isCollectionView === next.isCollectionView
-    );
-  },
-);
+export const SortableWallpaperCard = memo(SortableWallpaperCardInner, (prev, next) => {
+  // 排序模式下仅关注数据变化，跳过回调引用比较
+  return (
+    prev.wallpaper === next.wallpaper &&
+    prev.index === next.index &&
+    prev.activeId === next.activeId &&
+    prev.manageMode === next.manageMode &&
+    prev.selected === next.selected &&
+    prev.isCollectionView === next.isCollectionView
+  );
+});
 SortableWallpaperCard.displayName = "SortableWallpaperCard";

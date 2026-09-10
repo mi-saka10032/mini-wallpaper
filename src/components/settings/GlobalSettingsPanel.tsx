@@ -10,10 +10,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import {
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
@@ -51,15 +48,8 @@ const GlobalSettingsDialog: React.FC = () => {
     toggleAutoStart,
   } = useGlobalSettings();
 
-  const {
-    backupBusy,
-    backupMsg,
-    dataSize,
-    progress,
-    formatSize,
-    handleExport,
-    handleImport,
-  } = useBackup(activeSection);
+  const { backupBusy, backupMsg, dataSize, progress, formatSize, handleExport, handleImport } =
+    useBackup(activeSection);
 
   /** 侧边栏导航项 */
   const navItems: { id: SettingSection; icon: React.ElementType; labelKey: string }[] = [
@@ -131,10 +121,7 @@ const GlobalSettingsDialog: React.FC = () => {
                         {t("settings.autoStartDesc")}
                       </p>
                     </div>
-                    <Switch
-                      checked={autoStartEnabled}
-                      onCheckedChange={toggleAutoStart}
-                    />
+                    <Switch checked={autoStartEnabled} onCheckedChange={toggleAutoStart} />
                   </div>
                 </div>
               </section>
@@ -154,15 +141,14 @@ const GlobalSettingsDialog: React.FC = () => {
                         {t("settings.closeToTrayDesc")}
                       </p>
                     </div>
-                    <Switch
-                      checked={isCloseToTray}
-                      onCheckedChange={toggleCloseToTray}
-                    />
+                    <Switch checked={isCloseToTray} onCheckedChange={toggleCloseToTray} />
                   </div>
                   <div className="mx-4 h-px bg-border/30" />
                   <div className="flex items-center justify-between px-4 py-3.5">
                     <div className="space-y-0.5">
-                      <Label className="text-[13px] font-medium">{t("settings.pauseOnFullscreen")}</Label>
+                      <Label className="text-[13px] font-medium">
+                        {t("settings.pauseOnFullscreen")}
+                      </Label>
                       <p className="text-[11px] leading-relaxed text-foreground/45">
                         {t("settings.pauseOnFullscreenDesc")}
                       </p>
@@ -212,11 +198,7 @@ const GlobalSettingsDialog: React.FC = () => {
                             : "text-foreground/70 hover:bg-primary-hover hover:text-foreground",
                         )}
                       >
-                        {isMuted ? (
-                          <VolumeX className="size-4" />
-                        ) : (
-                          <Volume2 className="size-4" />
-                        )}
+                        {isMuted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
                       </button>
                       <Slider
                         value={[volume]}

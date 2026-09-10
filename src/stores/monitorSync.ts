@@ -1,9 +1,6 @@
 import { availableMonitors, type Monitor } from "@tauri-apps/api/window";
 import type { MonitorConfig } from "@/api/config";
-import {
-  getMonitorConfigs,
-  upsertMonitorConfig,
-} from "@/api/monitorConfig";
+import { getMonitorConfigs, upsertMonitorConfig } from "@/api/monitorConfig";
 import {
   createWallpaperWindow,
   destroyWallpaperWindow,
@@ -27,10 +24,7 @@ if (import.meta.hot) {
  * - mirror: 所有显示器使用同一壁纸（数据由 Rust 保证一致，窗口正常创建）
  * - extend: 一张壁纸横跨所有显示器，每个窗口通过 availableMonitors() 自行计算裁剪区域
  */
-export async function syncWallpaperWindows(
-  configs: MonitorConfig[],
-  monitors: Monitor[],
-) {
+export async function syncWallpaperWindows(configs: MonitorConfig[], monitors: Monitor[]) {
   // 先从 Rust 端查询已有壁纸窗口，恢复前端跟踪集合（解决页面刷新后状态丢失问题）
   try {
     const existingWindows = await getActiveWallpaperWindows();
@@ -41,9 +35,7 @@ export async function syncWallpaperWindows(
     console.warn("[syncWallpaperWindows] Failed to query existing windows:", e);
   }
 
-  const monitorMap = new Map(
-    monitors.map((m) => [m.name ?? `monitor_${monitors.indexOf(m)}`, m]),
-  );
+  const monitorMap = new Map(monitors.map((m) => [m.name ?? `monitor_${monitors.indexOf(m)}`, m]));
 
   const activeIds = new Set<string>();
 
@@ -62,13 +54,7 @@ export async function syncWallpaperWindows(
       const pos = monitor.position;
       const size = monitor.size;
 
-      await createWallpaperWindow(
-        config.monitor_id,
-        pos.x,
-        pos.y,
-        size.width,
-        size.height,
-      );
+      await createWallpaperWindow(config.monitor_id, pos.x, pos.y, size.width, size.height);
       activeWallpaperWindows.add(config.monitor_id);
       console.log(`[syncWallpaperWindows] Created window for ${config.monitor_id}`);
     } catch (e) {
@@ -91,14 +77,10 @@ export async function syncWallpaperWindows(
 }
 
 /** 核心同步逻辑：检测物理显示器 → 比对 DB → upsert → 同步壁纸窗口 → 刷新 store */
-export async function doSyncMonitors(
-  set: (partial: { configs: MonitorConfig[] }) => void,
-) {
+export async function doSyncMonitors(set: (partial: { configs: MonitorConfig[] }) => void) {
   // 1. 检测当前物理显示器
   const monitors = await availableMonitors();
-  const activeMonitorIds = new Set(
-    monitors.map((m) => m.name ?? `monitor_${monitors.indexOf(m)}`),
-  );
+  const activeMonitorIds = new Set(monitors.map((m) => m.name ?? `monitor_${monitors.indexOf(m)}`));
 
   // 2. 获取现有 configs
   const existingConfigs = await getMonitorConfigs();

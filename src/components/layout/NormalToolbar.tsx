@@ -30,7 +30,17 @@ interface NormalToolbarProps {
   onPickerConfirm: () => void;
 }
 
-/** 常态模式下的操作栏 */
+/** 图标槽位的统一尺寸，与 Button 的 icon-sm 变体保持一致，供占位符复用 */
+const SLOT_SIZE = "size-8";
+
+/**
+ * 常态模式下的操作栏。
+ *
+ * 采用显式三槽布局：左操作区 / 弹性留白 + 搜索区 / 右操作区。
+ * 三个槽位都是恒定存在的 flex 容器，视图切换时只替换槽内内容、不增删槽位本身，
+ * 从而保证「管理」等主操作按钮的横向位置在主库、手动收藏夹、智能收藏夹三种视图下一致，
+ * 不再因左侧按钮宽度差异或中间按钮的条件渲染而漂移。
+ */
 const NormalToolbar: FC<NormalToolbarProps> = memo(
   ({
     isCollectionView,
@@ -61,6 +71,29 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
       setPickerOpen(open);
     }, []);
 
+    const handleKeywordInput = useCallback(
+      (e: React.ChangeEvent<HTMLInputElement>) => {
+        onNormalKeywordChange(e.target.value);
+      },
+      [onNormalKeywordChange],
+    );
+
+    const handleSearchBlur = useCallback(() => {
+      if (!normalKeyword) onSearchCollapse();
+    }, [normalKeyword, onSearchCollapse]);
+
+    const handleSearchClear = useCallback(() => {
+      onNormalKeywordChange("");
+      onSearchCollapse();
+    }, [onNormalKeywordChange, onSearchCollapse]);
+
+    const handleSearchKeyDown = useCallback(
+      (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === "Escape") handleSearchClear();
+      },
+      [handleSearchClear],
+    );
+
     // 已存在于收藏夹中的壁纸 ID 集合
     const existingWallpaperIds = useMemo(
       () => new Set(collectionWallpapers.map((w) => w.id)),
@@ -69,129 +102,135 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
 
     return (
       <>
-        {/* 收藏夹视图：添加壁纸按钮 + Dialog */}
-        {isCollectionView && collectionId !== null && (
-          <Dialog open={pickerOpen} onOpenChange={handlePickerOpenChange}>
-            <DialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
-              >
-                <Plus className="size-3.5" />
-                {t("main.addWallpaper")}
-              </Button>
-            </DialogTrigger>
-            <WallpaperPickerDialog
-              collectionId={collectionId}
-              existingWallpaperIds={existingWallpaperIds}
-              onClose={() => setPickerOpen(false)}
-              onConfirm={handlePickerConfirm}
-            />
-          </Dialog>
-        )}
-
-        {/* 本地壁纸视图：刷新按钮 */}
-        {!isCollectionView && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onRefresh}
-            className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
-            title={t("main.refresh")}
-          >
-            <RefreshCw className="size-3.5" />
-          </Button>
-        )}
-
-        <div className="flex-1" />
-
-        {/* 常态搜索框（可折叠） */}
-        {!isEmpty && (
-          <div className="flex items-center">
-            {searchExpanded ? (
-              <div className="relative animate-in fade-in slide-in-from-right-2 duration-200">
-                <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-foreground/40" />
-                <Input
-                  autoFocus
-                  value={normalKeyword}
-                  onChange={(e) => onNormalKeywordChange(e.target.value)}
-                  placeholder={t("grid.searchPlaceholder")}
-                  className="h-7 w-44 pl-7 pr-7 text-xs"
-                  onBlur={() => {
-                    if (!normalKeyword) onSearchCollapse();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      onNormalKeywordChange("");
-                      onSearchCollapse();
-                    }
-                  }}
-                />
-                {normalKeyword && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onNormalKeywordChange("");
-                      onSearchCollapse();
-                    }}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-foreground/40 hover:text-foreground"
+        {/* ===== 槽位一：左操作区（视图级动作，统一为定宽图标按钮） ===== */}
+        <div className="flex shrink-0 items-center gap-1">
+          {isCollectionView ? (
+            collectionId !== null ? (
+              <Dialog open={pickerOpen} onOpenChange={handlePickerOpenChange}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+                    title={t("main.addWallpaper")}
+                    aria-label={t("main.addWallpaper")}
                   >
-                    <X className="size-3" />
-                  </button>
-                )}
-              </div>
+                    <Plus className="size-3.5" />
+                  </Button>
+                </DialogTrigger>
+                <WallpaperPickerDialog
+                  collectionId={collectionId}
+                  existingWallpaperIds={existingWallpaperIds}
+                  onClose={() => setPickerOpen(false)}
+                  onConfirm={handlePickerConfirm}
+                />
+              </Dialog>
             ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onSearchExpand}
-                className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
-              >
-                <Search className="size-3.5" />
-              </Button>
-            )}
-          </div>
-        )}
+              <div className={SLOT_SIZE} aria-hidden />
+            )
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onRefresh}
+              className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              title={t("main.refresh")}
+              aria-label={t("main.refresh")}
+            >
+              <RefreshCw className="size-3.5" />
+            </Button>
+          )}
+        </div>
 
-        {/* 收藏夹视图：拖拽排序按钮（智能收藏夹成员由规则求值，不支持手动排序） */}
-        {!isEmpty && isCollectionView && !isSmartCollection && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onEnterSortMode}
-            className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
-          >
-            <GripVertical className="size-3.5" />
-            {t("main.sortWallpapers")}
-          </Button>
-        )}
+        {/* 弹性留白：把搜索区与右操作区一起推到右侧 */}
+        <div className="min-w-0 flex-1" />
 
-        {/* 智能收藏夹：管理即编辑规则（成员由规则求值，无需壁纸增删管理）。
-          空结果时同样要显示，因为此时正是需要修正规则的场景。 */}
-        {isSmartCollection ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onEditSmartRule}
-            className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
-          >
-            <Sparkles className="size-3.5" />
-            {t("sidebar.editRule")}
-          </Button>
-        ) : (
-          !isEmpty && (
+        {/* ===== 槽位二：搜索区（折叠态与展开态共用同一槽位） ===== */}
+        <div className="flex shrink-0 items-center">
+          {isEmpty ? (
+            <div className={SLOT_SIZE} aria-hidden />
+          ) : searchExpanded ? (
+            <div className="relative animate-in fade-in slide-in-from-right-2 duration-200">
+              <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-foreground/40" />
+              <Input
+                autoFocus
+                value={normalKeyword}
+                onChange={handleKeywordInput}
+                placeholder={t("grid.searchPlaceholder")}
+                className="h-8 w-44 pl-7 pr-7 text-xs"
+                onBlur={handleSearchBlur}
+                onKeyDown={handleSearchKeyDown}
+              />
+              {normalKeyword && (
+                <button
+                  type="button"
+                  onClick={handleSearchClear}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-foreground/40 hover:text-foreground"
+                  title={t("grid.clearSearch")}
+                  aria-label={t("grid.clearSearch")}
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </div>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onSearchExpand}
+              className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              title={t("grid.search")}
+              aria-label={t("grid.search")}
+            >
+              <Search className="size-3.5" />
+            </Button>
+          )}
+        </div>
+
+        {/* ===== 槽位三：右操作区（次操作 + 主操作，主操作恒定居于末尾） ===== */}
+        <div className="flex shrink-0 items-center gap-1">
+          {/* 次操作位：仅手动收藏夹有拖拽排序；其余视图渲染等宽占位以锁定主操作位置 */}
+          {!isEmpty && isCollectionView && !isSmartCollection ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onEnterSortMode}
+              className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              title={t("main.sortWallpapers")}
+              aria-label={t("main.sortWallpapers")}
+            >
+              <GripVertical className="size-3.5" />
+            </Button>
+          ) : (
+            <div className={SLOT_SIZE} aria-hidden />
+          )}
+
+          {/* 主操作位：智能收藏夹为「编辑规则」，其余为「管理壁纸」。
+              智能收藏夹空结果时同样要显示，因为此时正是需要修正规则的场景。 */}
+          {isSmartCollection ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onEditSmartRule}
+              className="gap-1.5 text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+            >
+              <Sparkles className="size-3.5" />
+              {t("sidebar.editRule")}
+            </Button>
+          ) : !isEmpty ? (
             <Button
               variant="ghost"
               size="sm"
               onClick={onEnterManageMode}
-              className="gap-1.5 text-foreground/60 hover:text-foreground hover:bg-primary-hover"
+              className="gap-1.5 text-foreground/60 hover:bg-primary-hover hover:text-foreground"
             >
               <Settings2 className="size-3.5" />
               {t("main.manageWallpapers")}
             </Button>
-          )
-        )}
+          ) : (
+            <div className="h-8" aria-hidden />
+          )}
+        </div>
       </>
     );
   },

@@ -3,6 +3,7 @@ import { Search, SortAsc, Tag as TagIcon, Trash2, Unlink, X } from "lucide-react
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import PopConfirm from "@/components/ui/pop-confirm";
 import {
   Select,
   SelectContent,
@@ -19,6 +20,10 @@ interface ManageToolbarProps {
   sortField: SortField;
   sortOrder: SortOrder;
   isCollectionView: boolean;
+  /** 待移除项数量（收藏夹视图），>0 时取消需二次确认 */
+  pendingRemovalsCount: number;
+  /** 待删除项数量（全部壁纸视图），>0 时取消需二次确认 */
+  pendingDeletionsCount: number;
   onSelectAll: () => void;
   onClearSelection: () => void;
   onKeywordChange: (value: string) => void;
@@ -38,6 +43,8 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
     sortField,
     sortOrder,
     isCollectionView,
+    pendingRemovalsCount,
+    pendingDeletionsCount,
     onSelectAll,
     onClearSelection,
     onKeywordChange,
@@ -49,6 +56,9 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
     onDone,
   }) => {
     const { t } = useTranslation();
+
+    // 两类待提交操作互斥：收藏夹视图只会产生待移除，全部壁纸视图只会产生待删除
+    const pendingCount = isCollectionView ? pendingRemovalsCount : pendingDeletionsCount;
 
     return (
       <>
@@ -153,9 +163,25 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
             )}
           </button>
         )}
-        <Button variant="ghost" size="sm" onClick={onCancel}>
-          {t("main.cancel")}
-        </Button>
+        <PopConfirm
+          enabled={pendingCount > 0}
+          align="end"
+          side="bottom"
+          title={t("main.cancelConfirmTitle")}
+          description={
+            isCollectionView
+              ? t("main.cancelConfirmRemovals", { count: pendingCount })
+              : t("main.cancelConfirmDeletions", { count: pendingCount })
+          }
+          confirmText={t("main.cancelConfirmDiscard")}
+          cancelText={t("main.cancelConfirmKeep")}
+          confirmVariant="destructive"
+          onConfirm={onCancel}
+        >
+          <Button variant="ghost" size="sm">
+            {t("main.cancel")}
+          </Button>
+        </PopConfirm>
         <Button variant="outline" size="sm" onClick={onDone}>
           {t("main.done")}
         </Button>

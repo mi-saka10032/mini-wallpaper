@@ -267,6 +267,8 @@ const MainContent: React.FC<MainContentProps> = ({
               sortField={search.sortField}
               sortOrder={search.sortOrder}
               isCollectionView={isCollectionView}
+              pendingRemovalsCount={manage.pendingRemovals.length}
+              pendingDeletionsCount={manage.pendingDeletions.length}
               onSelectAll={() => manage.selectAll(displayWallpapers)}
               onClearSelection={manage.clearSelection}
               onKeywordChange={search.setKeyword}

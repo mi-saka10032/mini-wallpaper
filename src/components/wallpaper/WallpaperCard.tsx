@@ -1,11 +1,13 @@
-import { Check, GripVertical, Heart } from "lucide-react";
+import { Check, GripVertical, Heart, Monitor } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import { useWallpaperCardContextMenu } from "@/components/wallpaper/WallpaperCardContextMenu";
 import { useFavoritesStore } from "@/stores/favoritesStore";
+import { useMonitorsUsingWallpaper } from "@/stores/monitorConfigStore";
 import type { Wallpaper } from "@/api/config";
 
 // ============ 类型定义 ============
@@ -42,10 +44,14 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   style,
 }) => {
   const { openContextMenu } = useWallpaperCardContextMenu();
+  const { t } = useTranslation();
 
   // 订阅该壁纸的收藏状态（仅当自身收藏态变化时重渲染）
   const isFavorite = useFavoritesStore((s) => s.favoriteIds.has(wallpaper.id));
   const toggleFavorite = useFavoritesStore((s) => s.toggle);
+
+  // 反查该壁纸正被哪些 active 显示器使用（多显示器为默认场景，单显示器同样返回该显示器）
+  const monitorsInUse = useMonitorsUsingWallpaper(wallpaper.id);
 
   const handleToggleFavorite = useCallback(
     (e: React.MouseEvent) => {
@@ -87,7 +93,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
       <button
         type="button"
         onClick={handleToggleFavorite}
-        title={isFavorite ? "取消收藏" : "收藏"}
+        title={isFavorite ? t("main.unfavorite") : t("main.favorite")}
         className={cn(
           "absolute left-1.5 top-1.5 z-20 flex size-6 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm transition-all hover:bg-black/60 hover:scale-110 active:scale-95",
           isFavorite
@@ -98,7 +104,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
         <Heart className={cn("size-3.5", isFavorite && "fill-current")} />
       </button>
     );
-  }, [manageMode, selected, isFavorite, handleToggleFavorite]);
+  }, [manageMode, selected, isFavorite, handleToggleFavorite, t]);
 
   // 右下角叠加层：拖拽手柄
   const overlayBottomRight = useMemo(() => {
@@ -114,12 +120,41 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
     );
   }, [dragHandleProps]);
 
+  // 缩略图左下角叠加层：「使用中」角标（常驻，无需右键即可识别当前壁纸）
+  const overlayBottomLeft = useMemo(() => {
+    if (monitorsInUse.length === 0) return null;
+    // 管理模式下让位于勾选态，避免与批量操作的视觉信号竞争
+    if (manageMode) return null;
+
+    const isMultiple = monitorsInUse.length > 1;
+    const label = isMultiple
+      ? t("main.inUse") + " · " + monitorsInUse.length
+      : t("main.inUse") + " · " + monitorsInUse[0];
+    const tooltip = isMultiple
+      ? t("main.inUseOnMultiple", {
+          count: monitorsInUse.length,
+          names: monitorsInUse.join("、"),
+        })
+      : t("main.inUseOn", { name: monitorsInUse[0] });
+
+    return (
+      <div
+        title={tooltip}
+        className="absolute bottom-1.5 left-1.5 z-10 flex max-w-[calc(100%-0.75rem)] items-center gap-1 rounded-sm bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground shadow-sm backdrop-blur-sm"
+      >
+        <Monitor className="size-3 shrink-0" />
+        <span className="truncate">{label}</span>
+      </div>
+    );
+  }, [monitorsInUse, manageMode, t]);
+
   return (
     <ThumbnailCard
       wallpaper={wallpaper}
       style={style}
       className={cn(
         manageMode && selected ? "border-primary/70 ring-1 ring-primary/30 bg-primary/3" : "",
+        !manageMode && monitorsInUse.length > 0 && "border-primary/60 ring-1 ring-primary/25",
         isDragging && "opacity-50 fluent-shadow-lg ring-1 ring-primary/40",
       )}
       onClick={(e) => {
@@ -128,6 +163,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
       onContextMenu={handleContextMenu}
       overlayTopLeft={overlayTopLeft}
       overlayBottomRight={overlayBottomRight}
+      overlayBottomLeft={overlayBottomLeft}
     />
   );
 };

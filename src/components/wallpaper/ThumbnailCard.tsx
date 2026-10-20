@@ -23,6 +23,8 @@ export interface ThumbnailCardProps {
   overlayTopLeft?: React.ReactNode;
   /** 右下角叠加层（如拖拽手柄） */
   overlayBottomRight?: React.ReactNode;
+  /** 缩略图区左下角叠加层（如「使用中」角标） */
+  overlayBottomLeft?: React.ReactNode;
   /** 是否禁用点击（cursor-not-allowed） */
   disabled?: boolean;
 }
@@ -46,6 +48,7 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
   style,
   overlayTopLeft,
   overlayBottomRight,
+  overlayBottomLeft,
   disabled = false,
 }) => {
   const { t } = useTranslation();
@@ -70,7 +73,7 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
       {overlayBottomRight}
 
       {/* 缩略图 */}
-      <div className="aspect-video">
+      <div className="relative aspect-video">
         {wallpaper.thumb_path ? (
           <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
@@ -82,6 +85,9 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
             <TypeIcon className="size-8 text-foreground/50/40" />
           </div>
         )}
+
+        {/* 缩略图区左下角叠加层插槽 */}
+        {overlayBottomLeft}
       </div>
 
       {/* 文件信息 */}

@@ -62,6 +62,13 @@ export default {
     orderModified: "· Order changed, click Done to save",
     pendingRemovals: "· {{count}} item(s) pending removal",
     pendingDeletions: "· {{count}} item(s) pending deletion",
+    cancelConfirmTitle: "Discard these changes?",
+    cancelConfirmRemovals:
+      "{{count}} pending removal(s) have not been applied. You'll need to select them again.",
+    cancelConfirmDeletions:
+      "{{count}} pending deletion(s) have not been applied. You'll need to select them again.",
+    cancelConfirmDiscard: "Discard",
+    cancelConfirmKeep: "Keep Editing",
     sortWallpapers: "Sort",
     sortModeHint: "Drag cards to reorder",
     save: "Save",
@@ -78,6 +85,9 @@ export default {
     unfavorite: "Unfavorite",
     wallpaperOf: "{{name}}'s wallpaper",
     currentWallpaper: "Current",
+    inUse: "In use",
+    inUseOn: "In use on {{name}}",
+    inUseOnMultiple: "In use on {{count}} monitors: {{names}}",
     releaseToImport: "Drop to import wallpapers",
     dropToImport: "Drag files here to import",
     supportedFormats: "Supports images, videos, and GIF files",
@@ -167,7 +177,9 @@ export default {
   grid: {
     selectAll: "Select All",
     clearSelection: "Deselect All",
+    search: "Search wallpapers",
     searchPlaceholder: "Search wallpapers...",
+    clearSearch: "Clear search",
     sortByDate: "By Date",
     sortByName: "By Name",
     sortBySize: "By Size",

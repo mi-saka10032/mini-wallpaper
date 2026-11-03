@@ -107,8 +107,8 @@ const MainContent: React.FC<MainContentProps> = ({
   }, [manage.enterManageMode, search.resetManageSearch, search.resetNormalSearch]);
 
   const exitManageMode = useCallback(async () => {
-    await manage.exitManageMode();
-    search.resetManageSearch();
+    const exited = await manage.exitManageMode();
+    if (exited) search.resetManageSearch();
   }, [manage.exitManageMode, search.resetManageSearch]);
 
   const enterSortMode = useCallback(() => {
@@ -280,6 +280,7 @@ const MainContent: React.FC<MainContentProps> = ({
               onManageTags={() => setTagDialogOpen(true)}
               onCancel={manage.cancelManageMode}
               onDone={exitManageMode}
+              submitting={manage.submitting}
             />
           ) : (
             <NormalToolbar
@@ -369,9 +370,13 @@ const MainContent: React.FC<MainContentProps> = ({
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>{t("main.cancel")}</AlertDialogCancel>
+              <AlertDialogCancel disabled={manage.submitting}>{t("main.cancel")}</AlertDialogCancel>
               <AlertDialogAction
-                onClick={manage.handleDeleteConfirm}
+                disabled={manage.submitting}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void manage.handleDeleteConfirm();
+                }}
                 className={
                   isCollectionView
                     ? ""

@@ -272,6 +272,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       }
     } catch (e) {
       console.error("[deleteWallpapers]", e);
+      throw e;
     }
   },
 

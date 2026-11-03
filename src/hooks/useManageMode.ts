@@ -35,6 +35,22 @@ export function useManageMode({
   pendingRemovalsRef.current = pendingRemovals;
   const pendingDeletionsRef = useRef(pendingDeletions);
   pendingDeletionsRef.current = pendingDeletions;
+  const pendingDeleteIdsRef = useRef(pendingDeleteIds);
+  pendingDeleteIdsRef.current = pendingDeleteIds;
+
+  // 同步锁：完成和确认删除共用，挡住状态更新前的连点
+  const submittingRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const beginSubmit = useCallback(() => {
+    if (submittingRef.current) return false;
+    submittingRef.current = true;
+    setSubmitting(true);
+    return true;
+  }, []);
+  const endSubmit = useCallback(() => {
+    submittingRef.current = false;
+    setSubmitting(false);
+  }, []);
 
   const enterManageMode = useCallback(() => {
     setManageMode(true);
@@ -46,30 +62,41 @@ export function useManageMode({
   }, [onManageModeChange]);
 
   const exitManageMode = useCallback(async () => {
-    if (isCollectionView && collectionId !== null && pendingRemovalsRef.current.length > 0) {
-      try {
+    if (!beginSubmit()) return false;
+    try {
+      if (isCollectionView && collectionId !== null && pendingRemovalsRef.current.length > 0) {
         await removeWallpapers(collectionId, pendingRemovalsRef.current);
         onCollectionChanged?.();
-      } catch (e) {
-        console.error("[exitManageMode]", e);
       }
-    }
-    if (!isCollectionView && pendingDeletionsRef.current.length > 0) {
-      try {
+      if (!isCollectionView && pendingDeletionsRef.current.length > 0) {
         await deleteWallpapers(pendingDeletionsRef.current);
         // 与 handleDeleteConfirm 同理：软删除影响收藏夹命中集，需刷新当前视图
         onCollectionChanged?.();
-      } catch (e) {
-        console.error("[exitManageMode] delete wallpapers failed:", e);
       }
+      pendingRemovalsRef.current = [];
+      pendingDeletionsRef.current = [];
+      setManageMode(false);
+      setSelectedIds(new Set());
+      setPendingRemovals([]);
+      setPendingDeletions([]);
+      document.body.removeAttribute("data-manage-mode");
+      onManageModeChange?.(false);
+      return true;
+    } catch (e) {
+      console.error("[exitManageMode]", e);
+      return false;
+    } finally {
+      endSubmit();
     }
-    setManageMode(false);
-    setSelectedIds(new Set());
-    setPendingRemovals([]);
-    setPendingDeletions([]);
-    document.body.removeAttribute("data-manage-mode");
-    onManageModeChange?.(false);
-  }, [isCollectionView, collectionId, deleteWallpapers, onCollectionChanged, onManageModeChange]);
+  }, [
+    isCollectionView,
+    collectionId,
+    deleteWallpapers,
+    onCollectionChanged,
+    onManageModeChange,
+    beginSubmit,
+    endSubmit,
+  ]);
 
   const cancelManageMode = useCallback(() => {
     setManageMode(false);
@@ -122,19 +149,35 @@ export function useManageMode({
   }, []);
 
   const handleDeleteConfirm = useCallback(async () => {
-    if (isCollectionView && collectionId !== null) {
-      await removeWallpapers(collectionId, pendingDeleteIds);
-      onCollectionChanged?.();
-    } else {
-      await deleteWallpapers(pendingDeleteIds);
-      // 软删除会改变收藏夹命中集（智能收藏夹实时求值、手动收藏夹过滤已删成员），
-      // 若当前正停留在收藏夹视图，需重新拉取，否则已入回收站的壁纸仍留在网格上
-      onCollectionChanged?.();
+    if (!beginSubmit()) return;
+    const ids = pendingDeleteIdsRef.current;
+    try {
+      if (isCollectionView && collectionId !== null) {
+        await removeWallpapers(collectionId, ids);
+        onCollectionChanged?.();
+      } else {
+        await deleteWallpapers(ids);
+        // 软删除会改变收藏夹命中集（智能收藏夹实时求值、手动收藏夹过滤已删成员），
+        // 若当前正停留在收藏夹视图，需重新拉取，否则已入回收站的壁纸仍留在网格上
+        onCollectionChanged?.();
+      }
+      pendingDeleteIdsRef.current = [];
+      setPendingDeleteIds([]);
+      setDeleteDialogOpen(false);
+      setSelectedIds(new Set());
+    } catch (e) {
+      console.error("[handleDeleteConfirm]", e);
+    } finally {
+      endSubmit();
     }
-    setPendingDeleteIds([]);
-    setDeleteDialogOpen(false);
-    setSelectedIds(new Set());
-  }, [deleteWallpapers, pendingDeleteIds, isCollectionView, collectionId, onCollectionChanged]);
+  }, [
+    deleteWallpapers,
+    isCollectionView,
+    collectionId,
+    onCollectionChanged,
+    beginSubmit,
+    endSubmit,
+  ]);
 
   const handleAddToCollection = useCallback(
     async (wallpaperId: number, targetCollectionId: number) => {
@@ -155,6 +198,7 @@ export function useManageMode({
     pendingRemovals,
     pendingDeletions,
     setDeleteDialogOpen,
+    submitting,
     enterManageMode,
     exitManageMode,
     cancelManageMode,

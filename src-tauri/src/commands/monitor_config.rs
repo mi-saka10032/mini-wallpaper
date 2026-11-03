@@ -20,7 +20,8 @@ use super::error::CommandResult;
 pub async fn get_monitor_configs(
     ctx: State<'_, AppContext>,
 ) -> CommandResult<Vec<monitor_config::Model>> {
-    Ok(monitor_config_service::get_all(&ctx.db).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(monitor_config_service::get_all(&app_ctx.db).await?)
 }
 
 /// 根据 monitor_id 获取配置
@@ -30,7 +31,8 @@ pub async fn get_monitor_config(
     req: Validated<GetMonitorConfigRequest>,
 ) -> CommandResult<Option<monitor_config::Model>> {
     let req = req.into_inner();
-    Ok(monitor_config_service::get_by_monitor_id(&ctx.db, &req.monitor_id).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(monitor_config_service::get_by_monitor_id(&app_ctx.db, &req.monitor_id).await?)
 }
 
 /// 创建或更新显示器配置
@@ -54,8 +56,9 @@ pub async fn upsert_monitor_config(
     let wallpaper_changed = req.wallpaper_id;
     // 需要重启定时器的场景：play_interval 变更（需重建 interval）、collection_id 变更（切换收藏夹）
     let need_restart = req.play_interval.is_some() || req.collection_id.is_some();
+    let app_ctx: &AppContext = ctx.inner();
 
-    let config = monitor_config_service::upsert(&ctx.db, &req).await?;
+    let config = monitor_config_service::upsert(&app_ctx.db, &req).await?;
 
     // ===== 定时器管理 =====
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
@@ -65,7 +68,7 @@ pub async fn upsert_monitor_config(
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
     let is_sync = sched.resolve_is_sync_mode().await;
 
-    let wm = ctx.window_manager.lock().await;
+    let wm = app_ctx.window_manager.lock().await;
     if let Some(fit_mode) = fit_mode_changed.as_deref() {
         wm.notify_fit_mode_update(&config.monitor_id, fit_mode, is_sync);
     }
@@ -92,7 +95,8 @@ pub async fn delete_monitor_config(
         sched.stop(&carousel_key(mid));
     }
 
-    monitor_config_service::delete(&ctx.db, req.id).await?;
+    let app_ctx: &AppContext = ctx.inner();
+    monitor_config_service::delete(&app_ctx.db, req.id).await?;
 
     Ok(())
 }
@@ -102,9 +106,7 @@ pub async fn delete_monitor_config(
 /// 委托 Scheduler 的 start_all_carousel_timers 方法，
 /// display_mode 感知逻辑已内聚在 Scheduler 中。
 #[tauri::command]
-pub async fn start_timers(
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
-) -> CommandResult<()> {
+pub async fn start_timers(scheduler: State<'_, Arc<Mutex<Scheduler>>>) -> CommandResult<()> {
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
     let mut sched = scheduler_handle.lock().await;
     sched.start_all_carousel_timers().await;

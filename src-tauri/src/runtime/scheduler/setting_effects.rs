@@ -31,10 +31,7 @@ impl Scheduler {
                 let enabled = value == "true";
                 if enabled {
                     if !self.is_running(FULLSCREEN_TIMER_KEY) {
-                        self.spawn(
-                            FULLSCREEN_TIMER_KEY.to_string(),
-                            FullscreenDetectionTask,
-                        );
+                        self.spawn(FULLSCREEN_TIMER_KEY.to_string(), FullscreenDetectionTask);
                         info!("[Scheduler] 全屏检测已启动");
                     }
                 } else {
@@ -46,7 +43,9 @@ impl Scheduler {
                 let volume = value.parse::<u32>().unwrap_or(0).min(100);
                 let wm = self.window_manager();
                 let mgr = wm.lock().await;
-                mgr.broadcast(&VolumeChangedPayload { volume: volume as f64 });
+                mgr.broadcast(&VolumeChangedPayload {
+                    volume: volume as f64,
+                });
                 info!("[Scheduler] 音量已更新: {}%", volume);
             }
             setting_keys::DISPLAY_MODE => {
@@ -116,22 +115,18 @@ impl Scheduler {
                     let key = carousel_key(&config.monitor_id);
                     if monitor_config_service::should_start_timer(config) {
                         if let Some(cid) = config.collection_id {
-                            match collection_service::has_enough_wallpapers(&db, cid).await {
-                                Ok(true) => {
-                                    if !self.is_running(&key) {
-                                        self.spawn(
-                                            key,
-                                            CarouselTask {
-                                                monitor_id: config.monitor_id.clone(),
-                                            },
-                                        );
-                                        info!(
-                                            "[Scheduler] 恢复定时器: {}",
-                                            config.monitor_id
-                                        );
-                                    }
+                            if let Ok(true) =
+                                collection_service::has_enough_wallpapers(&db, cid).await
+                            {
+                                if !self.is_running(&key) {
+                                    self.spawn(
+                                        key,
+                                        CarouselTask {
+                                            monitor_id: config.monitor_id.clone(),
+                                        },
+                                    );
+                                    info!("[Scheduler] 恢复定时器: {}", config.monitor_id);
                                 }
-                                _ => {}
                             }
                         }
                     }
@@ -146,8 +141,7 @@ impl Scheduler {
                         .unwrap_or("")
                 });
 
-                let primary_config =
-                    active_configs.iter().find(|c| c.monitor_id == primary_mid);
+                let primary_config = active_configs.iter().find(|c| c.monitor_id == primary_mid);
                 if let Some(source) = primary_config {
                     for config in &active_configs {
                         if config.monitor_id == primary_mid {
@@ -160,10 +154,7 @@ impl Scheduler {
                         )
                         .await
                         {
-                            warn!(
-                                "[Scheduler] 同步配置到 {} 失败: {}",
-                                config.monitor_id, e
-                            );
+                            warn!("[Scheduler] 同步配置到 {} 失败: {}", config.monitor_id, e);
                         }
                     }
                 }
@@ -189,10 +180,7 @@ impl Scheduler {
                         let key = carousel_key(&config.monitor_id);
                         if self.is_running(&key) {
                             self.stop(&key);
-                            info!(
-                                "[Scheduler] 停止从属定时器: {}",
-                                config.monitor_id
-                            );
+                            info!("[Scheduler] 停止从属定时器: {}", config.monitor_id);
                         }
                     }
                 }
@@ -210,10 +198,7 @@ impl Scheduler {
                                             monitor_id: source.monitor_id.clone(),
                                         },
                                     );
-                                    info!(
-                                        "[Scheduler] 主定时器已启动: {}",
-                                        source.monitor_id
-                                    );
+                                    info!("[Scheduler] 主定时器已启动: {}", source.monitor_id);
                                 }
                                 Ok(false) => {
                                     self.stop(&key);

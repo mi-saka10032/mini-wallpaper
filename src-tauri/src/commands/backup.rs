@@ -19,22 +19,23 @@ pub async fn export_backup(
     ctx: State<'_, AppContext>,
     req: Validated<ExportBackupRequest>,
 ) -> CommandResult<String> {
-    let _guard = ctx
+    let app_ctx: &AppContext = ctx.inner();
+    let _guard = app_ctx
         .backup_lock
         .try_lock()
         .map_err(|_| "已有备份任务正在执行，请等待完成后再试".to_string())?;
 
     let req = req.into_inner();
-    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
+    let app_data_dir = app_ctx.app_handle.path().app_data_dir()?;
     let snapshot_dir =
         std::env::temp_dir().join(format!("mini-wallpaper-backup-{}", std::process::id()));
     let snapshot = snapshot_dir.join("app.db");
-    if let Err(error) = backup_service::snapshot_database(&ctx.db, &snapshot).await {
+    if let Err(error) = backup_service::snapshot_database(&app_ctx.db, &snapshot).await {
         let _ = std::fs::remove_dir_all(&snapshot_dir);
         return Err(error.to_string().into());
     }
 
-    let handle = ctx.app_handle.clone();
+    let handle = app_ctx.app_handle.clone();
     let progress_cb: Option<ByteProgressFn> = Some(Box::new(move |current, total| {
         let _ = handle.typed_emit(&BackupProgressPayload { current, total });
     }));
@@ -66,13 +67,14 @@ pub async fn import_backup(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<ImportBackupRequest>,
 ) -> CommandResult<u64> {
-    let _guard = ctx
+    let app_ctx: &AppContext = ctx.inner();
+    let _guard = app_ctx
         .backup_lock
         .try_lock()
         .map_err(|_| "已有备份任务正在执行，请等待完成后再试".to_string())?;
 
     let req = req.into_inner();
-    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
+    let app_data_dir = app_ctx.app_handle.path().app_data_dir()?;
     // 临时目录放在应用目录内，后续 rename 与数据库在同一卷上。
     let staging = app_data_dir.join(".backup-import-staging");
     if staging.exists() {
@@ -80,7 +82,7 @@ pub async fn import_backup(
     }
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
 
-    let handle = ctx.app_handle.clone();
+    let handle = app_ctx.app_handle.clone();
     let progress_cb: Option<ByteProgressFn> = Some(Box::new(move |current, total| {
         let _ = handle.typed_emit(&BackupProgressPayload { current, total });
     }));
@@ -112,7 +114,7 @@ pub async fn import_backup(
     // 连接关闭后本次进程不再打开新库，界面已要求导入后重启。
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
     scheduler_handle.lock().await.stop_all();
-    if let Err(error) = ctx.db.close_by_ref().await {
+    if let Err(error) = app_ctx.db.close_by_ref().await {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(error.to_string().into());
     }
@@ -134,6 +136,7 @@ pub async fn import_backup(
 /// 获取应用数据总大小（字节）
 #[tauri::command]
 pub async fn get_data_size(ctx: State<'_, AppContext>) -> CommandResult<u64> {
-    let app_data_dir = ctx.app_handle.path().app_data_dir()?;
+    let app_ctx: &AppContext = ctx.inner();
+    let app_data_dir = app_ctx.app_handle.path().app_data_dir()?;
     Ok(backup_service::get_data_size(&app_data_dir))
 }

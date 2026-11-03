@@ -114,7 +114,9 @@ impl Scheduler {
                 Ok(true) => {
                     self.restart(
                         key,
-                        CarouselTask { monitor_id: config.monitor_id.clone() },
+                        CarouselTask {
+                            monitor_id: config.monitor_id.clone(),
+                        },
                     );
                 }
                 Ok(false) => {
@@ -130,7 +132,9 @@ impl Scheduler {
                 Ok(true) => {
                     self.spawn(
                         key,
-                        CarouselTask { monitor_id: config.monitor_id.clone() },
+                        CarouselTask {
+                            monitor_id: config.monitor_id.clone(),
+                        },
                     );
                 }
                 Ok(false) => {}
@@ -173,10 +177,7 @@ impl Scheduler {
 
                 // 跳过被用户显式暂停的显示器
                 if self.paused_monitors.contains(&config.monitor_id) {
-                    info!(
-                        "[Scheduler] 跳过已暂停的显示器: {}",
-                        config.monitor_id
-                    );
+                    info!("[Scheduler] 跳过已暂停的显示器: {}", config.monitor_id);
                     continue;
                 }
 
@@ -186,7 +187,9 @@ impl Scheduler {
                             let key = carousel_key(&config.monitor_id);
                             self.spawn(
                                 key,
-                                CarouselTask { monitor_id: config.monitor_id.clone() },
+                                CarouselTask {
+                                    monitor_id: config.monitor_id.clone(),
+                                },
                             );
                             info!(
                                 "[Scheduler] 启动定时器: {} (display_mode={})",
@@ -199,10 +202,7 @@ impl Scheduler {
                         }
                         Ok(false) => {}
                         Err(e) => {
-                            warn!(
-                                "[Scheduler] 检查收藏夹失败 {}: {}",
-                                config.monitor_id, e
-                            );
+                            warn!("[Scheduler] 检查收藏夹失败 {}: {}", config.monitor_id, e);
                         }
                     }
                 }

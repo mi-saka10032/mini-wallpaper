@@ -3,7 +3,9 @@
 use tauri::State;
 
 use crate::ctx::AppContext;
-use crate::dto::wallpaper_window_dto::{CreateWallpaperWindowRequest, DestroyWallpaperWindowRequest};
+use crate::dto::wallpaper_window_dto::{
+    CreateWallpaperWindowRequest, DestroyWallpaperWindowRequest,
+};
 use crate::dto::Validated;
 
 use super::error::CommandResult;
@@ -15,8 +17,16 @@ pub async fn create_wallpaper_window(
     req: Validated<CreateWallpaperWindowRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
-    let mut mgr = ctx.window_manager.lock().await;
-    mgr.create_window(&req.monitor_id, req.x, req.y, req.width, req.height, req.extra_query.as_deref())?;
+    let app_ctx: &AppContext = ctx.inner();
+    let mut mgr = app_ctx.window_manager.lock().await;
+    mgr.create_window(
+        &req.monitor_id,
+        req.x,
+        req.y,
+        req.width,
+        req.height,
+        req.extra_query.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -27,37 +37,35 @@ pub async fn destroy_wallpaper_window(
     req: Validated<DestroyWallpaperWindowRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
-    let mut mgr = ctx.window_manager.lock().await;
+    let app_ctx: &AppContext = ctx.inner();
+    let mut mgr = app_ctx.window_manager.lock().await;
     mgr.destroy_window(&req.monitor_id);
     Ok(())
 }
 
 /// 销毁所有壁纸窗口
 #[tauri::command]
-pub async fn destroy_all_wallpaper_windows(
-    ctx: State<'_, AppContext>,
-) -> CommandResult<()> {
-    let mut mgr = ctx.window_manager.lock().await;
+pub async fn destroy_all_wallpaper_windows(ctx: State<'_, AppContext>) -> CommandResult<()> {
+    let app_ctx: &AppContext = ctx.inner();
+    let mut mgr = app_ctx.window_manager.lock().await;
     mgr.destroy_all();
     Ok(())
 }
 
 /// 隐藏所有壁纸窗口
 #[tauri::command]
-pub async fn hide_wallpaper_windows(
-    ctx: State<'_, AppContext>,
-) -> CommandResult<()> {
-    let mgr = ctx.window_manager.lock().await;
+pub async fn hide_wallpaper_windows(ctx: State<'_, AppContext>) -> CommandResult<()> {
+    let app_ctx: &AppContext = ctx.inner();
+    let mgr = app_ctx.window_manager.lock().await;
     mgr.hide_all();
     Ok(())
 }
 
 /// 显示所有壁纸窗口
 #[tauri::command]
-pub async fn show_wallpaper_windows(
-    ctx: State<'_, AppContext>,
-) -> CommandResult<()> {
-    let mgr = ctx.window_manager.lock().await;
+pub async fn show_wallpaper_windows(ctx: State<'_, AppContext>) -> CommandResult<()> {
+    let app_ctx: &AppContext = ctx.inner();
+    let mgr = app_ctx.window_manager.lock().await;
     mgr.show_all();
     Ok(())
 }
@@ -67,6 +75,7 @@ pub async fn show_wallpaper_windows(
 pub async fn get_active_wallpaper_windows(
     ctx: State<'_, AppContext>,
 ) -> CommandResult<Vec<String>> {
-    let mgr = ctx.window_manager.lock().await;
+    let app_ctx: &AppContext = ctx.inner();
+    let mgr = app_ctx.window_manager.lock().await;
     Ok(mgr.get_active_window_ids())
 }

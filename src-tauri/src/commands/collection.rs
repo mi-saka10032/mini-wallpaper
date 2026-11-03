@@ -20,10 +20,9 @@ use super::error::CommandResult;
 
 /// 获取所有收藏夹
 #[tauri::command]
-pub async fn get_collections(
-    ctx: State<'_, AppContext>,
-) -> CommandResult<Vec<collection::Model>> {
-    Ok(collection_service::get_all(&ctx.db).await?)
+pub async fn get_collections(ctx: State<'_, AppContext>) -> CommandResult<Vec<collection::Model>> {
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::get_all(&app_ctx.db).await?)
 }
 
 /// 创建收藏夹
@@ -33,7 +32,8 @@ pub async fn create_collection(
     req: Validated<CreateCollectionRequest>,
 ) -> CommandResult<collection::Model> {
     let req = req.into_inner();
-    Ok(collection_service::create(&ctx.db, req.name).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::create(&app_ctx.db, req.name).await?)
 }
 
 /// 重命名收藏夹
@@ -43,7 +43,8 @@ pub async fn rename_collection(
     req: Validated<RenameCollectionRequest>,
 ) -> CommandResult<collection::Model> {
     let req = req.into_inner();
-    Ok(collection_service::rename(&ctx.db, req.id, req.name).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::rename(&app_ctx.db, req.id, req.name).await?)
 }
 
 /// 删除收藏夹（数据层删除 + 窗口/定时器联动）
@@ -57,12 +58,14 @@ pub async fn delete_collection(
     req: Validated<DeleteCollectionRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
+    let app_ctx: &AppContext = ctx.inner();
 
     // 1. 预先查出引用该收藏夹的完整 config（内存快照，删除后 collection_id 会被置空）
-    let affected_configs = monitor_config_service::get_configs_by_collection_id(&ctx.db, req.id).await?;
+    let affected_configs =
+        monitor_config_service::get_configs_by_collection_id(&app_ctx.db, req.id).await?;
 
     // 2. 执行数据层删除（清理关联记录 + 置空 monitor_config.collection_id + 删除收藏夹）
-    collection_service::delete(&ctx.db, req.id).await?;
+    collection_service::delete(&app_ctx.db, req.id).await?;
 
     // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
@@ -79,7 +82,8 @@ pub async fn get_collection_wallpapers(
     req: Validated<GetCollectionWallpapersRequest>,
 ) -> CommandResult<Vec<wallpaper::Model>> {
     let req = req.into_inner();
-    Ok(collection_service::get_wallpapers(&ctx.db, req.collection_id).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::get_wallpapers(&app_ctx.db, req.collection_id).await?)
 }
 
 /// 向收藏夹添加壁纸
@@ -89,7 +93,11 @@ pub async fn add_wallpapers_to_collection(
     req: Validated<AddWallpapersRequest>,
 ) -> CommandResult<u32> {
     let req = req.into_inner();
-    Ok(collection_service::add_wallpapers(&ctx.db, req.collection_id, req.wallpaper_ids).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(
+        collection_service::add_wallpapers(&app_ctx.db, req.collection_id, req.wallpaper_ids)
+            .await?,
+    )
 }
 
 /// 从收藏夹移除壁纸（数据层删除 + 窗口/定时器联动）
@@ -103,14 +111,18 @@ pub async fn remove_wallpapers_from_collection(
     req: Validated<RemoveWallpapersRequest>,
 ) -> CommandResult<u64> {
     let req = req.into_inner();
+    let app_ctx: &AppContext = ctx.inner();
     let collection_id = req.collection_id;
     let removing_ids: HashSet<i32> = req.wallpaper_ids.iter().copied().collect();
 
     // 1. 查出所有绑定该收藏夹的 active config（用于联动判断）
-    let bound_configs = monitor_config_service::get_configs_by_collection_id(&ctx.db, collection_id).await?;
+    let bound_configs =
+        monitor_config_service::get_configs_by_collection_id(&app_ctx.db, collection_id).await?;
 
     // 2. 执行数据层移除
-    let removed = collection_service::remove_wallpapers(&ctx.db, collection_id, req.wallpaper_ids).await?;
+    let removed =
+        collection_service::remove_wallpapers(&app_ctx.db, collection_id, req.wallpaper_ids)
+            .await?;
 
     if removed == 0 {
         return Ok(removed);
@@ -119,7 +131,9 @@ pub async fn remove_wallpapers_from_collection(
     // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
     let mut sched = scheduler_handle.lock().await;
-    sched.on_wallpapers_removed_from_collection(&bound_configs, collection_id, &removing_ids).await;
+    sched
+        .on_wallpapers_removed_from_collection(&bound_configs, collection_id, &removing_ids)
+        .await;
 
     Ok(removed)
 }
@@ -131,7 +145,11 @@ pub async fn reorder_collection_wallpapers(
     req: Validated<ReorderWallpapersRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
-    Ok(collection_service::reorder_wallpapers(&ctx.db, req.collection_id, req.wallpaper_ids).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(
+        collection_service::reorder_wallpapers(&app_ctx.db, req.collection_id, req.wallpaper_ids)
+            .await?,
+    )
 }
 
 /// 切换壁纸在内置「我喜欢」收藏夹中的收藏状态
@@ -159,7 +177,8 @@ pub async fn create_smart_collection(
     req: Validated<CreateSmartCollectionRequest>,
 ) -> CommandResult<collection::Model> {
     let req = req.into_inner();
-    Ok(collection_service::create_smart(&ctx.db, req.name, req.rule_json).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::create_smart(&app_ctx.db, req.name, req.rule_json).await?)
 }
 
 /// 更新智能收藏夹规则（可同时改名）
@@ -171,7 +190,8 @@ pub async fn update_smart_collection(
     req: Validated<UpdateSmartCollectionRequest>,
 ) -> CommandResult<collection::Model> {
     let req = req.into_inner();
-    Ok(collection_service::update_smart(&ctx.db, req.id, req.name, req.rule_json).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::update_smart(&app_ctx.db, req.id, req.name, req.rule_json).await?)
 }
 
 /// 预览规则命中数（未落库，供创建 / 编辑时实时提示「当前匹配 N 张」）
@@ -181,5 +201,6 @@ pub async fn preview_smart_count(
     req: Validated<PreviewSmartCountRequest>,
 ) -> CommandResult<u64> {
     let req = req.into_inner();
-    Ok(collection_service::preview_smart_count(&ctx.db, req.rule_json).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::preview_smart_count(&app_ctx.db, req.rule_json).await?)
 }

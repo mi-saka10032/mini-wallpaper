@@ -49,8 +49,7 @@ use tauri::Manager;
 // dispatcher 会自然落入"目标为空 → warn 跳过"分支。
 #[cfg(target_os = "windows")]
 fn probe_active_device_name() -> Option<String> {
-    crate::platform::windows::monitor_geometry::active_monitor()
-        .map(|m| m.device_name)
+    crate::platform::windows::monitor_geometry::active_monitor().map(|m| m.device_name)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -160,7 +159,11 @@ impl Scheduler {
         }
 
         // 根据最终状态发送 toast
-        let msg = if paused { "已暂停轮播" } else { "已恢复轮播" };
+        let msg = if paused {
+            "已暂停轮播"
+        } else {
+            "已恢复轮播"
+        };
         self.show_action_toast(&Action::TogglePause, msg).await;
     }
 
@@ -203,20 +206,22 @@ impl Scheduler {
 
         match self.toggle_favorite(wallpaper_id).await {
             Ok(favorited) => {
-                let msg = if favorited { "已收藏当前壁纸" } else { "已取消收藏" };
+                let msg = if favorited {
+                    "已收藏当前壁纸"
+                } else {
+                    "已取消收藏"
+                };
                 self.show_action_toast(&Action::ToggleFavorite, msg).await;
             }
             Err(e) => {
                 warn!("[ActionDispatch] ToggleFavorite 失败: {}", e);
-                self.show_action_toast(&Action::ToggleFavorite, "收藏操作失败").await;
+                self.show_action_toast(&Action::ToggleFavorite, "收藏操作失败")
+                    .await;
             }
         }
     }
 
-    /// 退出应用
-    ///
-    /// 调用 `AppHandle::exit(0)`，Tauri 会触发 `ExitRequested` 事件，
-    /// 由 `lib.rs` 中既有的退出钩子统一停止后台任务、清理资源。
+    /// 退出应用。进程结束后，调度器任务和窗口由系统一起收回。
     fn dispatch_quit(&self) {
         info!("[ActionDispatch] 退出应用");
         self.app.exit(0);
@@ -242,9 +247,10 @@ impl Scheduler {
                 return;
             }
         };
+        let app_ctx: &AppContext = ctx.inner();
 
-        let mut toast_mgr = ctx.toast_manager.lock().await;
-        toast_mgr.show_toast(&ctx.toast_manager, action_name, message);
+        let mut toast_mgr = app_ctx.toast_manager.lock().await;
+        toast_mgr.show_toast(&app_ctx.toast_manager, action_name, message);
     }
 
     // ==================== 目标显示器解析 ====================

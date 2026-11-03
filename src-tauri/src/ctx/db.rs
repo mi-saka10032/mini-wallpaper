@@ -1,9 +1,9 @@
 use anyhow::Result;
+use log::info;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 use std::path::PathBuf;
 use tauri::Manager;
-use log::info;
 
 use crate::migration::Migrator;
 

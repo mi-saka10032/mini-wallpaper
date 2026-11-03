@@ -4,9 +4,9 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::runtime::Scheduler;
 use crate::dto::shortcut_dto::SwitchWallpaperRequest;
 use crate::dto::Validated;
+use crate::runtime::Scheduler;
 use crate::services::monitor_config_service;
 
 use super::error::CommandResult;
@@ -23,7 +23,8 @@ pub async fn switch_wallpaper(
     req: Validated<SwitchWallpaperRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
-    let configs = monitor_config_service::get_all(&ctx.db).await?;
+    let app_ctx: &AppContext = ctx.inner();
+    let configs = monitor_config_service::get_all(&app_ctx.db).await?;
 
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
     let mut sched = scheduler_handle.lock().await;
@@ -32,7 +33,9 @@ pub async fn switch_wallpaper(
         if !config.active {
             continue;
         }
-        sched.switch_to_adjacent_wallpaper(config, &req.direction).await;
+        sched
+            .switch_to_adjacent_wallpaper(config, &req.direction)
+            .await;
     }
 
     Ok(())

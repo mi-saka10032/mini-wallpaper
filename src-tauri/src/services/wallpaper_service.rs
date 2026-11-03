@@ -55,10 +55,7 @@ pub fn trashed() -> Select<wallpaper::Entity> {
 
 /// 获取所有壁纸（不含回收站）
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<wallpaper::Model>> {
-    active()
-        .all(db)
-        .await
-        .context("Failed to fetch wallpapers")
+    active().all(db).await.context("Failed to fetch wallpapers")
 }
 
 /// 获取回收站内的壁纸（按移入时间倒序，最近删除的在前）
@@ -70,10 +67,14 @@ pub async fn get_trashed(db: &DatabaseConnection) -> Result<Vec<wallpaper::Model
         .context("Failed to fetch trashed wallpapers")
 }
 
+// 生产代码没有调用方。恢复和彻底删除各自按 id 查库，播放走 `get_active_by_id`。
+// 先注释掉，消除 dead_code 警告。
+
 /// 根据 ID 获取单个壁纸详情（**含回收站内的记录**）
 ///
 /// 恢复、彻底删除等回收站操作需要读取已删记录，故此处不加过滤。
 /// 播放链路请改用 `get_active_by_id`，避免把回收站内的壁纸设为桌面壁纸。
+#[allow(dead_code)]
 pub async fn get_by_id(db: &DatabaseConnection, id: i32) -> Result<Option<wallpaper::Model>> {
     wallpaper::Entity::find_by_id(id)
         .one(db)
@@ -129,10 +130,7 @@ fn ensure_dir(dir: &Path) -> Result<()> {
 fn copy_to_app_dir(source: &Path, wallpapers_dir: &Path) -> Result<PathBuf> {
     ensure_dir(wallpapers_dir)?;
 
-    let ext = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("bin");
+    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("bin");
     let new_name = format!("{}.{}", Uuid::new_v4(), ext);
     let dest = wallpapers_dir.join(&new_name);
 
@@ -184,12 +182,9 @@ fn prepare_wallpaper_files(
     }
 
     // 2. 检查文件类型
-    let ext = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    let file_type = detect_file_type(ext)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported file type: .{}", ext))?;
+    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let file_type =
+        detect_file_type(ext).ok_or_else(|| anyhow::anyhow!("Unsupported file type: .{}", ext))?;
 
     // 3. 获取原始文件名
     let original_name = source
@@ -211,7 +206,10 @@ fn prepare_wallpaper_files(
         ensure_dir(thumbnails_dir)?;
         let thumb_name = format!(
             "{}.webp",
-            dest_path.file_stem().expect("dest_path must have a file stem").to_string_lossy(),
+            dest_path
+                .file_stem()
+                .expect("dest_path must have a file stem")
+                .to_string_lossy(),
         );
         let thumb_path = thumbnails_dir.join(&thumb_name);
         match generate_static_thumbnail(&dest_path, &thumb_path) {
@@ -220,7 +218,10 @@ fn prepare_wallpaper_files(
                 Some(thumb_path.to_string_lossy().to_string())
             }
             Err(e) => {
-                warn!("[WARN] Thumbnail generation failed for {}: {}", original_name, e);
+                warn!(
+                    "[WARN] Thumbnail generation failed for {}: {}",
+                    original_name, e
+                );
                 None
             }
         }
@@ -267,7 +268,11 @@ pub async fn import_single(
     let thumbnails_dir_owned = thumbnails_dir.to_path_buf();
 
     let prepared = tokio::task::spawn_blocking(move || {
-        prepare_wallpaper_files(&source_path_owned, &wallpapers_dir_owned, &thumbnails_dir_owned)
+        prepare_wallpaper_files(
+            &source_path_owned,
+            &wallpapers_dir_owned,
+            &thumbnails_dir_owned,
+        )
     })
     .await
     .context("File preparation task panicked")??;
@@ -305,7 +310,6 @@ pub async fn import_single(
 /// 使用 `buffer_unordered` 控制最大并发数（基于 CPU 核数动态计算），
 /// 每个任务内部通过 `spawn_blocking` 执行文件 I/O，避免阻塞 async runtime。
 /// SQLite 写操作由连接池自动排队，无需额外加锁。
-
 pub async fn import_batch(
     db: &DatabaseConnection,
     source_paths: Vec<String>,
@@ -377,8 +381,8 @@ fn prepare_wallpaper_from_bytes(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
-    let file_type = detect_file_type(ext)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported file type: .{}", ext))?;
+    let file_type =
+        detect_file_type(ext).ok_or_else(|| anyhow::anyhow!("Unsupported file type: .{}", ext))?;
 
     // 2. 文件大小（直接用字节长度）
     let file_size = bytes.len() as i64;
@@ -394,7 +398,10 @@ fn prepare_wallpaper_from_bytes(
         ensure_dir(thumbnails_dir)?;
         let thumb_name = format!(
             "{}.webp",
-            dest_path.file_stem().expect("dest_path must have a file stem").to_string_lossy(),
+            dest_path
+                .file_stem()
+                .expect("dest_path must have a file stem")
+                .to_string_lossy(),
         );
         let thumb_path = thumbnails_dir.join(&thumb_name);
         match generate_static_thumbnail(&dest_path, &thumb_path) {
@@ -403,7 +410,10 @@ fn prepare_wallpaper_from_bytes(
                 Some(thumb_path.to_string_lossy().to_string())
             }
             Err(e) => {
-                warn!("[WARN] Thumbnail generation failed for {}: {}", original_name, e);
+                warn!(
+                    "[WARN] Thumbnail generation failed for {}: {}",
+                    original_name, e
+                );
                 None
             }
         }
@@ -514,15 +524,17 @@ pub async fn save_video_thumbnail(
     let thumb_path = thumbnails_dir.join(&thumb_name);
 
     // 3. 写入文件
-    std::fs::write(&thumb_path, &data)
-        .context("Failed to write video thumbnail")?;
+    std::fs::write(&thumb_path, &data).context("Failed to write video thumbnail")?;
 
     let thumb_path_str = thumb_path.to_string_lossy().to_string();
 
     // 4. 更新数据库 thumb_path
     let mut active: wallpaper::ActiveModel = model.into();
     active.thumb_path = Set(Some(thumb_path_str.clone()));
-    active.update(db).await.context("Failed to update wallpaper thumb_path")?;
+    active
+        .update(db)
+        .await
+        .context("Failed to update wallpaper thumb_path")?;
 
     info!("[VideoThumbnail] Saved: {}", thumb_path_str);
     Ok(thumb_path_str)
@@ -745,7 +757,10 @@ pub async fn restore_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64
 
     txn.commit().await?;
 
-    info!("[Restore] {} wallpapers restored from trash", restored_count);
+    info!(
+        "[Restore] {} wallpapers restored from trash",
+        restored_count
+    );
     Ok(restored_count)
 }
 

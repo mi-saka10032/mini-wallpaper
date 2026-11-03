@@ -5,24 +5,20 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::runtime::Scheduler;
 use crate::dto::app_setting_dto::{GetSettingRequest, SetSettingRequest};
 use crate::dto::Validated;
+use crate::runtime::Scheduler;
 use crate::services::app_setting_service;
 
 use super::error::CommandResult;
 
 /// 获取所有设置（返回 key-value 对象）
 #[tauri::command]
-pub async fn get_settings(
-    ctx: State<'_, AppContext>,
-) -> CommandResult<HashMap<String, String>> {
-    let settings = app_setting_service::get_all(&ctx.db).await?;
+pub async fn get_settings(ctx: State<'_, AppContext>) -> CommandResult<HashMap<String, String>> {
+    let app_ctx: &AppContext = ctx.inner();
+    let settings = app_setting_service::get_all(&app_ctx.db).await?;
 
-    let map: HashMap<String, String> = settings
-        .into_iter()
-        .map(|s| (s.key, s.value))
-        .collect();
+    let map: HashMap<String, String> = settings.into_iter().map(|s| (s.key, s.value)).collect();
 
     Ok(map)
 }
@@ -34,7 +30,8 @@ pub async fn get_setting(
     req: Validated<GetSettingRequest>,
 ) -> CommandResult<Option<String>> {
     let req = req.into_inner();
-    Ok(app_setting_service::get(&ctx.db, &req.key).await?)
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(app_setting_service::get(&app_ctx.db, &req.key).await?)
 }
 
 /// 设置键值对（写入 DB + 按 key 触发副作用）
@@ -58,12 +55,15 @@ pub async fn set_setting(
     req.validate_value_format()?;
 
     // 1. 写入 DB
-    app_setting_service::set(&ctx.db, &req.key, &req.value).await?;
+    let app_ctx: &AppContext = ctx.inner();
+    app_setting_service::set(&app_ctx.db, &req.key, &req.value).await?;
 
     // 2. 通过 Scheduler 执行副作用
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
     let mut sched = scheduler_handle.lock().await;
-    sched.apply_setting_side_effect(&req.key, &req.value, monitor_id.as_deref()).await;
+    sched
+        .apply_setting_side_effect(&req.key, &req.value, monitor_id.as_deref())
+        .await;
 
     Ok(())
 }

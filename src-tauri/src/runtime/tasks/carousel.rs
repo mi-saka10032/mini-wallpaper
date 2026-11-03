@@ -13,9 +13,9 @@ use tauri::Manager;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
-use crate::runtime::scheduler::TaskSpawner;
 use crate::ctx::AppContext;
 use crate::dto::app_setting_dto::keys as setting_keys;
+use crate::runtime::scheduler::TaskSpawner;
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 /// 轮播定时器在 Scheduler 中的 key 前缀
@@ -42,8 +42,9 @@ impl TaskSpawner for CarouselTask {
         tokio::spawn(async move {
             // 从 AppHandle 按需获取共享资源
             let ctx = app.state::<AppContext>();
-            let db = ctx.db.clone();
-            let window_manager = ctx.window_manager.clone();
+            let app_ctx: &AppContext = ctx.inner();
+            let db = app_ctx.db.clone();
+            let window_manager = app_ctx.window_manager.clone();
 
             // 查询 config 获取轮播参数
             let config = match monitor_config_service::get_by_monitor_id(&db, &mid).await {
@@ -116,8 +117,13 @@ impl TaskSpawner for CarouselTask {
                         let is_sync = display_mode == "mirror" || display_mode == "extend";
 
                         // 1. 更新当前 monitor 的 DB 记录
-                        if let Err(e) = monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await {
-                            error!("[Carousel] Failed to update wallpaper_id for {}: {}", mid, e);
+                        if let Err(e) =
+                            monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await
+                        {
+                            error!(
+                                "[Carousel] Failed to update wallpaper_id for {}: {}",
+                                mid, e
+                            );
                             continue;
                         }
 
@@ -127,9 +133,16 @@ impl TaskSpawner for CarouselTask {
                                 for config in &all_configs {
                                     if config.active && config.monitor_id != mid {
                                         if let Err(e) = monitor_config_service::update_wallpaper_id(
-                                            &db, &config.monitor_id, new_wid,
-                                        ).await {
-                                            error!("[Carousel] Failed to sync wallpaper_id for {}: {}", config.monitor_id, e);
+                                            &db,
+                                            &config.monitor_id,
+                                            new_wid,
+                                        )
+                                        .await
+                                        {
+                                            error!(
+                                                "[Carousel] Failed to sync wallpaper_id for {}: {}",
+                                                config.monitor_id, e
+                                            );
                                         }
                                     }
                                 }
@@ -146,10 +159,7 @@ impl TaskSpawner for CarouselTask {
                         // 收藏夹为空或只有一张，无需切换
                     }
                     Err(e) => {
-                        error!(
-                            "[Carousel] Error getting next wallpaper for {}: {}",
-                            mid, e
-                        );
+                        error!("[Carousel] Error getting next wallpaper for {}: {}", mid, e);
                     }
                 }
             }

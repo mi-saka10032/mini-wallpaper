@@ -30,7 +30,8 @@ pub async fn purge_expired_on_startup(app: &AppHandle) {
         warn!("[Trash] AppContext 未就绪，跳过过期清理");
         return;
     };
-    let db = ctx.db.clone();
+    let app_ctx: &AppContext = ctx.inner();
+    let db = app_ctx.db.clone();
 
     // 1. 是否启用自动清理（缺省启用）
     let auto_purge = match app_setting_service::get(&db, setting_keys::TRASH_AUTO_PURGE).await {
@@ -48,24 +49,24 @@ pub async fn purge_expired_on_startup(app: &AppHandle) {
     }
 
     // 2. 保留天数（缺省 / 非法值回落默认）
-    let retention_days = match app_setting_service::get(&db, setting_keys::TRASH_RETENTION_DAYS).await
-    {
-        Ok(Some(v)) => v.parse::<i64>().unwrap_or_else(|_| {
-            warn!(
-                "[Trash] trash_retention_days 值非法（{}），回落默认 {} 天",
-                v, DEFAULT_TRASH_RETENTION_DAYS
-            );
-            DEFAULT_TRASH_RETENTION_DAYS
-        }),
-        Ok(None) => DEFAULT_TRASH_RETENTION_DAYS,
-        Err(e) => {
-            warn!(
-                "[Trash] 读取 trash_retention_days 失败，回落默认 {} 天: {}",
-                DEFAULT_TRASH_RETENTION_DAYS, e
-            );
-            DEFAULT_TRASH_RETENTION_DAYS
-        }
-    };
+    let retention_days =
+        match app_setting_service::get(&db, setting_keys::TRASH_RETENTION_DAYS).await {
+            Ok(Some(v)) => v.parse::<i64>().unwrap_or_else(|_| {
+                warn!(
+                    "[Trash] trash_retention_days 值非法（{}），回落默认 {} 天",
+                    v, DEFAULT_TRASH_RETENTION_DAYS
+                );
+                DEFAULT_TRASH_RETENTION_DAYS
+            }),
+            Ok(None) => DEFAULT_TRASH_RETENTION_DAYS,
+            Err(e) => {
+                warn!(
+                    "[Trash] 读取 trash_retention_days 失败，回落默认 {} 天: {}",
+                    DEFAULT_TRASH_RETENTION_DAYS, e
+                );
+                DEFAULT_TRASH_RETENTION_DAYS
+            }
+        };
 
     // 3. 执行清理
     match wallpaper_service::purge_expired(&db, retention_days).await {
@@ -73,7 +74,10 @@ pub async fn purge_expired_on_startup(app: &AppHandle) {
             info!("[Trash] 无过期壁纸需清理（保留 {} 天）", retention_days);
         }
         Ok(n) => {
-            info!("[Trash] 已清理 {} 张过期壁纸（保留 {} 天）", n, retention_days);
+            info!(
+                "[Trash] 已清理 {} 张过期壁纸（保留 {} 天）",
+                n, retention_days
+            );
         }
         Err(e) => {
             warn!("[Trash] 过期清理失败: {}", e);

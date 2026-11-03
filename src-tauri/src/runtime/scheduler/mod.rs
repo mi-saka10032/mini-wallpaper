@@ -23,16 +23,16 @@ mod setting_effects;
 mod task_lifecycle;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 use tauri::Manager;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::ctx::AppContext;
 use crate::ctx::window_manager::WallpaperWindowManager;
+use crate::ctx::AppContext;
 
 // re-export TaskSpawner，保持外部引用路径 `crate::runtime::scheduler::TaskSpawner` 兼容
 pub use super::tasks::TaskSpawner;
@@ -42,8 +42,8 @@ pub use super::tasks::TaskSpawner;
 /// 持有 `AppHandle`，通过控制反转向 `TaskSpawner` 注入句柄，
 /// 同时承载定时器编排、设置副作用和删除联动等逻辑。
 ///
-/// 作为独立的全局 state 注册到 Tauri，与 `AppContext` 平级，
-/// 在 `ExitRequested` 时统一停止所有后台任务。
+/// 作为独立的全局 state 注册到 Tauri，与 `AppContext` 平级。
+/// 进程退出后任务随运行时一起结束。
 pub struct Scheduler {
     /// Tauri 应用句柄（注入给 TaskSpawner）
     pub(super) app: tauri::AppHandle,
@@ -70,11 +70,13 @@ impl Scheduler {
 
     /// 从 AppHandle 获取 db 连接（clone 后脱离 self 生命周期）
     pub(super) fn db(&self) -> DatabaseConnection {
-        self.app.state::<AppContext>().db.clone()
+        let app_ctx: &AppContext = self.app.state::<AppContext>().inner();
+        app_ctx.db.clone()
     }
 
     /// 从 AppHandle 获取 window_manager（clone Arc 后脱离 self 生命周期）
     pub(super) fn window_manager(&self) -> Arc<Mutex<WallpaperWindowManager>> {
-        self.app.state::<AppContext>().window_manager.clone()
+        let app_ctx: &AppContext = self.app.state::<AppContext>().inner();
+        app_ctx.window_manager.clone()
     }
 }

@@ -73,8 +73,8 @@ fn default_version() -> u32 {
 impl SmartRule {
     /// 从 JSON 字符串解析并做完整白名单校验
     pub fn parse_and_validate(json: &str) -> Result<Self> {
-        let rule: SmartRule = serde_json::from_str(json)
-            .map_err(|e| anyhow::anyhow!("规则 JSON 解析失败: {}", e))?;
+        let rule: SmartRule =
+            serde_json::from_str(json).map_err(|e| anyhow::anyhow!("规则 JSON 解析失败: {}", e))?;
         rule.validate()?;
         Ok(rule)
     }
@@ -242,8 +242,10 @@ impl RuleItem {
         let h = Expr::col(wallpaper::Column::Height);
         let cond = match v.as_str() {
             "landscape" => Condition::all().add(w.gt(h)),
-            "portrait" => Condition::all().add(Expr::col(wallpaper::Column::Width).lt(Expr::col(wallpaper::Column::Height))),
-            "square" => Condition::all().add(Expr::col(wallpaper::Column::Width).eq(Expr::col(wallpaper::Column::Height))),
+            "portrait" => Condition::all()
+                .add(Expr::col(wallpaper::Column::Width).lt(Expr::col(wallpaper::Column::Height))),
+            "square" => Condition::all()
+                .add(Expr::col(wallpaper::Column::Width).eq(Expr::col(wallpaper::Column::Height))),
             _ => unreachable!(),
         };
         Ok(cond)
@@ -321,8 +323,12 @@ impl RuleItem {
         if arr.len() != 2 {
             bail!("between 的值应恰好包含 2 个元素");
         }
-        let min = arr[0].as_i64().ok_or_else(|| anyhow::anyhow!("min 应为整数"))?;
-        let max = arr[1].as_i64().ok_or_else(|| anyhow::anyhow!("max 应为整数"))?;
+        let min = arr[0]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("min 应为整数"))?;
+        let max = arr[1]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("max 应为整数"))?;
         if min > max {
             bail!("between 的 min 不能大于 max");
         }

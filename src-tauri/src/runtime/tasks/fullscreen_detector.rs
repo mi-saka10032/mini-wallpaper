@@ -44,9 +44,7 @@ impl TaskSpawner for FullscreenDetectionTask {
                         info!("全屏应用已退出 — 恢复壁纸");
                     }
 
-                    let _ = app.typed_emit(
-                        &FullscreenChangedPayload { is_fullscreen },
-                    );
+                    let _ = app.typed_emit(&FullscreenChangedPayload { is_fullscreen });
                     was_fullscreen = is_fullscreen;
                 }
 

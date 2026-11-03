@@ -92,9 +92,7 @@ fn validate_play_mode(value: &Option<String>, _ctx: &()) -> garde::Result {
 fn validate_play_interval(value: &Option<i32>, _ctx: &()) -> garde::Result {
     if let Some(v) = value {
         if *v < 10 || *v > 86400 {
-            return Err(garde::Error::new(
-                "play_interval 范围为 10~86400 秒",
-            ));
+            return Err(garde::Error::new("play_interval 范围为 10~86400 秒"));
         }
     }
     Ok(())

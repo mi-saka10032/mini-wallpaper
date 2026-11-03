@@ -9,7 +9,7 @@ use sea_orm::{
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::entities::{collection_wallpaper, monitor_config, wallpaper};
+use crate::entities::{collection_wallpaper, monitor_config, wallpaper, wallpaper_tag};
 use crate::utils::concurrency::import_concurrency;
 
 /// 支持的图片扩展名
@@ -796,7 +796,15 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
             .await
             .context("Failed to clean up collection_wallpapers")?;
 
-        // 3. 清理关联表：monitor_configs 中引用该壁纸的字段置空
+        // 3. 清理关联表：wallpaper_tags。标签名留在 tags 表，引用归零也不删除。
+        //    软删除不经过这里，回收站里的关联要保留到恢复。
+        wallpaper_tag::Entity::delete_many()
+            .filter(wallpaper_tag::Column::WallpaperId.eq(*id))
+            .exec(&txn)
+            .await
+            .context("Failed to clean up wallpaper_tags")?;
+
+        // 4. 清理关联表：monitor_configs 中引用该壁纸的字段置空
         monitor_config::Entity::update_many()
             .col_expr(
                 monitor_config::Column::WallpaperId,
@@ -807,7 +815,7 @@ pub async fn delete_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64>
             .await
             .context("Failed to clean up monitor_configs wallpaper_id")?;
 
-        // 4. 删除数据库记录
+        // 5. 删除数据库记录
         wallpaper::Entity::delete_by_id(*id)
             .exec(&txn)
             .await
@@ -892,4 +900,117 @@ pub async fn purge_expired(db: &DatabaseConnection, retention_days: i64) -> Resu
         cutoff_str
     );
     delete_batch(db, ids).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    };
+    use sea_orm_migration::MigratorTrait;
+
+    use super::{delete_batch, trash_batch};
+    use crate::entities::{tag, wallpaper, wallpaper_tag};
+    use crate::migration::Migrator;
+    use crate::services::tag_service;
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "mini-wallpaper-delete-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn test_db(root: &TempDir) -> DatabaseConnection {
+        let path = root.0.join("app.db");
+        let db = Database::connect(format!("sqlite:{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    async fn insert_wallpaper(db: &DatabaseConnection, name: &str) -> wallpaper::Model {
+        wallpaper::ActiveModel {
+            name: Set(name.to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set(format!("missing/{name}.png")),
+            play_count: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn tag_ids_for(db: &DatabaseConnection, wallpaper_id: i32) -> Vec<i32> {
+        let mut ids: Vec<i32> = wallpaper_tag::Entity::find()
+            .filter(wallpaper_tag::Column::WallpaperId.eq(wallpaper_id))
+            .all(db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.tag_id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    async fn tag_exists(db: &DatabaseConnection, name: &str) -> bool {
+        tag::Entity::find()
+            .filter(tag::Column::Name.eq(name))
+            .one(db)
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    #[tokio::test]
+    async fn hard_delete_drops_wallpaper_tags_but_keeps_tag_definitions() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let gone = insert_wallpaper(&db, "gone").await;
+        let stay = insert_wallpaper(&db, "stay").await;
+
+        tag_service::tag_wallpapers(&db, vec![gone.id, stay.id], vec!["shared".to_string()])
+            .await
+            .unwrap();
+        tag_service::tag_wallpapers(&db, vec![gone.id], vec!["only-gone".to_string()])
+            .await
+            .unwrap();
+
+        trash_batch(&db, vec![gone.id]).await.unwrap();
+        assert_eq!(tag_ids_for(&db, gone.id).await.len(), 2);
+
+        let deleted = delete_batch(&db, vec![gone.id]).await.unwrap();
+
+        assert_eq!(deleted, 1);
+        assert!(tag_ids_for(&db, gone.id).await.is_empty());
+        assert_eq!(tag_ids_for(&db, stay.id).await.len(), 1);
+        assert!(tag_exists(&db, "shared").await);
+        assert!(tag_exists(&db, "only-gone").await);
+        assert!(wallpaper::Entity::find_by_id(gone.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .is_none());
+    }
 }

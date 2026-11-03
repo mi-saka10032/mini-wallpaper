@@ -76,6 +76,10 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
 
   // 从 store 按需获取数据（P1 优化：仅在菜单打开时才消费）
   const collections = useCollectionStore((s) => s.collections);
+  const manualCollections = useMemo(
+    () => collections.filter((col) => col.kind === "manual"),
+    [collections],
+  );
   const configs = useMonitorConfigStore((s) => s.configs);
   const upsert = useMonitorConfigStore((s) => s.upsert);
   const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
@@ -389,7 +393,7 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
                 className={cn(
                   "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none",
                   "hover:bg-accent hover:text-accent-foreground",
-                  collections.length === 0 && "pointer-events-none opacity-50",
+                  manualCollections.length === 0 && "pointer-events-none opacity-50",
                 )}
                 onMouseEnter={() => setSubMenu("addTo")}
               >
@@ -471,7 +475,7 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
               style={getSubMenuStyle()}
               className="min-w-[10rem] max-w-[14rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95"
             >
-              {collections.map((col) => (
+              {manualCollections.map((col) => (
                 <button
                   key={col.id}
                   type="button"

@@ -196,7 +196,10 @@ pub async fn get_wallpapers(
     collection_id: i32,
 ) -> Result<Vec<wallpaper::Model>> {
     // 智能收藏夹：委托规则引擎实时求值（不物化成员）
-    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+    if let Some(model) = collection::Entity::find_by_id(collection_id)
+        .one(db)
+        .await?
+    {
         if model.kind == "smart" {
             return crate::services::smart_collection_service::matched_wallpapers(db, &model).await;
         }
@@ -232,12 +235,41 @@ pub async fn get_wallpapers(
 }
 
 /// 向收藏夹添加壁纸（批量，事务保护）
+///
+/// 只接受已存在的手动收藏夹，以及未进回收站的壁纸。智能收藏夹的成员由规则
+/// 求值，不写入关联表。已有关联跳过，不重复插入。
 pub async fn add_wallpapers(
     db: &DatabaseConnection,
     collection_id: i32,
     wallpaper_ids: Vec<i32>,
 ) -> Result<u32> {
     let txn = db.begin().await?;
+
+    let collection = collection::Entity::find_by_id(collection_id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Collection not found"))?;
+    if collection.kind != "manual" {
+        return Err(anyhow::anyhow!(
+            "Only manual collections accept wallpaper membership"
+        ));
+    }
+
+    if !wallpaper_ids.is_empty() {
+        let active_ids: std::collections::HashSet<i32> = wallpaper_service::active()
+            .filter(wallpaper::Column::Id.is_in(wallpaper_ids.iter().copied()))
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|wallpaper| wallpaper.id)
+            .collect();
+        if let Some(missing_id) = wallpaper_ids.iter().find(|id| !active_ids.contains(id)) {
+            return Err(anyhow::anyhow!(
+                "Wallpaper {} is not available (missing or in trash)",
+                missing_id
+            ));
+        }
+    }
 
     let mut count = 0u32;
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -297,10 +329,7 @@ pub async fn reorder_wallpapers(
             )
             .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
             .filter(collection_wallpaper::Column::WallpaperId.eq(*wp_id))
-            .filter(
-                collection_wallpaper::Column::SortOrder
-                    .ne(wallpaper_service::TRASH_SORT_ORDER),
-            )
+            .filter(collection_wallpaper::Column::SortOrder.ne(wallpaper_service::TRASH_SORT_ORDER))
             .exec(&txn)
             .await?;
     }
@@ -326,7 +355,10 @@ pub async fn remove_wallpapers(
 /// 获取收藏夹内的壁纸数量
 pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Result<u64> {
     // 智能收藏夹：命中数由规则参数化 COUNT 求值
-    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+    if let Some(model) = collection::Entity::find_by_id(collection_id)
+        .one(db)
+        .await?
+    {
         if model.kind == "smart" {
             return crate::services::smart_collection_service::count_matched(db, &model).await;
         }
@@ -449,10 +481,7 @@ async fn find_random_wallpaper(
 }
 
 /// 获取收藏夹中 sort_order 最小的第一张壁纸 ID
-async fn first_wallpaper_id(
-    db: &DatabaseConnection,
-    collection_id: i32,
-) -> Result<Option<i32>> {
+async fn first_wallpaper_id(db: &DatabaseConnection, collection_id: i32) -> Result<Option<i32>> {
     let record = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
         .filter(active_member_filter())
@@ -463,10 +492,7 @@ async fn first_wallpaper_id(
 }
 
 /// 获取收藏夹中 sort_order 最大的最后一张壁纸 ID
-async fn last_wallpaper_id(
-    db: &DatabaseConnection,
-    collection_id: i32,
-) -> Result<Option<i32>> {
+async fn last_wallpaper_id(db: &DatabaseConnection, collection_id: i32) -> Result<Option<i32>> {
     let record = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
         .filter(active_member_filter())
@@ -495,7 +521,10 @@ pub async fn next_wallpaper_id(
     play_mode: &str,
 ) -> Result<Option<i32>> {
     // 智能收藏夹：下一张由规则命中集求值（sequential 走 id 游标 / random 走 RANDOM()）
-    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+    if let Some(model) = collection::Entity::find_by_id(collection_id)
+        .one(db)
+        .await?
+    {
         if model.kind == "smart" {
             return crate::services::smart_collection_service::next_matched_id(
                 db,
@@ -547,7 +576,10 @@ pub async fn prev_wallpaper_id(
     play_mode: &str,
 ) -> Result<Option<i32>> {
     // 智能收藏夹在 collection_wallpaper 表中无记录，必须先分流，否则 sort_order 查询恒为 None
-    if let Some(model) = collection::Entity::find_by_id(collection_id).one(db).await? {
+    if let Some(model) = collection::Entity::find_by_id(collection_id)
+        .one(db)
+        .await?
+    {
         if model.kind == "smart" {
             return crate::services::smart_collection_service::prev_matched_id(
                 db,
@@ -579,5 +611,141 @@ pub async fn prev_wallpaper_id(
             // fallback: 当前壁纸不在收藏夹中 / 已到首部 → 回到最后一张
             last_wallpaper_id(db, collection_id).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    };
+    use sea_orm_migration::MigratorTrait;
+
+    use super::add_wallpapers;
+    use crate::entities::{collection, collection_wallpaper, wallpaper};
+    use crate::migration::Migrator;
+    use crate::services::wallpaper_service;
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "mini-wallpaper-add-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn test_db(root: &TempDir) -> DatabaseConnection {
+        let path = root.0.join("app.db");
+        let db = Database::connect(format!("sqlite:{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    async fn insert_wallpaper(db: &DatabaseConnection, name: &str) -> wallpaper::Model {
+        wallpaper::ActiveModel {
+            name: Set(name.to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set(format!("wallpapers/{name}.png")),
+            play_count: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn insert_collection(db: &DatabaseConnection, kind: &str) -> collection::Model {
+        collection::ActiveModel {
+            name: Set(kind.to_string()),
+            sort_order: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            is_builtin: Set(0),
+            kind: Set(kind.to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn membership_count(db: &DatabaseConnection, collection_id: i32) -> u64 {
+        collection_wallpaper::Entity::find()
+            .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+            .all(db)
+            .await
+            .unwrap()
+            .len() as u64
+    }
+
+    #[tokio::test]
+    async fn adds_an_active_wallpaper_to_a_manual_collection() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let album = insert_collection(&db, "manual").await;
+        let image = insert_wallpaper(&db, "ok").await;
+
+        let added = add_wallpapers(&db, album.id, vec![image.id]).await.unwrap();
+
+        assert_eq!(added, 1);
+        assert_eq!(membership_count(&db, album.id).await, 1);
+        let added_again = add_wallpapers(&db, album.id, vec![image.id]).await.unwrap();
+        assert_eq!(added_again, 0);
+        assert_eq!(membership_count(&db, album.id).await, 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_smart_missing_and_trashed_targets() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let smart = insert_collection(&db, "smart").await;
+        let manual = insert_collection(&db, "manual").await;
+        let image = insert_wallpaper(&db, "gone").await;
+        wallpaper_service::trash_batch(&db, vec![image.id])
+            .await
+            .unwrap();
+
+        let smart_error = add_wallpapers(&db, smart.id, vec![image.id])
+            .await
+            .unwrap_err();
+        assert!(smart_error.to_string().contains("manual"));
+        assert_eq!(membership_count(&db, smart.id).await, 0);
+
+        let missing_collection = add_wallpapers(&db, 999_999, vec![image.id])
+            .await
+            .unwrap_err();
+        assert!(missing_collection
+            .to_string()
+            .contains("Collection not found"));
+
+        let trashed = add_wallpapers(&db, manual.id, vec![image.id])
+            .await
+            .unwrap_err();
+        assert!(trashed.to_string().contains("not available"));
+        assert_eq!(membership_count(&db, manual.id).await, 0);
+
+        let missing_wallpaper = add_wallpapers(&db, manual.id, vec![999_999])
+            .await
+            .unwrap_err();
+        assert!(missing_wallpaper.to_string().contains("not available"));
     }
 }

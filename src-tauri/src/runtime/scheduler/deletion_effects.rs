@@ -71,8 +71,15 @@ impl Scheduler {
                 Some(cid) => {
                     // 收藏夹模式：当前壁纸被删，尝试切换到下一张或清空
                     Self::handle_current_wallpaper_removed_inner(
-                        &db, self, &wm_guard, config, cid, deleted_ids, is_sync,
-                    ).await;
+                        &db,
+                        self,
+                        &wm_guard,
+                        config,
+                        cid,
+                        deleted_ids,
+                        is_sync,
+                    )
+                    .await;
                 }
                 None => {
                     // 场景 1b：单张模式，壁纸被删 → 清空窗口 + 停止定时器
@@ -83,7 +90,8 @@ impl Scheduler {
         }
 
         // 场景 1d：检查未直接受影响的显示器的定时器状态
-        let affected_mids: HashSet<String> = affected_configs.iter()
+        let affected_mids: HashSet<String> = affected_configs
+            .iter()
             .map(|c| c.monitor_id.clone())
             .collect();
         Self::check_orphaned_timers_inner(&db, self, &affected_mids).await;
@@ -101,10 +109,7 @@ impl Scheduler {
     /// - 场景 2d：display_mode 同步模式下广播到所有窗口
     ///
     /// `affected_configs`: 删除前预查的受影响 config 快照
-    pub async fn on_collection_deleted(
-        &mut self,
-        affected_configs: &[monitor_config::Model],
-    ) {
+    pub async fn on_collection_deleted(&mut self, affected_configs: &[monitor_config::Model]) {
         if affected_configs.is_empty() {
             return;
         }
@@ -168,20 +173,29 @@ impl Scheduler {
             let mid = &config.monitor_id;
             let key = carousel_key(mid);
 
-            let current_wid_removed = config.wallpaper_id
+            let current_wid_removed = config
+                .wallpaper_id
                 .map(|wid| removing_ids.contains(&wid))
                 .unwrap_or(false);
 
             if current_wid_removed {
                 // 当前播放的壁纸被移除，处理切换逻辑
                 let changed = Self::handle_current_wallpaper_removed_inner(
-                    &db, self, &wm_guard, config, collection_id, removing_ids, is_sync,
-                ).await;
+                    &db,
+                    self,
+                    &wm_guard,
+                    config,
+                    collection_id,
+                    removing_ids,
+                    is_sync,
+                )
+                .await;
                 config_changed = config_changed || changed;
             } else {
                 // 场景 3a：当前壁纸未被移除，但收藏夹内容减少了
                 if self.is_running(&key) {
-                    Self::manage_timer_by_collection_inner(&db, self, mid, collection_id, false).await;
+                    Self::manage_timer_by_collection_inner(&db, self, mid, collection_id, false)
+                        .await;
                 }
             }
         }
@@ -219,13 +233,21 @@ impl Scheduler {
         let new_wid = match direction {
             Direction::Next => {
                 collection_service::next_wallpaper_id(
-                    &db, collection_id, config.wallpaper_id, &config.play_mode,
-                ).await
+                    &db,
+                    collection_id,
+                    config.wallpaper_id,
+                    &config.play_mode,
+                )
+                .await
             }
             Direction::Prev => {
                 collection_service::prev_wallpaper_id(
-                    &db, collection_id, config.wallpaper_id, &config.play_mode,
-                ).await
+                    &db,
+                    collection_id,
+                    config.wallpaper_id,
+                    &config.play_mode,
+                )
+                .await
             }
         };
 
@@ -239,8 +261,13 @@ impl Scheduler {
         };
 
         // 更新 DB
-        if let Err(e) = monitor_config_service::update_wallpaper_id(&db, &config.monitor_id, wid).await {
-            error!("[Scheduler] 更新 wallpaper_id 失败 {}: {}", config.monitor_id, e);
+        if let Err(e) =
+            monitor_config_service::update_wallpaper_id(&db, &config.monitor_id, wid).await
+        {
+            error!(
+                "[Scheduler] 更新 wallpaper_id 失败 {}: {}",
+                config.monitor_id, e
+            );
             return false;
         }
 
@@ -255,7 +282,12 @@ impl Scheduler {
         // 如果有运行中的定时器，重置计时
         let key = carousel_key(&config.monitor_id);
         if self.is_running(&key) {
-            self.restart(key, CarouselTask { monitor_id: config.monitor_id.clone() });
+            self.restart(
+                key,
+                CarouselTask {
+                    monitor_id: config.monitor_id.clone(),
+                },
+            );
         }
 
         true
@@ -267,9 +299,9 @@ impl Scheduler {
     ///
     /// 逻辑：尝试从收藏夹获取下一张可用壁纸，
     /// - 有下一张 → 更新 DB + 通知窗口 + 管理定时器
-    /// - 无下一张 → 清空窗口 + 停止定时器
+    /// - 无下一张 → 先把 wallpaper_id 写空，成功后再清空窗口并停止定时器
     ///
-    /// 返回 true 表示 config 发生了变更。
+    /// 返回 true 表示 config 发生了变更。写库失败时返回 false，窗口保持原状。
     ///
     /// 注意：使用 `&mut Scheduler` 而非 `&mut self` 以避免借用冲突
     async fn handle_current_wallpaper_removed_inner(
@@ -284,27 +316,18 @@ impl Scheduler {
         let mid = &config.monitor_id;
         let key = carousel_key(mid);
 
-        match collection_service::next_wallpaper_id(
-            db, collection_id, config.wallpaper_id, &config.play_mode,
-        ).await {
-            Ok(Some(next_wid)) if !removed_ids.contains(&next_wid) => {
-                // 有下一张可用壁纸 → 更新 DB + 通知窗口
-                if let Err(e) = monitor_config_service::update_wallpaper_id(db, mid, next_wid).await {
-                    error!("[Scheduler] 更新 wallpaper_id 失败 {}: {}", mid, e);
-                    return false;
-                }
+        match persist_current_wallpaper_removal(db, config, collection_id, removed_ids).await {
+            Some(CurrentWallpaperOutcome::Advanced(next_wid)) => {
                 wm.notify_wallpaper_update(mid, next_wid, is_sync);
-
-                // 检查收藏夹剩余数量，决定定时器策略
                 Self::manage_timer_by_collection_inner(db, sched, mid, collection_id, true).await;
                 true
             }
-            _ => {
-                // 收藏夹为空或下一张也在移除列表中 → 清空窗口
+            Some(CurrentWallpaperOutcome::Cleared) => {
                 sched.stop(&key);
                 wm.notify_wallpaper_cleared(mid, is_sync);
                 true
             }
+            None => false,
         }
     }
 
@@ -323,7 +346,12 @@ impl Scheduler {
         match collection_service::has_enough_wallpapers(db, collection_id).await {
             Ok(true) => {
                 if force_restart {
-                    sched.restart(key, CarouselTask { monitor_id: monitor_id.to_string() });
+                    sched.restart(
+                        key,
+                        CarouselTask {
+                            monitor_id: monitor_id.to_string(),
+                        },
+                    );
                 }
                 // 非 force_restart 且有足够壁纸 → 定时器继续运行，不做操作
             }
@@ -342,7 +370,9 @@ impl Scheduler {
         sched: &mut Scheduler,
         affected_monitor_ids: &HashSet<String>,
     ) {
-        let all_configs = monitor_config_service::get_all(db).await.unwrap_or_default();
+        let all_configs = monitor_config_service::get_all(db)
+            .await
+            .unwrap_or_default();
 
         for config in &all_configs {
             if affected_monitor_ids.contains(&config.monitor_id) {
@@ -351,9 +381,202 @@ impl Scheduler {
             if let Some(cid) = config.collection_id {
                 let key = carousel_key(&config.monitor_id);
                 if sched.is_running(&key) {
-                    Self::manage_timer_by_collection_inner(db, sched, &config.monitor_id, cid, false).await;
+                    Self::manage_timer_by_collection_inner(
+                        db,
+                        sched,
+                        &config.monitor_id,
+                        cid,
+                        false,
+                    )
+                    .await;
                 }
             }
         }
+    }
+}
+
+enum CurrentWallpaperOutcome {
+    Advanced(i32),
+    Cleared,
+}
+
+/// 把「当前壁纸已不能继续播放」写进显示器配置。
+///
+/// 收藏夹里还有下一张时改写 `wallpaper_id`；没有下一张时把它置空。
+/// 写库失败返回 `None`，调用方不得据此清空窗口。
+async fn persist_current_wallpaper_removal(
+    db: &sea_orm::DatabaseConnection,
+    config: &monitor_config::Model,
+    collection_id: i32,
+    removed_ids: &HashSet<i32>,
+) -> Option<CurrentWallpaperOutcome> {
+    let mid = &config.monitor_id;
+    match collection_service::next_wallpaper_id(
+        db,
+        collection_id,
+        config.wallpaper_id,
+        &config.play_mode,
+    )
+    .await
+    {
+        Ok(Some(next_wid)) if !removed_ids.contains(&next_wid) => {
+            if let Err(e) = monitor_config_service::update_wallpaper_id(db, mid, next_wid).await {
+                error!("[Scheduler] 更新 wallpaper_id 失败 {}: {}", mid, e);
+                return None;
+            }
+            Some(CurrentWallpaperOutcome::Advanced(next_wid))
+        }
+        _ => {
+            if let Err(e) = monitor_config_service::clear_wallpaper_id(db, mid).await {
+                error!("[Scheduler] 清空 wallpaper_id 失败 {}: {}", mid, e);
+                return None;
+            }
+            Some(CurrentWallpaperOutcome::Cleared)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+    use sea_orm_migration::MigratorTrait;
+
+    use super::persist_current_wallpaper_removal;
+    use crate::entities::{collection, monitor_config, wallpaper};
+    use crate::migration::Migrator;
+    use crate::services::{collection_service, monitor_config_service, wallpaper_service};
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "mini-wallpaper-removal-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn test_db(root: &TempDir) -> DatabaseConnection {
+        let path = root.0.join("app.db");
+        let db = Database::connect(format!("sqlite:{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    async fn insert_wallpaper(db: &DatabaseConnection, name: &str) -> wallpaper::Model {
+        wallpaper::ActiveModel {
+            name: Set(name.to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set(format!("wallpapers/{name}.png")),
+            play_count: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn insert_collection(db: &DatabaseConnection) -> collection::Model {
+        collection::ActiveModel {
+            name: Set("album".to_string()),
+            sort_order: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            is_builtin: Set(0),
+            kind: Set("manual".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn bind_monitor(
+        db: &DatabaseConnection,
+        collection_id: i32,
+        wallpaper_id: i32,
+    ) -> monitor_config::Model {
+        monitor_config::ActiveModel {
+            monitor_id: Set("display-1".to_string()),
+            wallpaper_id: Set(Some(wallpaper_id)),
+            collection_id: Set(Some(collection_id)),
+            fit_mode: Set("cover".to_string()),
+            play_mode: Set("sequential".to_string()),
+            play_interval: Set(300),
+            is_enabled: Set(true),
+            active: Set(true),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn removing_the_last_member_clears_wallpaper_id() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let album = insert_collection(&db).await;
+        let image = insert_wallpaper(&db, "only").await;
+        collection_service::add_wallpapers(&db, album.id, vec![image.id])
+            .await
+            .unwrap();
+        let config = bind_monitor(&db, album.id, image.id).await;
+
+        collection_service::remove_wallpapers(&db, album.id, vec![image.id])
+            .await
+            .unwrap();
+        let removed = HashSet::from([image.id]);
+        let outcome = persist_current_wallpaper_removal(&db, &config, album.id, &removed).await;
+
+        assert!(matches!(
+            outcome,
+            Some(super::CurrentWallpaperOutcome::Cleared)
+        ));
+        let stored = monitor_config_service::get_by_monitor_id(&db, "display-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.wallpaper_id, None);
+        assert_eq!(stored.collection_id, Some(album.id));
+    }
+
+    #[tokio::test]
+    async fn playback_lookup_skips_trashed_wallpaper() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let image = insert_wallpaper(&db, "gone").await;
+
+        wallpaper_service::trash_batch(&db, vec![image.id])
+            .await
+            .unwrap();
+
+        assert!(wallpaper_service::get_active_by_id(&db, image.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(wallpaper_service::get_by_id(&db, image.id)
+            .await
+            .unwrap()
+            .is_some());
     }
 }

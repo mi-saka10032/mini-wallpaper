@@ -124,8 +124,8 @@ fn dispatch_tray_action(app: &tauri::AppHandle, action: Action) {
                 return;
             }
         };
-        let scheduler = scheduler_state.inner().clone();
-        let mut sched = scheduler.lock().await;
+        let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler_state.inner().clone();
+        let mut sched = scheduler_handle.lock().await;
         sched.dispatch_action(action).await;
     });
 }

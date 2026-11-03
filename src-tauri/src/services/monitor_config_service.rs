@@ -53,7 +53,7 @@ pub async fn get_by_monitor_id(
 /// active: 显示器是否当前物理可用
 pub async fn upsert(
     db: &DatabaseConnection,
-    req: &UpsertMonitorConfigRequest
+    req: &UpsertMonitorConfigRequest,
 ) -> Result<monitor_config::Model> {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
@@ -146,6 +146,28 @@ pub async fn update_wallpaper_id(
         .update(db)
         .await
         .context("Failed to update wallpaper_id")?;
+    Ok(model)
+}
+
+/// 清空显示器当前壁纸。收藏夹绑定保持不变。
+pub async fn clear_wallpaper_id(
+    db: &DatabaseConnection,
+    monitor_id: &str,
+) -> Result<monitor_config::Model> {
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let existing = get_by_monitor_id(db, monitor_id)
+        .await?
+        .context("Monitor config not found")?;
+
+    let mut active_model: monitor_config::ActiveModel = existing.into();
+    active_model.wallpaper_id = Set(None);
+    active_model.updated_at = Set(now);
+
+    let model = active_model
+        .update(db)
+        .await
+        .context("Failed to clear wallpaper_id")?;
     Ok(model)
 }
 

@@ -58,7 +58,8 @@ pub async fn upsert_monitor_config(
     let config = monitor_config_service::upsert(&ctx.db, &req).await?;
 
     // ===== 定时器管理 =====
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     sched.manage_carousel_timer(&config, need_restart).await;
 
     // ===== 样式 / 壁纸变更通知壁纸窗口 =====
@@ -86,7 +87,8 @@ pub async fn delete_monitor_config(
 
     // 先停止可能存在的定时器
     if let Some(mid) = &req.monitor_id {
-        let mut sched = scheduler.lock().await;
+        let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+        let mut sched = scheduler_handle.lock().await;
         sched.stop(&carousel_key(mid));
     }
 
@@ -103,7 +105,8 @@ pub async fn delete_monitor_config(
 pub async fn start_timers(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
 ) -> CommandResult<()> {
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     sched.start_all_carousel_timers().await;
     Ok(())
 }

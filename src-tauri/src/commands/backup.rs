@@ -110,7 +110,8 @@ pub async fn import_backup(
 
     // 先停掉会写库的后台任务，再关闭共享连接，最后才替换数据库文件。
     // 连接关闭后本次进程不再打开新库，界面已要求导入后重启。
-    scheduler.lock().await.stop_all();
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    scheduler_handle.lock().await.stop_all();
     if let Err(error) = ctx.db.close_by_ref().await {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(error.to_string().into());

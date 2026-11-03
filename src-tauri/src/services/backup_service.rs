@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use log::{info, warn};
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -16,16 +17,42 @@ const MAX_COMPRESSION_RATIO: u64 = 64;
 
 use crate::utils::progress_io::{ByteProgressFn, ProgressCounter, ProgressWriter};
 
-/// 导出备份：将 wallpapers/ + thumbnails/ + app.db 打包为 zip
+/// 用 SQLite `VACUUM INTO` 生成独立的一致性快照。
 ///
-/// 进度回调为字节级精度（已写入字节数 / 总字节数），
-/// 传入 `None` 时不追踪进度，零额外开销。
+/// 直接复制 `app.db` 会漏掉尚未 checkpoint 的 WAL 事务。快照文件包含调用时
+/// 已提交的全部数据，并且不附带 WAL，可以被安全地放进备份包。
+pub async fn snapshot_database(db: &DatabaseConnection, destination: &Path) -> Result<()> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).context("Failed to create database snapshot directory")?;
+    }
+    if destination.exists() {
+        fs::remove_file(destination).context("Failed to remove previous database snapshot")?;
+    }
+
+    let path = destination
+        .to_str()
+        .context("Database snapshot path is not valid UTF-8")?;
+    if path.contains('\0') {
+        bail!("Database snapshot path is invalid");
+    }
+    let escaped = path.replace('\'', "''");
+    db.execute_unprepared(&format!("VACUUM INTO '{escaped}'"))
+        .await
+        .context("Failed to snapshot database")?;
+    Ok(())
+}
+
+/// 导出备份：将 wallpapers/ + thumbnails/ + 数据库快照打包为 zip
+///
+/// `database_snapshot` 必须是已经脱离 WAL 的完整数据库文件，会以 `app.db`
+/// 的名字写入压缩包。进度回调为字节级精度，传入 `None` 时不追踪进度。
 pub fn export_backup(
     app_data_dir: &Path,
+    database_snapshot: &Path,
     output_path: &Path,
     on_progress: Option<ByteProgressFn>,
 ) -> Result<()> {
-    let total = get_data_size(app_data_dir);
+    let total = packed_payload_size(app_data_dir, database_snapshot);
 
     let file = File::create(output_path).context("Failed to create backup file")?;
     let counter = ProgressCounter::new(total, on_progress);
@@ -61,12 +88,11 @@ pub fn export_backup(
         }
     }
 
-    // 打包 app.db
-    let db_path = app_data_dir.join("app.db");
-    if db_path.exists() {
+    // 打包一致性快照，压缩包内固定命名为 app.db。
+    if database_snapshot.exists() {
         zip.start_file("app.db", options)
             .context("Failed to start zip entry: app.db")?;
-        let mut f = File::open(&db_path).context("Failed to open app.db")?;
+        let mut f = File::open(database_snapshot).context("Failed to open database snapshot")?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         zip.write_all(&buf)?;
@@ -75,6 +101,105 @@ pub fn export_backup(
     zip.finish().context("Failed to finalize zip")?;
 
     info!("[Backup] Exported to: {}", output_path.display());
+    Ok(())
+}
+
+fn packed_payload_size(app_data_dir: &Path, database_snapshot: &Path) -> u64 {
+    let mut total = 0u64;
+    for dir_name in ["wallpapers", "thumbnails"] {
+        let dir_path = app_data_dir.join(dir_name);
+        if dir_path.exists() {
+            total = total.saturating_add(get_data_size(&dir_path));
+        }
+    }
+    if database_snapshot.exists() {
+        total = total.saturating_add(
+            fs::metadata(database_snapshot)
+                .map(|m| m.len())
+                .unwrap_or(0),
+        );
+    }
+    total
+}
+
+/// 把已校验的临时导入目录安装到应用目录。
+///
+/// 壁纸和缩略图按条目覆盖，不删除备份里没有的本地文件。`app.db` 最后替换，
+/// 并删除旧的 WAL/SHM，避免重启时把旧日志回放到新数据库上。
+///
+/// 调用方必须先关闭正在使用该数据库的连接。本函数不关闭连接。
+pub fn install_staged_backup(staging: &Path, app_data_dir: &Path) -> Result<()> {
+    copy_staged_files(staging, app_data_dir)?;
+    let staged_db = staging.join("app.db");
+    if staged_db.exists() {
+        replace_database_file(&app_data_dir.join("app.db"), &staged_db)?;
+    }
+    Ok(())
+}
+
+fn copy_staged_files(staging: &Path, app_data_dir: &Path) -> Result<()> {
+    for entry in WalkDir::new(staging)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+    {
+        let path = entry.path();
+        let relative = path.strip_prefix(staging).unwrap_or(path);
+        if relative.as_os_str().is_empty() || relative == Path::new("app.db") {
+            continue;
+        }
+        let target = app_data_dir.join(relative);
+        if path.is_dir() {
+            fs::create_dir_all(&target)
+                .context(format!("Failed to create directory: {}", target.display()))?;
+        } else if path.is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(path, &target)
+                .context(format!("Failed to restore file: {}", target.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn replace_database_file(live: &Path, staged: &Path) -> Result<()> {
+    let parent = live
+        .parent()
+        .context("Database path has no parent directory")?;
+    let incoming = parent.join("app.db.incoming");
+    let previous = parent.join("app.db.previous");
+    // 上次中断可能留下半成品。数据库仍在时，previous 只是未能删掉的旧副本。
+    if previous.exists() {
+        if live.exists() {
+            fs::remove_file(&previous).context("Failed to remove stale database backup")?;
+        } else {
+            fs::rename(&previous, live).context("Failed to restore interrupted database")?;
+        }
+    }
+    if incoming.exists() {
+        fs::remove_file(&incoming).context("Failed to remove stale incoming database")?;
+    }
+    fs::copy(staged, &incoming).context("Failed to stage restored database")?;
+
+    if live.exists() {
+        fs::rename(live, &previous).context("Failed to move the current database aside")?;
+    }
+    if let Err(error) = fs::rename(&incoming, live) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, live);
+        }
+        return Err(error).context("Failed to replace app.db");
+    }
+
+    for sidecar in ["app.db-wal", "app.db-shm", "app.db.previous"] {
+        let path = parent.join(sidecar);
+        if path.exists() {
+            fs::remove_file(&path).context(format!(
+                "Failed to remove old database file: {}",
+                path.display()
+            ))?;
+        }
+    }
     Ok(())
 }
 
@@ -462,14 +587,117 @@ mod tests {
         fs::create_dir_all(source.join("wallpapers")).unwrap();
         fs::create_dir(&target).unwrap();
         fs::write(source.join("wallpapers/a.txt"), b"ok").unwrap();
-        fs::write(source.join("app.db"), b"db").unwrap();
+        fs::write(source.join("snapshot.db"), b"db").unwrap();
         let zip_path = root.0.join("backup.zip");
 
-        export_backup(&source, &zip_path, None).unwrap();
+        export_backup(&source, &source.join("snapshot.db"), &zip_path, None).unwrap();
         let count = import_backup(&target, &zip_path, None).unwrap();
 
         assert_eq!(count, 2);
         assert_eq!(fs::read(target.join("wallpapers/a.txt")).unwrap(), b"ok");
         assert_eq!(fs::read(target.join("app.db")).unwrap(), b"db");
+    }
+
+    #[test]
+    fn export_packs_snapshot_instead_of_the_live_database_file() {
+        let root = TempDir::new();
+        let source = root.0.join("source");
+        let target = root.0.join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(source.join("app.db"), b"STALE").unwrap();
+        fs::write(source.join("snapshot.db"), b"FRESH").unwrap();
+        let zip_path = root.0.join("backup.zip");
+
+        export_backup(&source, &source.join("snapshot.db"), &zip_path, None).unwrap();
+        import_backup(&target, &zip_path, None).unwrap();
+
+        assert_eq!(fs::read(target.join("app.db")).unwrap(), b"FRESH");
+    }
+
+    #[test]
+    fn import_does_not_replace_live_database_until_install() {
+        let root = TempDir::new();
+        let live = root.0.join("live");
+        let staging = root.0.join("staging");
+        fs::create_dir_all(live.join("wallpapers")).unwrap();
+        fs::create_dir(&staging).unwrap();
+        fs::write(live.join("app.db"), b"OLD").unwrap();
+        fs::write(live.join("app.db-wal"), b"WAL").unwrap();
+        fs::write(live.join("wallpapers/keep.txt"), b"keep").unwrap();
+        let zip_path = root.0.join("backup.zip");
+        write_zip(
+            &zip_path,
+            &[("wallpapers/a.txt", b"new"), ("app.db", b"NEWDB")],
+            CompressionMethod::Stored,
+        );
+
+        import_backup(&staging, &zip_path, None).unwrap();
+
+        assert_eq!(fs::read(live.join("app.db")).unwrap(), b"OLD");
+        assert_eq!(fs::read(live.join("app.db-wal")).unwrap(), b"WAL");
+        assert!(!live.join("wallpapers/a.txt").exists());
+
+        install_staged_backup(&staging, &live).unwrap();
+
+        assert_eq!(fs::read(live.join("app.db")).unwrap(), b"NEWDB");
+        assert!(!live.join("app.db-wal").exists());
+        assert_eq!(fs::read(live.join("wallpapers/a.txt")).unwrap(), b"new");
+        assert_eq!(fs::read(live.join("wallpapers/keep.txt")).unwrap(), b"keep");
+    }
+
+    #[tokio::test]
+    async fn snapshot_includes_uncheckpointed_wal_commits() {
+        use sea_orm::{Database, DatabaseBackend, Statement};
+
+        let root = TempDir::new();
+        let db_path = root.0.join("app.db");
+        let db = Database::connect(format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .unwrap();
+        db.execute_unprepared("PRAGMA journal_mode=WAL;")
+            .await
+            .unwrap();
+        db.execute_unprepared("PRAGMA wal_autocheckpoint=0;")
+            .await
+            .unwrap();
+        db.execute_unprepared("CREATE TABLE items(value TEXT);")
+            .await
+            .unwrap();
+        db.execute_unprepared("INSERT INTO items VALUES ('uncheckpointed');")
+            .await
+            .unwrap();
+        assert!(root.0.join("app.db-wal").exists());
+
+        let naive = root.0.join("naive.db");
+        fs::copy(&db_path, &naive).unwrap();
+        let naive_db = Database::connect(format!("sqlite:{}?mode=rw", naive.display()))
+            .await
+            .unwrap();
+        let naive_rows = naive_db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT value FROM items",
+            ))
+            .await;
+        assert!(
+            naive_rows.is_err(),
+            "copying only app.db must miss the WAL commit"
+        );
+
+        let snapshot = root.0.join("snapshot.db");
+        snapshot_database(&db, &snapshot).await.unwrap();
+        let snapshot_db = Database::connect(format!("sqlite:{}?mode=ro", snapshot.display()))
+            .await
+            .unwrap();
+        let rows = snapshot_db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT value FROM items",
+            ))
+            .await
+            .unwrap();
+        let value: String = rows[0].try_get("", "value").unwrap();
+        assert_eq!(value, "uncheckpointed");
     }
 }

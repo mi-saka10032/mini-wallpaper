@@ -33,6 +33,8 @@ interface ManageToolbarProps {
   onManageTags: () => void;
   onCancel: () => void;
   onDone: () => void;
+  /** 退出或确认删除进行中，挡住完成和取消的连点 */
+  submitting?: boolean;
 }
 
 /** 管理模式下的操作栏 */
@@ -54,6 +56,7 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
     onManageTags,
     onCancel,
     onDone,
+    submitting = false,
   }) => {
     const { t } = useTranslation();
 
@@ -178,11 +181,11 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
           confirmVariant="destructive"
           onConfirm={onCancel}
         >
-          <Button variant="ghost" size="sm">
+          <Button variant="ghost" size="sm" disabled={submitting}>
             {t("main.cancel")}
           </Button>
         </PopConfirm>
-        <Button variant="outline" size="sm" onClick={onDone}>
+        <Button variant="outline" size="sm" onClick={onDone} disabled={submitting}>
           {t("main.done")}
         </Button>
       </>

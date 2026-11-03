@@ -208,7 +208,7 @@ fn prepare_wallpaper_files(
             "{}.webp",
             dest_path
                 .file_stem()
-                .expect("dest_path must have a file stem")
+                .ok_or_else(|| anyhow::anyhow!("Wallpaper destination path has no file name"))?
                 .to_string_lossy(),
         );
         let thumb_path = thumbnails_dir.join(&thumb_name);
@@ -400,7 +400,7 @@ fn prepare_wallpaper_from_bytes(
             "{}.webp",
             dest_path
                 .file_stem()
-                .expect("dest_path must have a file stem")
+                .ok_or_else(|| anyhow::anyhow!("Wallpaper destination path has no file name"))?
                 .to_string_lossy(),
         );
         let thumb_path = thumbnails_dir.join(&thumb_name);

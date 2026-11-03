@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use log::warn;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
@@ -11,16 +12,19 @@ pub const AUTOSTART_ARG: &str = "--autostart";
 
 /// 第二个实例启动时，聚焦已有窗口。
 pub fn focus_existing_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: String) {
-    let window: tauri::WebviewWindow = app
-        .get_webview_window("main")
-        .expect("Main window not found");
-    window
-        .unminimize()
-        .expect("Failed to unminimize main window");
-    window.show().expect("Failed to show main window");
-    window
-        .set_focus()
-        .expect("Failed to set focus on main window");
+    let Some(window) = app.get_webview_window("main") else {
+        warn!("[SingleInstance] 主窗口不存在，无法聚焦");
+        return;
+    };
+    if let Err(error) = window.unminimize() {
+        warn!("[SingleInstance] 取消最小化失败: {error}");
+    }
+    if let Err(error) = window.show() {
+        warn!("[SingleInstance] 显示主窗口失败: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        warn!("[SingleInstance] 聚焦主窗口失败: {error}");
+    }
 }
 
 pub fn init(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {

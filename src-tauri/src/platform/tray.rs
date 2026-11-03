@@ -71,12 +71,13 @@ pub fn register_tray(app: &tauri::App) -> tauri::Result<()> {
     )?;
 
     // ===== 构建托盘 =====
+    let icon = app
+        .default_window_icon()
+        .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?
+        .clone();
+
     TrayIconBuilder::new()
-        .icon(
-            app.default_window_icon()
-                .expect("default icon must exist")
-                .clone(),
-        )
+        .icon(icon)
         .tooltip("Mini Wallpaper")
         .menu(&tray_menu)
         .show_menu_on_left_click(false)

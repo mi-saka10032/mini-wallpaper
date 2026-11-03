@@ -174,8 +174,8 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
                 return;
             }
         };
-        let scheduler = scheduler_state.inner().clone();
-        let mut sched = scheduler.lock().await;
+        let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler_state.inner().clone();
+        let mut sched = scheduler_handle.lock().await;
         sched.dispatch_action(action).await;
     });
 }

@@ -28,7 +28,8 @@ pub async fn trigger_action(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     action: Action,
 ) -> CommandResult<()> {
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     sched.dispatch_action(action).await;
     Ok(())
 }

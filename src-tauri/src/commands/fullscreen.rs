@@ -19,7 +19,8 @@ use super::error::CommandResult;
 pub async fn init_fullscreen_detection(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
 ) -> CommandResult<()> {
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     sched.init_fullscreen_detection().await;
     Ok(())
 }

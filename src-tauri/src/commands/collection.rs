@@ -65,7 +65,8 @@ pub async fn delete_collection(
     collection_service::delete(&ctx.db, req.id).await?;
 
     // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     sched.on_collection_deleted(&affected_configs).await;
 
     Ok(())
@@ -116,7 +117,8 @@ pub async fn remove_wallpapers_from_collection(
     }
 
     // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     sched.on_wallpapers_removed_from_collection(&bound_configs, collection_id, &removing_ids).await;
 
     Ok(removed)
@@ -145,7 +147,8 @@ pub async fn toggle_favorite(
     req: Validated<ToggleFavoriteRequest>,
 ) -> CommandResult<bool> {
     let req = req.into_inner();
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     Ok(sched.toggle_favorite(req.wallpaper_id).await?)
 }
 

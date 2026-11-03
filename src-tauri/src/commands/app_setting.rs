@@ -61,7 +61,8 @@ pub async fn set_setting(
     app_setting_service::set(&ctx.db, &req.key, &req.value).await?;
 
     // 2. 通过 Scheduler 执行副作用
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
     sched.apply_setting_side_effect(&req.key, &req.value, monitor_id.as_deref()).await;
 
     Ok(())

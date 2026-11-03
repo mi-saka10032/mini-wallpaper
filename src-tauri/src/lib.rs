@@ -105,9 +105,9 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = &event {
                 // 统一停止调度器内所有后台任务（轮播 + 全屏检测等）
                 if let Some(scheduler) = app.try_state::<Arc<Mutex<Scheduler>>>() {
-                    let scheduler = scheduler.inner().clone();
+                    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
                     tauri::async_runtime::block_on(async {
-                        let mut sched = scheduler.lock().await;
+                        let mut sched = scheduler_handle.lock().await;
                         sched.stop_all();
                     });
                 }

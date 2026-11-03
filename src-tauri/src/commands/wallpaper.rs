@@ -5,9 +5,7 @@ use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
 use crate::ctx::AppContext;
-use crate::dto::wallpaper_dto::{
-    DeleteWallpapersRequest, ImportWallpapersRequest,
-};
+use crate::dto::wallpaper_dto::{DeleteWallpapersRequest, ImportWallpapersRequest};
 use crate::dto::Validated;
 use crate::entities::wallpaper;
 use crate::runtime::Scheduler;
@@ -23,19 +21,19 @@ pub fn get_supported_extensions() -> Vec<String> {
 
 /// 获取壁纸列表
 #[tauri::command]
-pub async fn get_wallpapers(
-    ctx: State<'_, AppContext>,
-) -> CommandResult<Vec<wallpaper::Model>> {
+pub async fn get_wallpapers(ctx: State<'_, AppContext>) -> CommandResult<Vec<wallpaper::Model>> {
     Ok(wallpaper_service::get_all(&ctx.db).await?)
 }
 
-/// 根据 ID 获取单个壁纸详情
+/// 根据 ID 获取单个正常壁纸。回收站内的记录视为不存在。
+///
+/// 恢复和彻底删除走各自的回收站接口。壁纸窗口重新加载时只应拿到仍可播放的记录。
 #[tauri::command]
 pub async fn get_wallpaper(
     ctx: State<'_, AppContext>,
     id: i32,
 ) -> CommandResult<Option<wallpaper::Model>> {
-    Ok(wallpaper_service::get_by_id(&ctx.db, id).await?)
+    Ok(wallpaper_service::get_active_by_id(&ctx.db, id).await?)
 }
 
 /// 导入壁纸（接收文件路径数组，复制到应用目录，生成缩略图，写入数据库）
@@ -53,7 +51,10 @@ pub async fn import_wallpapers(
     let wallpapers_dir = app_data_dir.join("wallpapers");
     let thumbnails_dir = app_data_dir.join("thumbnails");
 
-    Ok(wallpaper_service::import_batch(&ctx.db, req.paths, &wallpapers_dir, &thumbnails_dir).await?)
+    Ok(
+        wallpaper_service::import_batch(&ctx.db, req.paths, &wallpapers_dir, &thumbnails_dir)
+            .await?,
+    )
 }
 
 /// 通过字节方式导入单个壁纸（H5 拖拽场景，raw body 直传）
@@ -116,10 +117,13 @@ pub async fn save_video_thumbnail(
     let app_data_dir = ctx.app_handle.path().app_data_dir()?;
     let thumbnails_dir = app_data_dir.join("thumbnails");
 
-    Ok(
-        wallpaper_service::save_video_thumbnail(&ctx.db, wallpaper_id, data.clone(), &thumbnails_dir)
-            .await?,
+    Ok(wallpaper_service::save_video_thumbnail(
+        &ctx.db,
+        wallpaper_id,
+        data.clone(),
+        &thumbnails_dir,
     )
+    .await?)
 }
 
 /// 批量删除壁纸 —— 语义为「移入回收站」（软删除 + 窗口/定时器联动）
@@ -140,14 +144,18 @@ pub async fn delete_wallpapers(
     let deleted_ids: HashSet<i32> = req.ids.iter().copied().collect();
 
     // 1. 预先查出引用这些壁纸的完整 config（内存快照，删除后 wallpaper_id 会被置空）
-    let affected_configs = monitor_config_service::get_configs_by_wallpaper_ids(&ctx.db, &req.ids).await?;
+    let affected_configs =
+        monitor_config_service::get_configs_by_wallpaper_ids(&ctx.db, &req.ids).await?;
 
     // 2. 执行数据层软删除（打 deleted_at 标记 + sort_order 哨兵与连续化重排 + monitor_config.wallpaper_id 置空）
     let deleted = wallpaper_service::trash_batch(&ctx.db, req.ids).await?;
 
     // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
-    let mut sched = scheduler.lock().await;
-    sched.on_wallpapers_deleted(&affected_configs, &deleted_ids).await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
+    sched
+        .on_wallpapers_deleted(&affected_configs, &deleted_ids)
+        .await;
 
     Ok(deleted)
 }
@@ -191,16 +199,17 @@ pub async fn purge_wallpapers(
 
     let deleted = wallpaper_service::delete_batch(&ctx.db, req.ids).await?;
 
-    let mut sched = scheduler.lock().await;
-    sched.on_wallpapers_deleted(&affected_configs, &deleted_ids).await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
+    sched
+        .on_wallpapers_deleted(&affected_configs, &deleted_ids)
+        .await;
 
     Ok(deleted)
 }
 
 /// 清空回收站（彻底删除其中全部壁纸，不可恢复）
 #[tauri::command]
-pub async fn empty_trash(
-    ctx: State<'_, AppContext>,
-) -> CommandResult<u64> {
+pub async fn empty_trash(ctx: State<'_, AppContext>) -> CommandResult<u64> {
     Ok(wallpaper_service::empty_trash(&ctx.db).await?)
 }

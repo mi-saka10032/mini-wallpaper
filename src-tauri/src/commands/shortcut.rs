@@ -25,7 +25,8 @@ pub async fn switch_wallpaper(
     let req = req.into_inner();
     let configs = monitor_config_service::get_all(&ctx.db).await?;
 
-    let mut sched = scheduler.lock().await;
+    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let mut sched = scheduler_handle.lock().await;
 
     for config in &configs {
         if !config.active {

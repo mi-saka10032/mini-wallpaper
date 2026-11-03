@@ -25,8 +25,8 @@
 //!   `monitor_configs.wallpaper_id` 建立）
 //! - ⏸️ Quit：仅托盘菜单可达，避免误触退出
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -94,7 +94,7 @@ const DEFAULTS: &[DefaultShortcut] = &[
 /// `Builder::new().build()` 调用。
 pub fn build_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     GlobalShortcutBuilder::new()
-        .with_handler(|app, shortcut, event| handle_shortcut(app, shortcut, event))
+        .with_handler(handle_shortcut)
         .build()
 }
 
@@ -187,7 +187,8 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
 /// 可改造为启动期一次性构建 `HashMap<Shortcut, Action>` 缓存。
 fn resolve_action(app: &AppHandle, shortcut: &Shortcut) -> Option<Action> {
     let ctx = app.try_state::<AppContext>()?;
-    let db = ctx.db.clone();
+    let app_ctx: &AppContext = ctx.inner();
+    let db = app_ctx.db.clone();
 
     tauri::async_runtime::block_on(async move {
         for def in DEFAULTS {
@@ -218,7 +219,8 @@ pub async fn register_default_shortcuts(app: &AppHandle) {
             return;
         }
     };
-    let db = ctx.db.clone();
+    let app_ctx: &AppContext = ctx.inner();
+    let db = app_ctx.db.clone();
     let manager = app.global_shortcut();
 
     for def in DEFAULTS {

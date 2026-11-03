@@ -7,118 +7,25 @@ mod migration;
 mod platform;
 mod runtime;
 mod services;
+mod setup;
 mod utils;
 
-use std::sync::Arc;
+use setup::{focus_existing_window, AUTOSTART_ARG};
 
-use tauri::Manager;
-use tokio::sync::Mutex;
-
-use ctx::AppContext;
-use platform::tray;
-use platform::global_shortcut;
-use runtime::Scheduler;
-
-/// 检查当前是否为开机自启动（通过命令行参数 --autostart 判断）
-fn is_autostart_launch() -> bool {
-    std::env::args().any(|arg| arg == "--autostart")
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--autostart"]),
+            Some(vec![AUTOSTART_ARG]),
         ))
-        .plugin(global_shortcut::build_plugin())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // 当第二个实例尝试启动时，聚焦已有窗口
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
-        .setup(|app| {
-            // 初始化日志系统
-            env_logger::Builder::from_env(
-                env_logger::Env::default().default_filter_or("info"),
-            )
-            .init();
-
-            // ===== 应用内更新检查 =====
-            // updater 插件仅支持桌面端，故在 setup 内按 cfg 注册而非链式挂载。
-            // 仅提供检测/下载能力，实际触发时机由前端控制（启动静默检测 + 手动检测）。
-            #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
-
-            let handle = app.handle().clone();
-
-            // 构造 AppContext（内部完成 DB 初始化）并注册为全局 state
-            let ctx = tauri::async_runtime::block_on(async {
-                AppContext::new(handle.clone()).await
-            })
-            .expect("Failed to initialize AppContext");
-            app.manage(ctx);
-
-            // 构造 Scheduler（持有 AppHandle，通过控制反转向任务注入句柄）
-            let scheduler = Arc::new(Mutex::new(Scheduler::new(handle)));
-            app.manage(scheduler);
-
-            // ===== 系统托盘 =====
-            tray::setup_tray(app)?;
-
-            // ===== 全局快捷键注册 =====
-            // 必须在 AppContext 与 Scheduler 都 manage 之后调用：
-            // - register_default_shortcuts 内部读 DB 决定键位（依赖 AppContext.db）
-            // - handler 触发后异步派发到 Scheduler（依赖 Scheduler 已 manage）
-            let app_handle_for_shortcut = app.handle().clone();
-            tauri::async_runtime::block_on(async move {
-                global_shortcut::register_default_shortcuts(&app_handle_for_shortcut).await;
-            });
-
-            // ===== 回收站过期项清理（一次性扫描，不引入常驻定时任务）=====
-            // 异步 spawn，不阻塞启动流程；失败仅记录日志，不影响应用可用性。
-            let app_handle_for_purge = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                services::trash_maintenance::purge_expired_on_startup(&app_handle_for_purge).await;
-            });
-
-            // ===== 开机自启时隐藏主窗口到托盘 =====
-            if is_autostart_launch() {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
-            }
-
-            Ok(())
-        })
+        .plugin(tauri_plugin_single_instance::init(focus_existing_window))
+        .plugin(crate::platform::global_shortcut::build_plugin())
+        .setup(setup::init)
         .invoke_handler(commands::all_handlers!())
-        .build(tauri::generate_context!())
-        .expect("error while building Mini Wallpaper")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = &event {
-                // 统一停止调度器内所有后台任务（轮播 + 全屏检测等）
-                if let Some(scheduler) = app.try_state::<Arc<Mutex<Scheduler>>>() {
-                    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-                    tauri::async_runtime::block_on(async {
-                        let mut sched = scheduler_handle.lock().await;
-                        sched.stop_all();
-                    });
-                }
-                // 销毁所有 Toast 通知窗口
-                if let Some(ctx) = app.try_state::<AppContext>() {
-                    let toast_mgr = ctx.toast_manager.clone();
-                    tauri::async_runtime::block_on(async {
-                        let mut mgr = toast_mgr.lock().await;
-                        mgr.destroy_all();
-                    });
-                }
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running Mini Wallpaper");
 }

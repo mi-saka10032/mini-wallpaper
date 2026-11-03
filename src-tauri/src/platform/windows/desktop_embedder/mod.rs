@@ -69,16 +69,22 @@ pub fn embed_in_desktop(
 
         // 2. 发送 0x052C 消息触发 WorkerW 创建
         let mut _result: usize = 0;
-        SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, &mut _result as *mut usize);
+        SendMessageTimeoutW(
+            progman,
+            0x052C,
+            0,
+            0,
+            SMTO_NORMAL,
+            1000,
+            &mut _result as *mut usize,
+        );
 
         // 3. 选择嵌入策略
         let strategy = select_strategy();
         info!("使用嵌入策略: {}", strategy.name());
 
         // 4. 查找 WorkerW
-        let workerw = strategy
-            .find_workerw(progman)
-            .context("WorkerW 查找失败")?;
+        let workerw = strategy.find_workerw(progman).context("WorkerW 查找失败")?;
 
         // 5. 执行嵌入
         strategy

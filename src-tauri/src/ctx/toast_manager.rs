@@ -126,27 +126,23 @@ impl ToastManager {
         let y = base_y - ((index as f64 + 1.0) * (TOAST_HEIGHT as f64 + TOAST_GAP as f64));
 
         // 创建窗口
-        match WebviewWindowBuilder::new(
-            &self.app_handle,
-            &label,
-            WebviewUrl::App(url.into()),
-        )
-        .title("Toast")
-        .decorations(false)
-        .skip_taskbar(true)
-        .transparent(true)
-        // 必须显式关闭系统窗口投影：
-        // tauri.conf.json 里的 "shadow": false 只作用于配置中声明的主窗口，
-        // Toast 窗口由 builder 动态创建，不继承该配置，会拿到 OS 默认投影。
-        // 在这种透明小窗口上，这层投影表现为圆角卡片外的灰色模糊矩形边框。
-        .shadow(false)
-        .resizable(false)
-        .visible(false)
-        .always_on_top(true)
-        .focused(false)
-        .position(base_x, y)
-        .inner_size(TOAST_WIDTH as f64, TOAST_HEIGHT as f64)
-        .build()
+        match WebviewWindowBuilder::new(&self.app_handle, &label, WebviewUrl::App(url.into()))
+            .title("Toast")
+            .decorations(false)
+            .skip_taskbar(true)
+            .transparent(true)
+            // 必须显式关闭系统窗口投影：
+            // tauri.conf.json 里的 "shadow": false 只作用于配置中声明的主窗口，
+            // Toast 窗口由 builder 动态创建，不继承该配置，会拿到 OS 默认投影。
+            // 在这种透明小窗口上，这层投影表现为圆角卡片外的灰色模糊矩形边框。
+            .shadow(false)
+            .resizable(false)
+            .visible(false)
+            .always_on_top(true)
+            .focused(false)
+            .position(base_x, y)
+            .inner_size(TOAST_WIDTH as f64, TOAST_HEIGHT as f64)
+            .build()
         {
             Ok(window) => {
                 let _ = window.show();
@@ -203,7 +199,11 @@ impl ToastManager {
             }
             // 方案 B：重排剩余窗口位置（下移填补空位）
             self.recalculate_positions();
-            info!("[ToastManager] 关闭 Toast: label='{}', 剩余 {} 个", label, self.toasts.len());
+            info!(
+                "[ToastManager] 关闭 Toast: label='{}', 剩余 {} 个",
+                label,
+                self.toasts.len()
+            );
         } else {
             // 可能已经被 duration 定时器关闭了，尝试直接销毁窗口
             self.destroy_window(label);
@@ -211,6 +211,7 @@ impl ToastManager {
     }
 
     /// 销毁所有 Toast 窗口（应用退出时调用）
+    #[allow(dead_code)]
     pub fn destroy_all(&mut self) {
         let labels: Vec<String> = self.toasts.iter().map(|t| t.label.clone()).collect();
         for label in &labels {
@@ -235,7 +236,8 @@ impl ToastManager {
             // i=0 是最旧的（最上面），i=total-1 是最新的（最下面）
             // 从底部往上计算：最新的距离底部最近
             let distance_from_bottom = (total - 1 - i) as f64;
-            let y = base_y - ((distance_from_bottom + 1.0) * (TOAST_HEIGHT as f64 + TOAST_GAP as f64));
+            let y =
+                base_y - ((distance_from_bottom + 1.0) * (TOAST_HEIGHT as f64 + TOAST_GAP as f64));
 
             if let Some(window) = self.app_handle.get_webview_window(&entry.label) {
                 // 必须用 LogicalPosition：base_y 与 TOAST_HEIGHT/TOAST_GAP 均为逻辑像素，
@@ -268,8 +270,9 @@ impl ToastManager {
         // 优先使用活跃显示器；失败时回落到 Tauri 主显示器
         if let Some((left, top, width, height, scale)) = self.resolve_active_monitor_rect() {
             // 物理像素 → 逻辑像素
-            let base_x =
-                (left as f64 + width as f64) / scale - TOAST_WIDTH as f64 - TOAST_MARGIN_RIGHT as f64;
+            let base_x = (left as f64 + width as f64) / scale
+                - TOAST_WIDTH as f64
+                - TOAST_MARGIN_RIGHT as f64;
             let base_y = (top as f64 + height as f64) / scale - TOAST_MARGIN_BOTTOM as f64;
             return (base_x, base_y);
         }
@@ -282,8 +285,8 @@ impl ToastManager {
             let base_x = (work.position.x as f64 + work.size.width as f64) / scale
                 - TOAST_WIDTH as f64
                 - TOAST_MARGIN_RIGHT as f64;
-            let base_y =
-                (work.position.y as f64 + work.size.height as f64) / scale - TOAST_MARGIN_BOTTOM as f64;
+            let base_y = (work.position.y as f64 + work.size.height as f64) / scale
+                - TOAST_MARGIN_BOTTOM as f64;
 
             (base_x, base_y)
         } else {
@@ -317,7 +320,11 @@ impl ToastManager {
             .and_then(|monitors| {
                 monitors
                     .into_iter()
-                    .find(|m| m.name().map(|n| n.as_str() == active.device_name).unwrap_or(false))
+                    .find(|m| {
+                        m.name()
+                            .map(|n| n.as_str() == active.device_name)
+                            .unwrap_or(false)
+                    })
                     .map(|m| m.scale_factor())
             })
             .or_else(|| {

@@ -8,5 +8,5 @@ pub fn import_concurrency() -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    (cores * 3 / 4).max(2).min(8)
+    (cores * 3 / 4).clamp(2, 8)
 }

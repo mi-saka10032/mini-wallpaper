@@ -54,12 +54,9 @@ impl Scheduler {
             let bound_configs =
                 monitor_config_service::get_configs_by_collection_id(&db, collection_id).await?;
 
-            let removed = collection_service::remove_wallpapers(
-                &db,
-                collection_id,
-                vec![wallpaper_id],
-            )
-            .await?;
+            let removed =
+                collection_service::remove_wallpapers(&db, collection_id, vec![wallpaper_id])
+                    .await?;
 
             if removed > 0 {
                 let removing_ids: HashSet<i32> = std::iter::once(wallpaper_id).collect();

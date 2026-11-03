@@ -15,10 +15,9 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::platform::windows::desktop_embedder;
 
 use crate::events::{
-    DisplayModeChangedPayload, EventPayload, FitModeChangedPayload, TypedEmitTo,
-    WallpaperChangedPayload,
-    ThumbnailChangedPayload, TypedEmit,
-    WallpaperClearedPayload, MonitorConfigRefreshedPayload,
+    DisplayModeChangedPayload, EventPayload, FitModeChangedPayload, MonitorConfigRefreshedPayload,
+    ThumbnailChangedPayload, TypedEmit, TypedEmitTo, WallpaperChangedPayload,
+    WallpaperClearedPayload,
 };
 
 /// 壁纸窗口管理器
@@ -75,18 +74,19 @@ impl WallpaperWindowManager {
             _ => format!("/wallpaper?monitorId={}", monitor_id),
         };
 
-        let window = WebviewWindowBuilder::new(&self.app_handle, &label, WebviewUrl::App(url.into()))
-            .title("Wallpaper")
-            .decorations(false)
-            .skip_taskbar(true)
-            .transparent(true)
-            .resizable(false)
-            .visible(false)
-            .position(x as f64, y as f64)
-            .inner_size(width as f64, height as f64)
-            .always_on_bottom(true)
-            .build()
-            .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
+        let window =
+            WebviewWindowBuilder::new(&self.app_handle, &label, WebviewUrl::App(url.into()))
+                .title("Wallpaper")
+                .decorations(false)
+                .skip_taskbar(true)
+                .transparent(true)
+                .resizable(false)
+                .visible(false)
+                .position(x as f64, y as f64)
+                .inner_size(width as f64, height as f64)
+                .always_on_bottom(true)
+                .build()
+                .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
 
         // Windows 平台：嵌入桌面
         #[cfg(target_os = "windows")]
@@ -163,15 +163,14 @@ impl WallpaperWindowManager {
     ///
     /// 泛型约束 `EventPayload`，自动从 Payload 类型推导事件名，
     /// 确保事件仅发送给壁纸窗口，不会波及 main 等其他窗口。
-    pub fn broadcast<P: EventPayload>(
-        &self,
-        payload: &P,
-    ) {
+    pub fn broadcast<P: EventPayload>(&self, payload: &P) {
         for (monitor_id, label) in &self.windows {
             if let Err(e) = self.app_handle.typed_emit_to(label, payload) {
                 log::warn!(
                     "[WallpaperWindowManager] 广播事件 '{}' 到 '{}' 失败: {}",
-                    P::EVENT_NAME, monitor_id, e
+                    P::EVENT_NAME,
+                    monitor_id,
+                    e
                 );
             }
         }
@@ -181,10 +180,7 @@ impl WallpaperWindowManager {
     ///
     /// 统一的窗口查找逻辑：先从 HashMap 获取 label，再从 Tauri 运行时获取窗口实例。
     /// 消除 update_window / notify_fit_mode_changed / notify_display_mode_changed 中的重复代码。
-    fn resolve_window(
-        &self,
-        monitor_id: &str,
-    ) -> Result<(String, tauri::WebviewWindow), String> {
+    fn resolve_window(&self, monitor_id: &str) -> Result<(String, tauri::WebviewWindow), String> {
         let label = self
             .windows
             .get(monitor_id)
@@ -204,11 +200,7 @@ impl WallpaperWindowManager {
     ///
     /// 通过 HashMap 精确获取 monitor_id 对应的窗口 label，
     /// 使用 emit_to 向该窗口单独发送 wallpaper-changed 事件。
-    pub fn update_window(
-        &self,
-        monitor_id: &str,
-        wallpaper_id: i32,
-    ) -> Result<(), String> {
+    pub fn update_window(&self, monitor_id: &str, wallpaper_id: i32) -> Result<(), String> {
         let (label, _window) = self.resolve_window(monitor_id)?;
 
         let payload = WallpaperChangedPayload {
@@ -235,11 +227,7 @@ impl WallpaperWindowManager {
     /// 2. 向主窗口发送 thumbnail-changed 事件
     ///
     /// 避免调用方遗漏其中一个 emit，确保壁纸窗口与主窗口缩略图始终同步。
-    pub fn update_wallpaper(
-        &self,
-        monitor_id: &str,
-        wallpaper_id: i32,
-    ) -> Result<(), String> {
+    pub fn update_wallpaper(&self, monitor_id: &str, wallpaper_id: i32) -> Result<(), String> {
         // 1. 通知壁纸窗口
         self.update_window(monitor_id, wallpaper_id)?;
 
@@ -251,7 +239,8 @@ impl WallpaperWindowManager {
         if let Err(e) = self.app_handle.typed_emit(&thumbnail_payload) {
             log::warn!(
                 "[WallpaperWindowManager] 发送 thumbnail-changed 失败: monitor='{}', err={}",
-                monitor_id, e
+                monitor_id,
+                e
             );
         }
 
@@ -265,18 +254,14 @@ impl WallpaperWindowManager {
     /// - 独立模式（independent）：仅通知指定 monitor 的壁纸窗口 + 主窗口缩略图
     ///
     /// 封装了 display_mode 判断逻辑，command 层无需感知同步策略。
-    pub fn notify_wallpaper_update(
-        &self,
-        monitor_id: &str,
-        wallpaper_id: i32,
-        is_sync_mode: bool,
-    ) {
+    pub fn notify_wallpaper_update(&self, monitor_id: &str, wallpaper_id: i32, is_sync_mode: bool) {
         if is_sync_mode {
             for mid in self.windows.keys() {
                 if let Err(e) = self.update_wallpaper(mid, wallpaper_id) {
                     log::warn!(
                         "[WallpaperWindowManager] 同步模式壁纸更新失败 {}: {}",
-                        mid, e
+                        mid,
+                        e
                     );
                 }
             }
@@ -284,7 +269,8 @@ impl WallpaperWindowManager {
             if let Err(e) = self.update_wallpaper(monitor_id, wallpaper_id) {
                 log::warn!(
                     "[WallpaperWindowManager] 壁纸更新失败 {}: {}",
-                    monitor_id, e
+                    monitor_id,
+                    e
                 );
             }
         }
@@ -297,18 +283,14 @@ impl WallpaperWindowManager {
     /// - 独立模式（independent）：仅通知指定 monitor 的壁纸窗口
     ///
     /// 封装了 display_mode 判断逻辑，command 层无需感知同步策略。
-    pub fn notify_fit_mode_update(
-        &self,
-        monitor_id: &str,
-        fit_mode: &str,
-        is_sync_mode: bool,
-    ) {
+    pub fn notify_fit_mode_update(&self, monitor_id: &str, fit_mode: &str, is_sync_mode: bool) {
         if is_sync_mode {
             for mid in self.windows.keys() {
                 if let Err(e) = self.notify_fit_mode_changed(mid, fit_mode) {
                     log::warn!(
                         "[WallpaperWindowManager] 同步模式 fit-mode 更新失败 {}: {}",
-                        mid, e
+                        mid,
+                        e
                     );
                 }
             }
@@ -316,7 +298,8 @@ impl WallpaperWindowManager {
             if let Err(e) = self.notify_fit_mode_changed(monitor_id, fit_mode) {
                 log::warn!(
                     "[WallpaperWindowManager] fit-mode 更新失败 {}: {}",
-                    monitor_id, e
+                    monitor_id,
+                    e
                 );
             }
         }
@@ -325,11 +308,7 @@ impl WallpaperWindowManager {
     /// 通知指定显示器的壁纸窗口 fitMode 变更
     ///
     /// 壁纸窗口收到后直接更新 objectFit 样式，无需重新加载壁纸数据。
-    pub fn notify_fit_mode_changed(
-        &self,
-        monitor_id: &str,
-        fit_mode: &str,
-    ) -> Result<(), String> {
+    pub fn notify_fit_mode_changed(&self, monitor_id: &str, fit_mode: &str) -> Result<(), String> {
         let (label, _window) = self.resolve_window(monitor_id)?;
 
         let payload = FitModeChangedPayload {
@@ -416,14 +395,16 @@ impl WallpaperWindowManager {
                 if let Err(e) = self.clear_window(mid) {
                     log::warn!(
                         "[WallpaperWindowManager] 同步模式壁纸清空失败 {}: {}",
-                        mid, e
+                        mid,
+                        e
                     );
                 }
             }
         } else if let Err(e) = self.clear_window(monitor_id) {
             log::warn!(
                 "[WallpaperWindowManager] 壁纸清空失败 {}: {}",
-                monitor_id, e
+                monitor_id,
+                e
             );
         }
     }
@@ -440,7 +421,6 @@ impl WallpaperWindowManager {
             );
         }
     }
-
 }
 
 /// 清理 monitor_id 使其适合做 Tauri window label

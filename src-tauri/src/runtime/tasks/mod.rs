@@ -26,7 +26,8 @@ pub mod fullscreen_detector;
 ///         let app = app.clone();
 ///         tokio::spawn(async move {
 ///             let ctx = app.state::<AppContext>();
-///             // 使用 self.monitor_id + ctx.db / ctx.window_manager
+///             let app_ctx: &AppContext = ctx.inner();
+///             // 使用 self.monitor_id + app_ctx.db / app_ctx.window_manager
 ///         })
 ///     }
 /// }

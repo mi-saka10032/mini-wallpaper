@@ -47,7 +47,6 @@ pub const DEFAULT_TRASH_RETENTION_DAYS: i64 = 30;
 /// 允许的 display_mode 枚举值
 const VALID_DISPLAY_MODES: &[&str] = &["independent", "mirror", "extend"];
 
-
 /// 设置键值对请求
 #[derive(Debug, Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
@@ -63,8 +62,8 @@ pub struct SetSettingRequest {
 // ==================== 自定义校验函数 ====================
 
 /// 校验 key 是否在白名单内
-fn validate_setting_key(value: &String, _ctx: &()) -> garde::Result {
-    if !VALID_KEYS.contains(&value.as_str()) {
+fn validate_setting_key(value: &str, _ctx: &()) -> garde::Result {
+    if !VALID_KEYS.contains(&value) {
         return Err(garde::Error::new(format!(
             "不支持的设置项 '{}', 仅支持: {}",
             value,
@@ -75,7 +74,7 @@ fn validate_setting_key(value: &String, _ctx: &()) -> garde::Result {
 }
 
 /// 校验 value 格式
-fn validate_setting_value_by_key(value: &String, _ctx: &()) -> garde::Result {
+fn validate_setting_value_by_key(value: &str, _ctx: &()) -> garde::Result {
     if value.is_empty() {
         return Err(garde::Error::new("value 不能为空"));
     }

@@ -39,7 +39,9 @@ pub(super) fn register_subclass(hwnd: HWND, original_proc: isize) {
             map.insert(hwnd_val, original_proc);
             debug!(
                 "子类化已注册: hwnd=0x{:X}, orig_proc=0x{:X}, 当前数量={}",
-                hwnd_val, original_proc, map.len()
+                hwnd_val,
+                original_proc,
+                map.len()
             );
         }
         Err(e) => {

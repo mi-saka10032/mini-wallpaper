@@ -26,8 +26,7 @@ impl EmbedStrategy for LegacyStrategy {
 
     fn embed(&self, hwnd: HWND, workerw: HWND, rect: MonitorRect) -> Result<()> {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, MoveWindow, SetWindowLongPtrW,
-            GWL_EXSTYLE, WS_EX_TRANSPARENT,
+            GetWindowLongPtrW, MoveWindow, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
         };
 
         unsafe {

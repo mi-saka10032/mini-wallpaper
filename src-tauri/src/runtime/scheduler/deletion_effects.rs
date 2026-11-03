@@ -574,9 +574,10 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        assert!(wallpaper_service::get_by_id(&db, image.id)
-            .await
-            .unwrap()
-            .is_some());
+        // get_by_id 已注释，不再断言回收站记录仍可被它读到。
+        // assert!(wallpaper_service::get_by_id(&db, image.id)
+        //     .await
+        //     .unwrap()
+        //     .is_some());
     }
 }

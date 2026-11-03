@@ -217,8 +217,10 @@ pub async fn set_wallpaper_tags(
     wallpaper_id: i32,
     tag_names: Vec<String>,
 ) -> Result<Vec<tag::Model>> {
-    let target_ids: HashSet<i32> =
-        resolve_or_create_many(db, tag_names).await?.into_iter().collect();
+    let target_ids: HashSet<i32> = resolve_or_create_many(db, tag_names)
+        .await?
+        .into_iter()
+        .collect();
 
     let current_ids: HashSet<i32> = wallpaper_tag::Entity::find()
         .filter(wallpaper_tag::Column::WallpaperId.eq(wallpaper_id))
@@ -272,7 +274,11 @@ pub async fn delete_tag(db: &DatabaseConnection, tag_id: i32) -> Result<()> {
 }
 
 /// 重命名标签（name 唯一约束下，撞名返回错误）
-pub async fn rename_tag(db: &DatabaseConnection, tag_id: i32, new_name: String) -> Result<tag::Model> {
+pub async fn rename_tag(
+    db: &DatabaseConnection,
+    tag_id: i32,
+    new_name: String,
+) -> Result<tag::Model> {
     let new_name = new_name.trim().to_string();
     if new_name.is_empty() {
         anyhow::bail!("标签名不能为空");

@@ -42,15 +42,15 @@ const ID_QUIT: &str = "tray_quit";
 
 // ==================== 公共入口 ====================
 
-/// 初始化系统托盘图标、菜单及交互事件
-///
+/// 注册系统托盘图标、菜单及交互事件
 /// 在 `lib.rs` 的 `setup` 阶段调用。
-pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+pub fn register_tray(app: &tauri::App) -> tauri::Result<()> {
     // ===== 构建菜单项 =====
     let next_i = MenuItem::with_id(app, ID_NEXT, "下一张壁纸", true, None::<&str>)?;
     let prev_i = MenuItem::with_id(app, ID_PREV, "上一张壁纸", true, None::<&str>)?;
     let pause_i = MenuItem::with_id(app, ID_TOGGLE_PAUSE, "暂停轮播", true, None::<&str>)?;
-    let favorite_i = MenuItem::with_id(app, ID_TOGGLE_FAVORITE, "收藏当前壁纸", true, None::<&str>)?;
+    let favorite_i =
+        MenuItem::with_id(app, ID_TOGGLE_FAVORITE, "收藏当前壁纸", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let open_main_i = MenuItem::with_id(app, ID_OPEN_MAIN, "显示主窗口", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -58,7 +58,16 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let tray_menu = Menu::with_items(
         app,
-        &[&next_i, &prev_i, &pause_i, &favorite_i, &sep1, &open_main_i, &sep2, &quit_i],
+        &[
+            &next_i,
+            &prev_i,
+            &pause_i,
+            &favorite_i,
+            &sep1,
+            &open_main_i,
+            &sep2,
+            &quit_i,
+        ],
     )?;
 
     // ===== 构建托盘 =====

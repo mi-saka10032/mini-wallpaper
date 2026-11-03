@@ -85,11 +85,7 @@ impl MigrationTrait for Migration {
                             .integer()
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(WallpaperTags::TagId)
-                            .integer()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(WallpaperTags::TagId).integer().not_null())
                     .col(
                         ColumnDef::new(WallpaperTags::CreatedAt)
                             .string()

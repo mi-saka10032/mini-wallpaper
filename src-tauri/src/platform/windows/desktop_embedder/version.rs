@@ -46,7 +46,11 @@ pub(super) fn is_win11_24h2_or_later() -> bool {
                 osvi.dwMajorVersion,
                 osvi.dwMinorVersion,
                 build,
-                if is_24h2 { "24H2+ (Modern)" } else { "Legacy (Classic)" }
+                if is_24h2 {
+                    "24H2+ (Modern)"
+                } else {
+                    "Legacy (Classic)"
+                }
             );
             is_24h2
         } else {

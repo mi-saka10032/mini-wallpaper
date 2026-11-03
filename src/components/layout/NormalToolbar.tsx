@@ -105,7 +105,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
         {/* ===== 槽位一：左操作区（视图级动作，统一为定宽图标按钮） ===== */}
         <div className="flex shrink-0 items-center gap-1">
           {isCollectionView ? (
-            collectionId !== null ? (
+            collectionId !== null && !isSmartCollection ? (
               <Dialog open={pickerOpen} onOpenChange={handlePickerOpenChange}>
                 <DialogTrigger asChild>
                   <Button

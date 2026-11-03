@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import { useWallpaperCardContextMenu } from "@/components/wallpaper/WallpaperCardContextMenu";
 import { useFavoritesStore } from "@/stores/favoritesStore";
-import { useMonitorsUsingWallpaper } from "@/stores/monitorConfigStore";
+import { useMonitorsUsingWallpaper } from "@/hooks/useMonitorsUsingWallpaper";
 import type { Wallpaper } from "@/api/config";
 
 // ============ 类型定义 ============

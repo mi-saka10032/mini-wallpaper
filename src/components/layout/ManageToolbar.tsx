@@ -65,7 +65,7 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
 
     return (
       <>
-        <span className="text-sm text-foreground/60">
+        <span className="text-sm text-muted-foreground">
           {t("main.selected", { count: selectedCount })}
         </span>
         <button
@@ -107,7 +107,7 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
         <Select value={sortField} onValueChange={(v) => onSortFieldChange(v as SortField)}>
           <SelectTrigger
             size="sm"
-            className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs text-foreground/60 shadow-none hover:bg-primary-hover hover:text-foreground"
+            className="h-7 w-auto gap-1 border-none bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-primary-hover hover:text-foreground"
           >
             <SortAsc className="size-3" />
             <SelectValue />
@@ -123,7 +123,7 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
           type="button"
           onClick={onSortOrderToggle}
           className={cn(
-            "flex size-7 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-primary-hover hover:text-foreground",
+            "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-primary-hover hover:text-foreground",
             sortOrder === "desc" && "rotate-180",
           )}
           title={sortOrder === "asc" ? t("grid.ascending") : t("grid.descending")}
@@ -136,7 +136,7 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
           <button
             type="button"
             onClick={onManageTags}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-foreground/60 transition-colors hover:bg-primary-hover"
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-primary-hover"
           >
             <TagIcon className="size-3.5" />
             {t("tags.manageTags")}
@@ -149,7 +149,7 @@ const ManageToolbar: FC<ManageToolbarProps> = memo(
             className={cn(
               "flex items-center gap-1 rounded-md px-2 py-1 text-sm transition-colors",
               isCollectionView
-                ? "text-foreground/60 hover:bg-primary-hover"
+                ? "text-muted-foreground hover:bg-primary-hover"
                 : "text-destructive/80 hover:bg-destructive/8 hover:text-destructive",
             )}
           >

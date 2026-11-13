@@ -78,7 +78,6 @@ function VirtualCombobox({
   // 是否启用虚拟滚动
   const enableVirtual = filteredOptions.length > virtualThreshold;
 
-  // 虚拟化
   const virtualizer = useVirtualizer({
     count: filteredOptions.length,
     getScrollElement: () => scrollRef.current,
@@ -86,6 +85,21 @@ function VirtualCombobox({
     overscan: 8,
     enabled: enableVirtual,
   });
+
+  // Popover 条件挂载：打开那一帧 React 先 render（此时 ref 还是 null，virtualizer
+  // 读不到容器，getVirtualItems() 返回空）再挂载 DOM。容器就位后 layout effect 里
+  // 的通知混在 Radix Presence / Popper 的同批更新中会被吞掉，React 不再重渲染，
+  // 于是一直停留在那帧空列表上——直到关闭时 setOpen 触发重渲染才闪出内容。
+  // 所以在 ref 被赋值的时点（独立于上述批次）显式通知一次，补上这次重渲染。
+  const setScrollRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      scrollRef.current = node;
+      if (node && enableVirtual) {
+        virtualizer.measure();
+      }
+    },
+    [enableVirtual, virtualizer],
+  );
 
   // 选中项的 render（用于 trigger 显示）
   const selectedRender = useMemo(() => {
@@ -145,7 +159,7 @@ function VirtualCombobox({
       >
         {/* 搜索框 */}
         {showSearch && (
-          <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+          <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
             <Search className="size-4 shrink-0 text-muted-foreground" />
             <input
               ref={inputRef}
@@ -160,7 +174,7 @@ function VirtualCombobox({
 
         {/* 列表区域 */}
         <div
-          ref={scrollRef}
+          ref={setScrollRef}
           className="overflow-y-auto overflow-x-hidden"
           style={{ maxHeight: `${listMaxHeight}px` }}
         >

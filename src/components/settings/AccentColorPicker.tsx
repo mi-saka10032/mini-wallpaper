@@ -80,7 +80,7 @@ const AccentColorPicker: React.FC = () => {
               type="button"
               onClick={() => handlePresetClick(preset.id)}
               className={cn(
-                "group relative flex size-7 items-center justify-center rounded-full transition-all duration-200",
+                "group relative flex size-7 items-center justify-center rounded-full transition-[transform,box-shadow] duration-200",
                 "ring-offset-background hover:scale-110",
                 isActive && "ring-2 ring-ring ring-offset-2",
               )}
@@ -106,7 +106,7 @@ const AccentColorPicker: React.FC = () => {
             <button
               type="button"
               className={cn(
-                "relative flex size-7 items-center justify-center rounded-full transition-all duration-200",
+                "relative flex size-7 items-center justify-center rounded-full transition-[transform,box-shadow] duration-200",
                 "border-2 border-dashed border-foreground/25 hover:border-foreground/50 hover:scale-110",
                 "ring-offset-background",
                 isCustomActive && "ring-2 ring-ring ring-offset-2 border-solid",
@@ -127,7 +127,7 @@ const AccentColorPicker: React.FC = () => {
                   style={{ color: "white", filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.3))" }}
                 />
               ) : (
-                <Plus className="size-3.5 text-foreground/50" />
+                <Plus className="size-3.5 text-muted-foreground" />
               )}
             </button>
           </PopoverTrigger>
@@ -140,7 +140,7 @@ const AccentColorPicker: React.FC = () => {
                   variant="ghost"
                   size="sm"
                   onClick={handleReset}
-                  className="h-7 gap-1 px-2 text-xs text-foreground/50"
+                  className="h-7 gap-1 px-2 text-xs text-muted-foreground"
                 >
                   <RotateCcw className="size-3" />
                   {t("accentColor.reset")}
@@ -154,10 +154,10 @@ const AccentColorPicker: React.FC = () => {
                   style={{ backgroundColor: customPreviewColor }}
                 />
                 <div className="flex-1 space-y-0.5">
-                  <p className="text-xs text-foreground/50">
+                  <p className="text-xs text-muted-foreground">
                     {t("accentColor.hue")}: {Math.round(customHue)}°
                   </p>
-                  <p className="text-xs text-foreground/50">
+                  <p className="text-xs text-muted-foreground">
                     {t("accentColor.saturation")}: {Math.round(customChroma * 100)}%
                   </p>
                 </div>
@@ -165,7 +165,7 @@ const AccentColorPicker: React.FC = () => {
 
               {/* 色相滑块 */}
               <div className="space-y-2">
-                <label className="text-xs text-foreground/50">{t("accentColor.hue")}</label>
+                <label className="text-xs text-muted-foreground">{t("accentColor.hue")}</label>
                 <div className="relative">
                   <div
                     className="absolute inset-0 rounded-full"
@@ -190,7 +190,9 @@ const AccentColorPicker: React.FC = () => {
 
               {/* 饱和度滑块 */}
               <div className="space-y-2">
-                <label className="text-xs text-foreground/50">{t("accentColor.saturation")}</label>
+                <label className="text-xs text-muted-foreground">
+                  {t("accentColor.saturation")}
+                </label>
                 <div className="relative">
                   <div
                     className="absolute inset-0 rounded-full"
@@ -222,7 +224,7 @@ const AccentColorPicker: React.FC = () => {
       </div>
 
       {/* 当前选中提示 */}
-      <p className="text-xs text-foreground/50">
+      <p className="text-xs text-muted-foreground">
         {isCustomActive
           ? t("accentColor.customActive")
           : t(

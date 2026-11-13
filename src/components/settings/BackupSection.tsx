@@ -21,8 +21,8 @@ const BackupSection: FC<BackupSectionProps> = memo(
     return (
       <section className="space-y-5">
         <div>
-          <h3 className="text-[15px] font-semibold text-foreground">{t("settings.navBackup")}</h3>
-          <p className="mt-1 text-[11px] leading-relaxed text-foreground/45">
+          <h3 className="text-base font-semibold text-foreground">{t("settings.navBackup")}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-foreground/40">
             {t("settings.backupDesc")}
           </p>
         </div>
@@ -31,8 +31,8 @@ const BackupSection: FC<BackupSectionProps> = memo(
         {dataSize !== null && (
           <div className="rounded-lg border border-border/50 bg-card">
             <div className="flex items-center justify-between px-4 py-3">
-              <span className="text-[13px] text-foreground/60">{t("settings.dataSize")}</span>
-              <span className="text-[13px] font-medium tabular-nums">{formatSize(dataSize)}</span>
+              <span className="text-sm text-muted-foreground">{t("settings.dataSize")}</span>
+              <span className="text-sm font-medium tabular-nums">{formatSize(dataSize)}</span>
             </div>
           </div>
         )}
@@ -45,7 +45,7 @@ const BackupSection: FC<BackupSectionProps> = memo(
               size="sm"
               disabled={backupBusy}
               onClick={onExport}
-              className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-primary-hover"
+              className="h-8 gap-1.5 rounded-md border-border/50 text-xs hover:bg-primary-hover"
             >
               <Upload className="size-3.5" />
               {t("settings.export")}
@@ -56,7 +56,7 @@ const BackupSection: FC<BackupSectionProps> = memo(
               size="sm"
               disabled={backupBusy}
               onClick={onImport}
-              className="h-8 gap-1.5 rounded-md border-border/60 text-[12px] hover:bg-primary-hover"
+              className="h-8 gap-1.5 rounded-md border-border/50 text-xs hover:bg-primary-hover"
             >
               <Download className="size-3.5" />
               {t("settings.import")}
@@ -68,7 +68,7 @@ const BackupSection: FC<BackupSectionProps> = memo(
             <>
               <div className="mx-4 h-px bg-border/30" />
               <div className="px-4 py-3 space-y-2">
-                <div className="flex items-center justify-between text-[11px] text-foreground/45">
+                <div className="flex items-center justify-between text-xs text-foreground/40">
                   <span>
                     {progress.current} / {progress.total}
                   </span>
@@ -78,7 +78,7 @@ const BackupSection: FC<BackupSectionProps> = memo(
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/5">
                   <div
-                    className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
+                    className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
                     style={{ width: `${(progress.current / progress.total) * 100}%` }}
                   />
                 </div>
@@ -88,7 +88,7 @@ const BackupSection: FC<BackupSectionProps> = memo(
         </div>
 
         {/* 状态消息 */}
-        {backupMsg && <p className="text-[11px] text-foreground/50 px-1">{backupMsg}</p>}
+        {backupMsg && <p className="text-xs text-muted-foreground px-1">{backupMsg}</p>}
       </section>
     );
   },

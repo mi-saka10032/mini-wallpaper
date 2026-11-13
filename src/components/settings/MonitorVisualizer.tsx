@@ -45,7 +45,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
 
     if (loading && activeConfigs.length === 0) {
       return (
-        <div className="flex items-center justify-center py-12 text-foreground/50">
+        <div className="flex items-center justify-center py-12 text-muted-foreground">
           <MonitorSmartphone className="mr-2 size-5" />
           {t("monitor.detecting")}
         </div>
@@ -54,7 +54,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
 
     if (activeConfigs.length === 0) {
       return (
-        <div className="flex items-center justify-center py-12 text-foreground/50">
+        <div className="flex items-center justify-center py-12 text-muted-foreground">
           <MonitorSmartphone className="mr-2 size-5" />
           {t("monitor.noMonitor")}
         </div>
@@ -86,7 +86,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
                 disabled={isDisabled}
                 onClick={() => !isDisabled && onSelectMonitor(item.index)}
                 className={cn(
-                  "absolute flex flex-col items-center transition-all duration-200",
+                  "absolute flex flex-col items-center transition-opacity duration-200",
                   isDisabled && "cursor-not-allowed opacity-50",
                 )}
                 style={{
@@ -103,7 +103,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
                       ? "border-primary shadow-lg shadow-primary/20"
                       : isDisabled
                         ? "border-border/50"
-                        : "border-border hover:border-foreground/40",
+                        : "border-border hover:border-foreground/50",
                   )}
                   style={{
                     width: item.width,
@@ -124,7 +124,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
                     />
                   ) : (
                     <div className="flex size-full items-center justify-center">
-                      <MonitorIcon className="size-8 text-foreground/50/30" />
+                      <MonitorIcon className="size-8 text-muted-foreground/30" />
                     </div>
                   )}
 
@@ -134,7 +134,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
                       "absolute left-1.5 top-1.5 flex size-5 items-center justify-center rounded-full text-[10px] font-bold",
                       isSelected
                         ? "bg-primary text-primary-foreground"
-                        : "bg-background/80 text-foreground/50",
+                        : "bg-background/80 text-muted-foreground",
                     )}
                   >
                     {item.index + 1}
@@ -158,7 +158,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
                   style={{ width: Math.max(item.width * 0.3, 20) }}
                 />
                 <div
-                  className={cn("h-1 rounded-b-sm", isSelected ? "bg-primary/40" : "bg-border/60")}
+                  className={cn("h-1 rounded-b-sm", isSelected ? "bg-primary/40" : "bg-border/30")}
                   style={{ width: Math.max(item.width * 0.15, 12) }}
                 />
 
@@ -166,7 +166,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
                 <span
                   className={cn(
                     "mt-1 max-w-full truncate text-[10px]",
-                    isSelected ? "font-medium text-foreground" : "text-foreground/50",
+                    isSelected ? "font-medium text-foreground" : "text-muted-foreground",
                   )}
                 >
                   {item.monitorId}
@@ -178,7 +178,7 @@ const MonitorVisualizer: FC<MonitorVisualizerProps> = memo(
 
         {/* 选中显示器信息 */}
         {selectedConfig && (
-          <div className="text-center text-xs text-foreground/50">
+          <div className="text-center text-xs text-muted-foreground">
             {selectedConfig.monitor_id}
             {selectedConfig.is_enabled && selectedConfig.collection_id
               ? ` · ${t("monitor.rotating")}`

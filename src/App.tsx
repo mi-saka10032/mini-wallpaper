@@ -50,9 +50,7 @@ export const AppShell: React.FC = () => {
           fetchWallpapers(),
           initMonitors(),
           initFavorites(),
-          invoke(COMMANDS.INIT_FULLSCREEN_DETECTION).catch((e) =>
-            console.error("[initFullscreenDetection]", e),
-          ),
+          invoke(COMMANDS.INIT_FULLSCREEN_DETECTION),
         ]);
         // 初始化完成后立即同步语言，避免 App 挂载时出现语言闪烁
         const lang = useSettingStore.getState().settings[SETTING_KEYS.LANGUAGE];

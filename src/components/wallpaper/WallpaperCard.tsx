@@ -95,7 +95,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
         onClick={handleToggleFavorite}
         title={isFavorite ? t("main.unfavorite") : t("main.favorite")}
         className={cn(
-          "absolute left-1.5 top-1.5 z-20 flex size-6 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm transition-all hover:bg-black/60 hover:scale-110 active:scale-95",
+          "absolute left-1.5 top-1.5 z-20 flex size-6 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm transition-[background-color,transform] hover:bg-black/60 hover:scale-110 active:scale-95",
           isFavorite
             ? "opacity-100 text-red-500"
             : "text-white/90 opacity-0 group-hover:opacity-100",

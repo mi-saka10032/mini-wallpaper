@@ -32,19 +32,19 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
           variant="ghost"
           size="sm"
           onClick={importWallpapers}
-          className="gap-1.5 text-foreground/70 hover:text-foreground hover:bg-primary-hover"
+          className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
         >
           <Plus className="size-4" />
-          <span className="text-[13px]">{t("toolbar.import")}</span>
+          <span className="text-sm">{t("toolbar.import")}</span>
         </Button>
         <Button
           variant="ghost"
           size="sm"
           onClick={() => onActiveIdChange(-1)}
-          className="gap-1.5 text-foreground/70 hover:text-foreground hover:bg-primary-hover"
+          className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
         >
           <Monitor className="size-4" />
-          <span className="text-[13px]">{t("toolbar.monitor")}</span>
+          <span className="text-sm">{t("toolbar.monitor")}</span>
         </Button>
       </div>
 
@@ -65,7 +65,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8 text-foreground/70 hover:text-foreground hover:bg-primary-hover"
+                  className="size-8 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
                 >
                   <Settings className="size-4" />
                 </Button>

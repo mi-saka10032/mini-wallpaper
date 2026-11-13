@@ -246,7 +246,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
 
         {/* 名称 */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-foreground/70">{t("smart.nameLabel")}</label>
+          <label className="text-xs font-medium text-foreground">{t("smart.nameLabel")}</label>
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -267,7 +267,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
                 "flex-1 rounded px-3 py-1 transition-colors",
                 tab === tb
                   ? "bg-background font-medium text-foreground shadow-sm"
-                  : "text-foreground/55 hover:text-foreground",
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               {tb === "simple" ? t("smart.tabSimple") : t("smart.tabAdvanced")}
@@ -281,9 +281,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
             <div className="flex flex-col gap-4">
               {/* 标签 */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">
-                  {t("smart.tagLabel")}
-                </label>
+                <label className="text-xs font-medium text-foreground">{t("smart.tagLabel")}</label>
                 <TagInput
                   value={simpleTagNames}
                   onChange={setSimpleTags}
@@ -295,7 +293,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
 
               {/* 类型 */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">
+                <label className="text-xs font-medium text-foreground">
                   {t("smart.typeLabel")}
                 </label>
                 <div className="flex gap-1.5">
@@ -306,7 +304,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
                       "rounded-md border px-3 py-1 text-sm transition-colors",
                       !simpleType
                         ? "border-primary bg-primary/10 text-primary"
-                        : "border-border/60 text-foreground/60 hover:bg-primary-hover",
+                        : "border-border/50 text-muted-foreground hover:bg-primary-hover",
                     )}
                   >
                     {t("smart.typeAny")}
@@ -320,7 +318,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
                         "rounded-md border px-3 py-1 text-sm transition-colors",
                         simpleType === tp
                           ? "border-primary bg-primary/10 text-primary"
-                          : "border-border/60 text-foreground/60 hover:bg-primary-hover",
+                          : "border-border/50 text-muted-foreground hover:bg-primary-hover",
                       )}
                     >
                       {t(`smart.type_${tp}`)}
@@ -331,7 +329,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
 
               {/* 预设开关 */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">
+                <label className="text-xs font-medium text-foreground">
                   {t("smart.presetLabel")}
                 </label>
                 <div className="flex flex-wrap gap-1.5">
@@ -346,7 +344,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
                           "rounded-full border px-3 py-1 text-xs transition-colors",
                           active
                             ? "border-primary bg-primary/10 text-primary"
-                            : "border-border/60 text-foreground/60 hover:bg-primary-hover",
+                            : "border-border/50 text-muted-foreground hover:bg-primary-hover",
                         )}
                       >
                         {t(preset.labelKey)}
@@ -360,7 +358,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
             <div className="flex flex-col gap-3">
               {/* 组合子 */}
               <div className="flex items-center gap-2 text-sm">
-                <span className="text-foreground/60">{t("smart.matchLabel")}</span>
+                <span className="text-muted-foreground">{t("smart.matchLabel")}</span>
                 <div className="flex items-center gap-1 rounded-md bg-muted/50 p-0.5">
                   {(["and", "or"] as RuleCombinator[]).map((c) => (
                     <button
@@ -371,7 +369,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
                         "rounded px-2.5 py-0.5 text-xs transition-colors",
                         combinator === c
                           ? "bg-background font-medium text-foreground shadow-sm"
-                          : "text-foreground/55 hover:text-foreground",
+                          : "text-muted-foreground hover:text-foreground",
                       )}
                     >
                       {c === "and" ? t("smart.combAnd") : t("smart.combOr")}
@@ -409,7 +407,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
         {/* 自然语言回显 + 命中数 */}
         <div className="flex flex-col gap-1.5 rounded-md border border-border/50 bg-muted/30 p-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-foreground/60">
+            <span className="text-xs font-medium text-muted-foreground">
               {t("smart.previewLabel")}
             </span>
             <span className="text-xs text-primary">
@@ -422,7 +420,7 @@ export const SmartCollectionDialog: React.FC<SmartCollectionDialogProps> = ({
               )}
             </span>
           </div>
-          <p className="text-xs leading-relaxed text-foreground/70">
+          <p className="text-xs leading-relaxed text-foreground">
             {validationErrKey ? t(validationErrKey) : nlText}
           </p>
         </div>

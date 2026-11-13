@@ -94,7 +94,7 @@ const ActionToast: React.FC = () => {
           flex items-center gap-3 mx-2 my-2 px-4 py-3
           rounded-xl border border-white/10
           bg-[#2d2d2d]/95
-          transition-all duration-300 ease-out
+          transition-[opacity,transform] duration-300 ease-out
           ${visible && !exiting ? "opacity-100 translate-x-0" : "opacity-0 translate-x-8"}
         `}
       >
@@ -105,7 +105,7 @@ const ActionToast: React.FC = () => {
 
         {/* 消息内容 */}
         <div className="flex-1 min-w-0">
-          <p className="text-[12px] font-medium text-white/90 truncate">{message}</p>
+          <p className="text-xs font-medium text-white/90 truncate">{message}</p>
           <p className="text-[10px] text-white/40 mt-0.5">Mini Wallpaper</p>
         </div>
 

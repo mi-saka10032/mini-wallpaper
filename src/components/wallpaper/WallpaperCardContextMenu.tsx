@@ -458,7 +458,7 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
                       {t("main.wallpaperOf", { name: config.monitor_id })}
                     </span>
                     {isCurrent && (
-                      <span className="ml-auto pl-2 text-xs text-foreground/50">
+                      <span className="ml-auto pl-2 text-xs text-muted-foreground">
                         {t("main.currentWallpaper")}
                       </span>
                     )}

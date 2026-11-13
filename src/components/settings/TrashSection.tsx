@@ -69,18 +69,16 @@ const TrashSection: FC = memo(() => {
   return (
     <section className="space-y-5">
       <div>
-        <h3 className="text-[15px] font-semibold text-foreground">{t("trash.settingsTitle")}</h3>
-        <p className="mt-1 text-[11px] leading-relaxed text-foreground/45">
-          {t("trash.settingsDesc")}
-        </p>
+        <h3 className="text-base font-semibold text-foreground">{t("trash.settingsTitle")}</h3>
+        <p className="mt-1 text-xs leading-relaxed text-foreground/40">{t("trash.settingsDesc")}</p>
       </div>
 
       <div className="rounded-lg border border-border/50 bg-card">
         {/* 自动清理开关 */}
         <div className="flex items-center justify-between px-4 py-3.5">
           <div className="flex items-center gap-2.5">
-            <Trash2 className="size-4 text-foreground/50" />
-            <span className="text-[13px] text-foreground/80">{t("trash.autoPurgeLabel")}</span>
+            <Trash2 className="size-4 text-muted-foreground" />
+            <span className="text-sm text-foreground">{t("trash.autoPurgeLabel")}</span>
           </div>
           <Switch checked={autoPurgeEnabled} onCheckedChange={handleToggleAutoPurge} />
         </div>
@@ -90,9 +88,7 @@ const TrashSection: FC = memo(() => {
         {/* 保留天数 */}
         <div className="flex items-center justify-between gap-3 px-4 py-3.5">
           <span
-            className={
-              autoPurgeEnabled ? "text-[13px] text-foreground/80" : "text-[13px] text-foreground/35"
-            }
+            className={autoPurgeEnabled ? "text-sm text-foreground" : "text-sm text-foreground/40"}
           >
             {t("trash.retentionLabel")}
           </span>
@@ -111,13 +107,11 @@ const TrashSection: FC = memo(() => {
               onKeyDown={(e) => {
                 if (e.key === "Enter") commitDays();
               }}
-              className="h-8 w-20 text-right text-[13px] tabular-nums"
+              className="h-8 w-20 text-right text-sm tabular-nums"
             />
             <span
               className={
-                autoPurgeEnabled
-                  ? "text-[12px] text-foreground/60"
-                  : "text-[12px] text-foreground/30"
+                autoPurgeEnabled ? "text-xs text-muted-foreground" : "text-xs text-foreground/40"
               }
             >
               {t("trash.retentionUnit")}
@@ -126,9 +120,9 @@ const TrashSection: FC = memo(() => {
         </div>
       </div>
 
-      {error && <p className="px-1 text-[11px] text-destructive">{error}</p>}
+      {error && <p className="px-1 text-xs text-destructive">{error}</p>}
 
-      <p className="px-1 text-[11px] leading-relaxed text-foreground/45">
+      <p className="px-1 text-xs leading-relaxed text-foreground/40">
         {autoPurgeEnabled
           ? t("trash.retentionHint", { days: storedDays })
           : t("trash.retentionDisabledHint")}

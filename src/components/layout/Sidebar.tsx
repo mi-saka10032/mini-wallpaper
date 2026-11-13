@@ -142,10 +142,10 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
             type="button"
             onClick={() => onActiveIdChange(0)}
             className={cn(
-              "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
+              "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors duration-150",
               activeId === 0
                 ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
-                : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
+                : "text-muted-foreground hover:bg-primary-hover hover:text-foreground",
             )}
           >
             <FolderOpen className="size-4" />
@@ -165,7 +165,7 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-6 text-foreground/50 hover:text-foreground hover:bg-primary-hover"
+                className="size-6 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
               >
                 <Plus className="size-3" />
               </Button>
@@ -200,10 +200,10 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
                     type="button"
                     onClick={() => onActiveIdChange(collection.id)}
                     className={cn(
-                      "fluent-indicator flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
+                      "fluent-indicator flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-md px-3 py-1.5 text-sm transition-colors duration-150",
                       activeId === collection.id
                         ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
-                        : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
+                        : "text-muted-foreground hover:bg-primary-hover hover:text-foreground",
                     )}
                   >
                     <Icon
@@ -259,7 +259,7 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
           })}
 
           {collections.length === 0 && (
-            <p className="px-3 py-2 text-xs text-foreground/35">{t("sidebar.noCollections")}</p>
+            <p className="px-3 py-2 text-xs text-foreground/40">{t("sidebar.noCollections")}</p>
           )}
         </div>
 
@@ -271,10 +271,10 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
             type="button"
             onClick={() => onActiveIdChange(TRASH_VIEW_ID)}
             className={cn(
-              "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-all duration-150",
+              "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors duration-150",
               activeId === TRASH_VIEW_ID
                 ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
-                : "text-foreground/65 hover:bg-primary-hover hover:text-foreground",
+                : "text-muted-foreground hover:bg-primary-hover hover:text-foreground",
             )}
           >
             <Trash2 className="size-4" />
@@ -307,7 +307,7 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
             />
             <div className="mt-1.5 flex items-center justify-between">
               {dialogError ? <p className="text-sm text-destructive">{dialogError}</p> : <span />}
-              <span className="text-xs text-foreground/50">{dialogValue.length}/32</span>
+              <span className="text-xs text-muted-foreground">{dialogValue.length}/32</span>
             </div>
           </div>
           <DialogFooter>

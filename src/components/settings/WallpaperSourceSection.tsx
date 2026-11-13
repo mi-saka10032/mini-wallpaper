@@ -56,7 +56,7 @@ const WallpaperSourceSection: FC<WallpaperSourceSectionProps> = memo(
                 />
               ) : (
                 <div className="flex size-6 items-center justify-center rounded bg-foreground/5">
-                  <Image className="size-3 text-foreground/50" />
+                  <Image className="size-3 text-muted-foreground" />
                 </div>
               )}
               <span className="truncate text-sm">{wp.name}</span>
@@ -117,7 +117,7 @@ const WallpaperSourceSection: FC<WallpaperSourceSectionProps> = memo(
         {sourceType === "collection" && (
           <div className="space-y-2">
             {collections.length === 0 ? (
-              <p className="rounded-md border border-dashed border-border p-3 text-center text-sm text-foreground/50">
+              <p className="rounded-md border border-dashed border-border p-3 text-center text-sm text-muted-foreground">
                 {t("monitor.noCollectionHint")}
               </p>
             ) : (

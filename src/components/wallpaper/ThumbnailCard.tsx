@@ -57,8 +57,8 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-md border border-border/40 bg-card transition-all duration-200",
-        "fluent-shadow-sm hover:fluent-shadow hover:border-border/60 hover:-translate-y-0.5",
+        "group relative overflow-hidden rounded-md border border-border/50 bg-card transition-[box-shadow,border-color,transform] duration-200",
+        "fluent-shadow-sm hover:fluent-shadow hover:border-border/50 hover:-translate-y-0.5",
         disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         className,
       )}
@@ -78,11 +78,11 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
           <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
             alt={wallpaper.name}
-            fallback={<TypeIcon className="size-8 text-foreground/50/40" />}
+            fallback={<TypeIcon className="size-8 text-muted-foreground/40" />}
           />
         ) : (
           <div className="flex size-full items-center justify-center bg-foreground/4">
-            <TypeIcon className="size-8 text-foreground/50/40" />
+            <TypeIcon className="size-8 text-muted-foreground/40" />
           </div>
         )}
 
@@ -93,7 +93,7 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
       {/* 文件信息 */}
       <div className="flex items-center gap-1.5 px-2 py-1.5">
         <TypeIcon className="size-3.5 shrink-0 text-foreground/40" />
-        <span className="truncate text-xs text-foreground/70">{wallpaper.name}</span>
+        <span className="truncate text-xs text-foreground">{wallpaper.name}</span>
       </div>
 
       {/* 类型角标 */}

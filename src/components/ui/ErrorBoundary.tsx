@@ -58,7 +58,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
             </div>
             <p className="text-sm font-medium text-destructive">该模块出现异常</p>
             {this.state.error && (
-              <p className="max-w-xs text-xs text-foreground/50">{this.state.error.message}</p>
+              <p className="max-w-xs text-xs text-muted-foreground">{this.state.error.message}</p>
             )}
           </div>
         </div>

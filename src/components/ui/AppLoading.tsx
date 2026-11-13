@@ -4,29 +4,20 @@ import { cn } from "@/lib/utils";
 
 interface AppLoadingProps {
   /** 是否已完成初始化（true 时触发退出动画） */
-
   finished: boolean;
-
   /** 退出动画结束后的回调 */
-
   onExited?: () => void;
 }
 
 /**
-
  * App 启动 Loading 组件
-
+ *
  * - 窗口完全透明，仅显示 loading 动画元素
-
  * - 蓝色水波纹光圈从圆心向外扩散（类似水滴涟漪）
-
  * - 初始化完成后 fade-out 退出，恢复 body 背景
-
  */
-
 const AppLoading: FC<AppLoadingProps> = ({ finished, onExited }) => {
   const [exiting, setExiting] = useState(false);
-
   const [removed, setRemoved] = useState(false);
 
   useEffect(() => {
@@ -43,9 +34,7 @@ const AppLoading: FC<AppLoadingProps> = ({ finished, onExited }) => {
 
       const timer = setTimeout(() => {
         setRemoved(true);
-
         document.body.classList.remove("loading-transparent");
-
         onExited?.();
       }, 600);
 
@@ -62,15 +51,14 @@ const AppLoading: FC<AppLoadingProps> = ({ finished, onExited }) => {
       }`}
       style={{ background: "transparent" }}
     >
-      {/* 水波纹光圈容器 */}
-
-      <div className="relative w-120 h-120 flex justify-center items-center">
+      {/* 水波纹光圈容器：色板变量定义在 rippleRoot 上，供内部元素继承 */}
+      <div
+        className={cn("relative w-120 h-120 flex justify-center items-center", style.rippleRoot)}
+      >
         {/* 中心蓝色发光点 */}
-
-        <div className={cn(`absolute w-6 h-6 rounded-[50%]`, style.rippleCenter)} />
+        <div className={cn("absolute w-6 h-6 rounded-[50%]", style.rippleCenter)} />
 
         {/* 多层蓝色扩散波纹环 */}
-
         {[0, 1, 2, 3, 4, 5].map((i) => (
           <div key={i} className={style.rippleWave} style={{ animationDelay: `${i * 0.4}s` }} />
         ))}

@@ -29,29 +29,29 @@ const StatusBar: FC<StatusBarProps> = memo(
     const { t } = useTranslation();
 
     return (
-      <div className="flex h-7 shrink-0 items-center border-t border-border/40 px-4">
-        <span className="text-[11px] text-foreground/45">
+      <div className="flex h-7 shrink-0 items-center border-t border-border/50 px-4">
+        <span className="text-xs text-foreground/40">
           {manageMode && selectedCount > 0
             ? t("main.selectedTotal", { selected: selectedCount, total: displayCount })
             : t("main.total", { count: displayCount })}
         </span>
         {manageMode && keyword && displayCount !== totalCount && (
-          <span className="ml-2 text-[11px] text-foreground/45">
+          <span className="ml-2 text-xs text-foreground/40">
             {t("grid.filterResult", { filtered: displayCount, total: totalCount })}
           </span>
         )}
         {!manageMode && !sortMode && normalKeyword && displayCount !== totalCount && (
-          <span className="ml-2 text-[11px] text-foreground/45">
+          <span className="ml-2 text-xs text-foreground/40">
             {t("grid.filterResult", { filtered: displayCount, total: totalCount })}
           </span>
         )}
         {manageMode && pendingRemovalsCount > 0 && (
-          <span className="ml-2 text-[11px] text-orange-500/80">
+          <span className="ml-2 text-xs text-orange-500/80">
             {t("main.pendingRemovals", { count: pendingRemovalsCount })}
           </span>
         )}
         {manageMode && pendingDeletionsCount > 0 && (
-          <span className="ml-2 text-[11px] text-orange-500/80">
+          <span className="ml-2 text-xs text-orange-500/80">
             {t("main.pendingDeletions", { count: pendingDeletionsCount })}
           </span>
         )}

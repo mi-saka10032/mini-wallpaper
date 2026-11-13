@@ -31,3 +31,4 @@ src-tauri/bin
 
 # 构建进程崩溃遗留的 core dump
 core.*
+.workbuddy

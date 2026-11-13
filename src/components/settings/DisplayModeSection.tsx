@@ -24,7 +24,7 @@ const DisplayModeSection: FC<DisplayModeSectionProps> = memo(
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <Layers className="size-4 text-foreground/50" />
+          <Layers className="size-4 text-muted-foreground" />
           <Label className="text-sm font-medium">{t("monitor.displayMode")}</Label>
         </div>
         <Select value={displayMode} onValueChange={onDisplayModeChange}>
@@ -49,7 +49,7 @@ const DisplayModeSection: FC<DisplayModeSectionProps> = memo(
             </SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-foreground/50">
+        <p className="text-xs text-muted-foreground">
           {displayMode === "mirror"
             ? t("monitor.displayMirrorDesc")
             : displayMode === "extend"

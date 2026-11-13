@@ -105,10 +105,8 @@ const ShortcutsSection: FC<ShortcutsSectionProps> = memo(
     return (
       <section className="space-y-5">
         <div>
-          <h3 className="text-[15px] font-semibold text-foreground">
-            {t("settings.navShortcuts")}
-          </h3>
-          <p className="mt-1 text-[11px] leading-relaxed text-foreground/45">
+          <h3 className="text-base font-semibold text-foreground">{t("settings.navShortcuts")}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-foreground/40">
             {t("settings.shortcutsDesc")}
           </p>
         </div>
@@ -119,13 +117,13 @@ const ShortcutsSection: FC<ShortcutsSectionProps> = memo(
             <div key={item.settingKey}>
               {index > 0 && <div className="mx-4 h-px bg-border/30" />}
               <div className="px-4 py-3.5">
-                <Label className="text-[13px] font-medium">{t(item.labelKey)}</Label>
+                <Label className="text-sm font-medium">{t(item.labelKey)}</Label>
                 <div className="mt-2 flex items-center gap-2">
                   {recordingAction === item.settingKey ? (
                     <div className="flex flex-col gap-1 flex-1 max-w-[200px]">
                       <div
                         ref={recorderRef}
-                        className={`flex h-8 items-center rounded-md border px-3 text-[13px] outline-none ${
+                        className={`flex h-8 items-center rounded-md border px-3 text-sm outline-none ${
                           conflictKey
                             ? "border-destructive/60 bg-destructive/5 text-destructive"
                             : "border-primary/60 bg-primary/5 text-primary animate-pulse"
@@ -140,7 +138,7 @@ const ShortcutsSection: FC<ShortcutsSectionProps> = memo(
                           : t("settings.shortcutRecording")}
                       </div>
                       {conflictKey && (
-                        <div className="flex items-center gap-1 text-[11px] text-destructive/80">
+                        <div className="flex items-center gap-1 text-xs text-destructive/80">
                           <AlertCircle className="size-3" />
                           <span>
                             {t("settings.shortcutConflict", {
@@ -157,7 +155,7 @@ const ShortcutsSection: FC<ShortcutsSectionProps> = memo(
                     <button
                       type="button"
                       onClick={() => handleStartRecording(item.settingKey)}
-                      className="flex h-8 flex-1 items-center rounded-md border border-border/60 bg-background px-3 text-[13px] transition-colors hover:border-foreground/30 max-w-[200px]"
+                      className="flex h-8 flex-1 items-center rounded-md border border-border/50 bg-background px-3 text-sm transition-colors hover:border-foreground/50 max-w-[200px]"
                     >
                       {formatShortcut(item.currentValue)}
                     </button>
@@ -166,7 +164,7 @@ const ShortcutsSection: FC<ShortcutsSectionProps> = memo(
                     variant="ghost"
                     size="sm"
                     onClick={() => resetShortcut(item.settingKey, item.defaultValue)}
-                    className="h-8 text-[11px] text-foreground/45 hover:text-foreground/70"
+                    className="h-8 text-xs text-foreground/40 hover:text-foreground"
                   >
                     {t("settings.shortcutReset")}
                   </Button>

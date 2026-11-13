@@ -146,13 +146,13 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center py-8 text-foreground/50">
+          <div className="flex items-center justify-center py-8 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" />
           </div>
         ) : isBatch ? (
           <div className="flex flex-col gap-4 py-1">
             <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-foreground/70">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                 <Plus className="size-3.5 text-primary" />
                 {t("tags.addLabel")}
               </label>
@@ -165,7 +165,7 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-foreground/70">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                 <Minus className="size-3.5 text-destructive" />
                 {t("tags.removeLabel")}
               </label>

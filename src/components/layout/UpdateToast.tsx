@@ -77,10 +77,10 @@ const UpdateToast: FC = memo(() => {
       <div className="flex items-start gap-2.5">
         <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-foreground">
+          <p className="text-sm font-medium text-foreground">
             {t("update.toastTitle", { version: update.version })}
           </p>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-foreground/50">
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             {isBusy ? t("update.downloadingHint") : t("update.toastDesc")}
           </p>
         </div>
@@ -98,7 +98,7 @@ const UpdateToast: FC = memo(() => {
         type="button"
         onClick={handleDownload}
         disabled={isBusy}
-        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <ArrowDownToLine className="size-3.5" />
         {isBusy ? t("update.downloading") : t("update.downloadNow")}

@@ -99,7 +99,7 @@ const AccentColorToggle: React.FC = () => {
               variant="ghost"
               size="sm"
               onClick={handleReset}
-              className="h-6 gap-1 px-1.5 text-xs text-foreground/50 hover:text-foreground"
+              className="h-6 gap-1 px-1.5 text-xs text-muted-foreground hover:text-foreground"
             >
               <RotateCcw className="size-3" />
               {t("accentColor.reset")}
@@ -122,7 +122,7 @@ const AccentColorToggle: React.FC = () => {
                   type="button"
                   onClick={() => handlePresetClick(preset.id)}
                   className={cn(
-                    "group relative flex size-7 items-center justify-center rounded-full transition-all duration-200",
+                    "group relative flex size-7 items-center justify-center rounded-full transition-[transform,box-shadow] duration-200",
                     "ring-offset-background hover:scale-110",
                     isActive && "ring-2 ring-ring ring-offset-2",
                   )}
@@ -147,7 +147,7 @@ const AccentColorToggle: React.FC = () => {
               type="button"
               onClick={() => setCustomMode(!customMode)}
               className={cn(
-                "relative flex size-7 items-center justify-center rounded-full transition-all duration-200",
+                "relative flex size-7 items-center justify-center rounded-full transition-[transform,box-shadow] duration-200",
                 "border-2 border-dashed border-foreground/25 hover:border-foreground/50 hover:scale-110",
                 "ring-offset-background",
                 isCustomActive && "ring-2 ring-ring ring-offset-2 border-solid",
@@ -168,7 +168,7 @@ const AccentColorToggle: React.FC = () => {
                   style={{ color: "white", filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.3))" }}
                 />
               ) : (
-                <Plus className="size-3.5 text-foreground/50" />
+                <Plus className="size-3.5 text-muted-foreground" />
               )}
             </button>
           </div>
@@ -195,10 +195,10 @@ const AccentColorToggle: React.FC = () => {
                   style={{ backgroundColor: customPreviewColor }}
                 />
                 <div className="flex-1 space-y-0.5">
-                  <p className="text-xs text-foreground/50">
+                  <p className="text-xs text-muted-foreground">
                     {t("accentColor.hue")}: {Math.round(hsbColor.h)}°
                   </p>
-                  <p className="text-xs text-foreground/50">
+                  <p className="text-xs text-muted-foreground">
                     {t("accentColor.saturation")}: {Math.round(hsbColor.s * 100)}%
                   </p>
                 </div>
@@ -212,7 +212,7 @@ const AccentColorToggle: React.FC = () => {
           )}
 
           {/* 当前选中提示 */}
-          <p className="text-xs text-foreground/45">
+          <p className="text-xs text-foreground/40">
             {isCustomActive
               ? t("accentColor.customActive")
               : t(

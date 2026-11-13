@@ -59,16 +59,16 @@ const MonitorSettingsPanel: React.FC = () => {
   return (
     <div className="flex h-full flex-col">
       {/* 标题栏 */}
-      <div className="flex items-center justify-between border-b border-border/40 px-6 py-1">
+      <div className="flex items-center justify-between border-b border-border/50 px-6 py-1">
         <div className="flex items-center gap-2">
-          <MonitorIcon className="size-5 text-foreground/50" />
+          <MonitorIcon className="size-5 text-muted-foreground" />
           <h2 className="text-base font-semibold">{t("monitor.title")}</h2>
         </div>
         <Button
           variant="ghost"
           size="sm"
           onClick={handleRefresh}
-          className="text-foreground/60 hover:text-foreground hover:bg-primary-hover"
+          className="text-muted-foreground hover:text-foreground hover:bg-primary-hover"
         >
           <RefreshCw className="mr-1.5 size-3.5" />
           {t("monitor.refresh")}

@@ -31,7 +31,7 @@ const DropOverlay: React.FC<{ visible: boolean }> = ({ visible }) => {
         </div>
         <div className="text-center">
           <p className="text-sm font-medium text-primary">{t("main.releaseToImport")}</p>
-          <p className="mt-0.5 text-xs text-foreground/55">{t("main.supportedFormats")}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t("main.supportedFormats")}</p>
         </div>
       </div>
     </div>

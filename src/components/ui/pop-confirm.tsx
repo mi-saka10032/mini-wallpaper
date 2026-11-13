@@ -108,7 +108,7 @@ const PopConfirm: FC<PopConfirmProps> = ({
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium leading-snug text-foreground">{title}</p>
             {description && (
-              <p className="mt-1 text-xs leading-relaxed text-foreground/60">{description}</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
             )}
           </div>
         </div>

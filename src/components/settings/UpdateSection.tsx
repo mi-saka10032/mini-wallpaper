@@ -69,20 +69,18 @@ const UpdateSection: FC = memo(() => {
   return (
     <section className="space-y-5">
       <div>
-        <h3 className="text-[15px] font-semibold text-foreground">{t("update.navUpdate")}</h3>
-        <p className="mt-1 text-[11px] leading-relaxed text-foreground/45">
-          {t("update.sectionDesc")}
-        </p>
+        <h3 className="text-base font-semibold text-foreground">{t("update.navUpdate")}</h3>
+        <p className="mt-1 text-xs leading-relaxed text-foreground/40">{t("update.sectionDesc")}</p>
       </div>
 
       {/* 版本信息 + 检查入口 */}
       <div className="rounded-lg border border-border/50 bg-card">
         <div className="flex items-center justify-between gap-3 px-4 py-3.5">
           <div className="min-w-0 space-y-0.5">
-            <span className="text-[13px] font-medium text-foreground">
+            <span className="text-sm font-medium text-foreground">
               {t("update.currentVersion")}
             </span>
-            <p className="text-[11px] text-foreground/45 tabular-nums">
+            <p className="text-xs text-foreground/40 tabular-nums">
               {currentVersion ? `v${currentVersion}` : t("update.versionUnknown")}
             </p>
           </div>
@@ -90,7 +88,7 @@ const UpdateSection: FC = memo(() => {
             type="button"
             onClick={handleCheck}
             disabled={isChecking || isBusy}
-            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-primary-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-55"
+            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-primary-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-55"
           >
             {isChecking ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -107,7 +105,7 @@ const UpdateSection: FC = memo(() => {
             <div className="mx-4 h-px bg-border/30" />
             <div className="flex items-center gap-2 px-4 py-3">
               <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
-              <span className="text-[12px] text-foreground/70">{t("update.isLatest")}</span>
+              <span className="text-xs text-foreground">{t("update.isLatest")}</span>
             </div>
           </>
         )}
@@ -120,11 +118,11 @@ const UpdateSection: FC = memo(() => {
               <div className="flex items-start gap-2">
                 <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-medium text-foreground">
+                  <p className="text-sm font-medium text-foreground">
                     {t("update.foundNew", { version: update.version })}
                   </p>
                   {update.date && (
-                    <p className="mt-0.5 text-[11px] text-foreground/45">
+                    <p className="mt-0.5 text-xs text-foreground/40">
                       {t("update.publishedAt", { date: update.date })}
                     </p>
                   )}
@@ -134,7 +132,7 @@ const UpdateSection: FC = memo(() => {
               {/* 更新说明：内容可能较长，限高滚动，避免撑破面板 */}
               {update.notes && (
                 <div className="max-h-28 overflow-y-auto rounded-md bg-surface/70 px-3 py-2">
-                  <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-foreground/60">
+                  <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
                     {update.notes}
                   </p>
                 </div>
@@ -143,7 +141,7 @@ const UpdateSection: FC = memo(() => {
               <button
                 type="button"
                 onClick={handleDownload}
-                className="flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                className="flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
               >
                 <ArrowDownToLine className="size-3.5" />
                 {t("update.downloadNow")}
@@ -158,12 +156,12 @@ const UpdateSection: FC = memo(() => {
             <div className="mx-4 h-px bg-border/30" />
             <div className="space-y-2 px-4 py-3.5">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-[12px] text-foreground/70">
+                <span className="flex items-center gap-1.5 text-xs text-foreground">
                   <Loader2 className="size-3.5 animate-spin text-primary" />
                   {phase === "installing" ? t("update.installing") : t("update.downloading")}
                 </span>
                 {percent !== null && (
-                  <span className="text-[11px] tabular-nums text-foreground/45">{percent}%</span>
+                  <span className="text-xs tabular-nums text-foreground/40">{percent}%</span>
                 )}
               </div>
 
@@ -173,21 +171,21 @@ const UpdateSection: FC = memo(() => {
                   className={
                     percent === null
                       ? "h-full w-1/3 animate-pulse rounded-full bg-primary"
-                      : "h-full rounded-full bg-primary transition-all duration-200"
+                      : "h-full rounded-full bg-primary transition-[width] duration-200"
                   }
                   style={percent === null ? undefined : { width: `${percent}%` }}
                 />
               </div>
 
               {progress && (
-                <p className="text-[11px] tabular-nums text-foreground/40">
+                <p className="text-xs tabular-nums text-foreground/40">
                   {progress.total !== null
                     ? `${formatBytes(progress.downloaded)} / ${formatBytes(progress.total)}`
                     : formatBytes(progress.downloaded)}
                 </p>
               )}
 
-              <p className="text-[11px] leading-relaxed text-foreground/45">
+              <p className="text-xs leading-relaxed text-foreground/40">
                 {t("update.installHint")}
               </p>
             </div>
@@ -201,9 +199,9 @@ const UpdateSection: FC = memo(() => {
             <div className="flex items-start gap-2 px-4 py-3">
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
               <div className="min-w-0">
-                <p className="text-[12px] text-foreground/70">{t("update.checkFailed")}</p>
+                <p className="text-xs text-foreground">{t("update.checkFailed")}</p>
                 {error && (
-                  <p className="mt-0.5 break-words text-[11px] leading-relaxed text-foreground/40">
+                  <p className="mt-0.5 break-words text-xs leading-relaxed text-foreground/40">
                     {error}
                   </p>
                 )}
@@ -213,9 +211,7 @@ const UpdateSection: FC = memo(() => {
         )}
       </div>
 
-      <p className="px-1 text-[11px] leading-relaxed text-foreground/45">
-        {t("update.autoCheckHint")}
-      </p>
+      <p className="px-1 text-xs leading-relaxed text-foreground/40">{t("update.autoCheckHint")}</p>
     </section>
   );
 });

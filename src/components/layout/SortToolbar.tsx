@@ -15,8 +15,8 @@ const SortToolbar: FC<SortToolbarProps> = memo(({ orderDirty, onCancel, onSave }
 
   return (
     <>
-      <GripVertical className="size-3.5 text-foreground/50" />
-      <span className="text-sm text-foreground/60">{t("main.sortModeHint")}</span>
+      <GripVertical className="size-3.5 text-muted-foreground" />
+      <span className="text-sm text-muted-foreground">{t("main.sortModeHint")}</span>
       {orderDirty && (
         <span className="ml-1 text-xs text-primary/80">{t("main.orderModified")}</span>
       )}

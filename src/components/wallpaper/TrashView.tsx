@@ -68,7 +68,7 @@ const TrashCard: React.FC<TrashCardProps> = ({
   return (
     <div
       className={cn(
-        "group relative flex h-full flex-col overflow-hidden rounded-lg border bg-card transition-all duration-150",
+        "group relative flex h-full flex-col overflow-hidden rounded-lg border bg-card transition-[border-color,box-shadow] duration-150",
         selected
           ? "border-primary ring-2 ring-primary/40"
           : "border-border/50 hover:border-border hover:fluent-shadow",
@@ -84,10 +84,10 @@ const TrashCard: React.FC<TrashCardProps> = ({
           <LazyImage
             src={convertFileSrc(wallpaper.thumb_path)}
             alt={wallpaper.name}
-            className="size-full object-cover opacity-70 grayscale transition-all duration-200 group-hover:opacity-100 group-hover:grayscale-0"
+            className="size-full object-cover opacity-70 grayscale transition-[opacity,filter] duration-200 group-hover:opacity-100 group-hover:grayscale-0"
           />
         ) : (
-          <div className="flex size-full items-center justify-center text-foreground/25">
+          <div className="flex size-full items-center justify-center text-foreground/40">
             {isVideo ? (
               <Film className="size-8" strokeWidth={1.25} />
             ) : (
@@ -100,7 +100,7 @@ const TrashCard: React.FC<TrashCardProps> = ({
         {remainingDays !== null && (
           <span
             className={cn(
-              "absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[11px] font-medium backdrop-blur-sm",
+              "absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-xs font-medium backdrop-blur-sm",
               remainingDays <= 3
                 ? "bg-destructive/85 text-destructive-foreground"
                 : "bg-black/55 text-white",
@@ -114,7 +114,7 @@ const TrashCard: React.FC<TrashCardProps> = ({
 
         {/* 选中标记 */}
         {selected && (
-          <span className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground">
+          <span className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
             ✓
           </span>
         )}
@@ -124,7 +124,7 @@ const TrashCard: React.FC<TrashCardProps> = ({
       <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <p className="truncate text-xs text-foreground/75">{wallpaper.name}</p>
+            <p className="truncate text-xs text-foreground">{wallpaper.name}</p>
           </TooltipTrigger>
           <TooltipContent side="top">{wallpaper.name}</TooltipContent>
         </Tooltip>
@@ -133,7 +133,7 @@ const TrashCard: React.FC<TrashCardProps> = ({
           <Button
             variant="outline"
             size="sm"
-            className="h-6 flex-1 px-1.5 text-[11px]"
+            className="h-6 flex-1 px-1.5 text-xs"
             onClick={() => onRestore(wallpaper.id)}
           >
             <ArchiveRestore className="mr-1 size-3" />
@@ -248,17 +248,17 @@ const TrashView: React.FC = () => {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* 工具栏 */}
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/40 px-4">
-        <Trash2 className="size-4 text-foreground/60" />
-        <span className="text-[13px] font-medium">{t("trash.title")}</span>
-        <span className="text-xs text-foreground/45">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-4">
+        <Trash2 className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">{t("trash.title")}</span>
+        <span className="text-xs text-foreground/40">
           {t("trash.itemCount", { count: trashed.length })}
         </span>
 
         <div className="ml-auto flex items-center gap-1.5">
           {selectedCount > 0 ? (
             <>
-              <span className="mr-1 text-xs text-foreground/60">
+              <span className="mr-1 text-xs text-muted-foreground">
                 {t("trash.selectedCount", { count: selectedCount })}
               </span>
               <Button variant="outline" size="sm" className="h-7 text-xs" onClick={clearSelection}>
@@ -306,7 +306,7 @@ const TrashView: React.FC = () => {
       </div>
 
       {/* 保留策略提示 */}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-border/30 bg-muted/30 px-4 py-1.5 text-[11px] text-foreground/55">
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-border/50 bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground">
         <TriangleAlert className="size-3.5 shrink-0" />
         <span>
           {autoPurgeEnabled
@@ -319,11 +319,11 @@ const TrashView: React.FC = () => {
       <div className={cn("min-h-0 flex-1", isEmpty ? "overflow-y-auto p-4" : "overflow-hidden")}>
         {trashLoading && isEmpty ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-foreground/50">{t("trash.loading")}</p>
+            <p className="text-sm text-muted-foreground">{t("trash.loading")}</p>
           </div>
         ) : isEmpty ? (
           <div className="flex h-full items-center justify-center">
-            <div className="flex flex-col items-center gap-3 text-foreground/30">
+            <div className="flex flex-col items-center gap-3 text-foreground/40">
               <Trash2 className="size-12" strokeWidth={1} />
               <p className="text-sm">{t("trash.empty")}</p>
             </div>

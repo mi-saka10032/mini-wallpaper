@@ -64,11 +64,11 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
       className="flex h-[80vh] max-h-[800px] w-[80vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0"
     >
       {/* Header */}
-      <DialogHeader className="shrink-0 border-b border-border/40 px-6 py-4">
+      <DialogHeader className="shrink-0 border-b border-border/50 px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <DialogTitle className="flex items-center gap-2 py-1">
-              <ImagePlus className="size-5 text-foreground/60" />
+              <ImagePlus className="size-5 text-muted-foreground" />
               {t("pickerDialog.title")}
             </DialogTitle>
             {selectedIds.size > 0 && (
@@ -97,7 +97,7 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
           className="h-full"
           emptyContent={
             availableCount === 0 ? (
-              <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-foreground/50">
+              <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
                 <ImagePlus className="size-10" strokeWidth={1} />
                 <p className="text-sm">{t("pickerDialog.allAdded")}</p>
               </div>
@@ -107,8 +107,8 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
       </div>
 
       {/* Footer: 固定操作栏 */}
-      <div className="flex shrink-0 items-center justify-between border-t border-border/40 px-6 py-3">
-        <span className="text-sm text-foreground/50">
+      <div className="flex shrink-0 items-center justify-between border-t border-border/50 px-6 py-3">
+        <span className="text-sm text-muted-foreground">
           {selectedIds.size > 0
             ? t("pickerDialog.selectedHint", { count: selectedIds.size })
             : t("pickerDialog.hint")}

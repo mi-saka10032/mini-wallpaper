@@ -111,7 +111,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+                    className="text-muted-foreground hover:bg-primary-hover hover:text-foreground"
                     title={t("main.addWallpaper")}
                     aria-label={t("main.addWallpaper")}
                   >
@@ -133,7 +133,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
               variant="ghost"
               size="icon-sm"
               onClick={onRefresh}
-              className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              className="text-muted-foreground hover:bg-primary-hover hover:text-foreground"
               title={t("main.refresh")}
               aria-label={t("main.refresh")}
             >
@@ -178,7 +178,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
               variant="ghost"
               size="icon-sm"
               onClick={onSearchExpand}
-              className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              className="text-muted-foreground hover:bg-primary-hover hover:text-foreground"
               title={t("grid.search")}
               aria-label={t("grid.search")}
             >
@@ -195,7 +195,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
               variant="ghost"
               size="icon-sm"
               onClick={onEnterSortMode}
-              className="text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              className="text-muted-foreground hover:bg-primary-hover hover:text-foreground"
               title={t("main.sortWallpapers")}
               aria-label={t("main.sortWallpapers")}
             >
@@ -212,7 +212,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
               variant="ghost"
               size="sm"
               onClick={onEditSmartRule}
-              className="gap-1.5 text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              className="gap-1.5 text-muted-foreground hover:bg-primary-hover hover:text-foreground"
             >
               <Sparkles className="size-3.5" />
               {t("sidebar.editRule")}
@@ -222,7 +222,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
               variant="ghost"
               size="sm"
               onClick={onEnterManageMode}
-              className="gap-1.5 text-foreground/60 hover:bg-primary-hover hover:text-foreground"
+              className="gap-1.5 text-muted-foreground hover:bg-primary-hover hover:text-foreground"
             >
               <Settings2 className="size-3.5" />
               {t("main.manageWallpapers")}

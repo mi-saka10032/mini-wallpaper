@@ -54,7 +54,7 @@ const LazyImage: FC<LazyImageProps> = ({ src, alt, className, fallback }) => {
     return (
       <div className={cn("flex size-full items-center justify-center bg-foreground/4", className)}>
         {fallback ?? (
-          <div className="flex flex-col items-center gap-1 text-foreground/30">
+          <div className="flex flex-col items-center gap-1 text-foreground/40">
             <ImageOff className="size-6" strokeWidth={1.5} />
           </div>
         )}

@@ -187,6 +187,13 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     const extensions = await get().fetchSupportedExtensions();
     const extensionSet = new Set(extensions);
 
+    // 诊断：确认拖入的 File 列表与后端支持的扩展名
+    console.log(
+      `[DragImport] dropped ${files.length} files:`,
+      files.map((f) => `${f.name}(${f.size}B, type=${f.type || "?"})`),
+    );
+    console.log(`[DragImport] supportedExtensions:`, extensions);
+
     // 体积上限（字节）
     const SINGLE_LIMIT = 200 * 1024 * 1024; // 单文件 200MB
     const TOTAL_LIMIT = 500 * 1024 * 1024; // 总量 500MB
@@ -237,7 +244,14 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       for (const f of sizeAccepted) {
         try {
           const buf = await f.arrayBuffer();
+          // 诊断：WebView2 下拖拽得到的 File 可能 size 正常但读不出字节
+          console.log(`[DragImport] "${f.name}" file.size=${f.size} arrayBuffer=${buf.byteLength}`);
+          if (buf.byteLength === 0) {
+            console.error(`[DragImport] "${f.name}" 读到 0 字节，跳过`);
+            continue;
+          }
           const wp = await importWallpaperBytes(f.name, new Uint8Array(buf));
+          console.log(`[DragImport] "${f.name}" -> id=${wp.id} path=${wp.file_path}`);
           imported.push(wp);
         } catch (e) {
           console.error(`[DragImport] failed for ${f.name}`, e);
@@ -246,6 +260,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       console.log(`[DragImport] ${imported.length} wallpapers imported (bytes)`);
 
       await get().fetchWallpapers();
+      console.log(`[DragImport] after fetch, store has ${get().wallpapers.length} wallpapers`);
 
       // 4) 异步分批生成视频缩略图
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
@@ -266,10 +281,9 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       const count = await deleteWallpaperBatch(ids);
       console.log(`[Trash] ${count} wallpapers moved to trash`);
       await get().fetchWallpapers();
-      // 回收站列表已加载过时保持同步，避免用户切到回收站看到旧数据
-      if (get().trashed.length > 0) {
-        await get().fetchTrashed();
-      }
+      // TrashView 首次访问后常驻（切走仅隐藏），不会再触发挂载时的拉取，
+      // 所以这里必须无条件同步，否则回收站从空变为非空时切过去仍是空的
+      await get().fetchTrashed();
     } catch (e) {
       console.error("[deleteWallpapers]", e);
       throw e;

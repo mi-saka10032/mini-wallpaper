@@ -48,7 +48,7 @@ pub fn register_tray(app: &tauri::App) -> tauri::Result<()> {
     // ===== 构建菜单项 =====
     let next_i = MenuItem::with_id(app, ID_NEXT, "下一张壁纸", true, None::<&str>)?;
     let prev_i = MenuItem::with_id(app, ID_PREV, "上一张壁纸", true, None::<&str>)?;
-    let pause_i = MenuItem::with_id(app, ID_TOGGLE_PAUSE, "暂停轮播", true, None::<&str>)?;
+    let pause_i = MenuItem::with_id(app, ID_TOGGLE_PAUSE, "暂停/恢复轮播", true, None::<&str>)?;
     let favorite_i =
         MenuItem::with_id(app, ID_TOGGLE_FAVORITE, "收藏当前壁纸", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;

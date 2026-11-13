@@ -18,8 +18,6 @@ import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
-import type { Wallpaper } from "@/api/config";
-import { getCollectionWallpapers } from "@/api/collection";
 import AppLoading from "@/components/ui/AppLoading";
 import { TRASH_VIEW_ID } from "@/constants/views";
 import { cn } from "./lib/utils";
@@ -78,7 +76,6 @@ const App: React.FC = () => {
   useWebGuard();
   useAccentColor(); // 初始化主题色（启动时应用持久化的 accent color）
   useStartupUpdateCheck(); // 启动后台静默检查更新（最新/失败均无提示）
-  const wallpapers = useWallpaperStore((s) => s.wallpapers);
   const importing = useWallpaperStore((s) => s.loading);
   const language = useSettingStore((s) => s.settings[SETTING_KEYS.LANGUAGE]);
   const applyFavoriteChange = useFavoritesStore((s) => s.applyChange);
@@ -93,10 +90,11 @@ const App: React.FC = () => {
     };
   }, [applyFavoriteChange]);
 
-  // activeId: 0 = 本地壁纸，>0 = 收藏夹 id
-  const [activeId, setActiveId] = useState(0);
-  // 初始值直接从 store 取，避免首帧空列表闪烁（AppShell 已确保数据就绪）
-  const [viewWallpapers, setViewWallpapers] = useState<Wallpaper[]>(wallpapers);
+  // activeId / viewWallpapers 由 wallpaperStore 持有：
+  // 视图切换与数据拉取在 store 内完成（含竞态守卫），组件只订阅结果。
+  const activeId = useWallpaperStore((s) => s.activeId);
+  const setActiveId = useWallpaperStore((s) => s.setActiveId);
+  const viewWallpapers = useWallpaperStore((s) => s.viewWallpapers);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   // 管理模式状态（用于蒙层遮挡）
@@ -111,7 +109,6 @@ const App: React.FC = () => {
 
   // 跳过首次执行的标记（AppShell 已完成初始化，无需重复）
   const langInitRef = useRef(true);
-  const wpInitRef = useRef(true);
 
   // DB 中 language 变化时同步 i18n（跳过首次：AppShell 已同步）
   useEffect(() => {
@@ -124,26 +121,6 @@ const App: React.FC = () => {
     }
   }, [language]);
 
-  // viewWallpapers 数据源切换：本地壁纸 or 收藏夹
-  // 跳过首次：useState 初始值已从 store 取得，无需重复 set
-  useEffect(() => {
-    if (wpInitRef.current) {
-      wpInitRef.current = false;
-      return;
-    }
-    if (activeId === 0) {
-      setViewWallpapers(wallpapers);
-    }
-  }, [activeId, wallpapers]);
-
-  useEffect(() => {
-    if (activeId > 0) {
-      getCollectionWallpapers(activeId)
-        .then(setViewWallpapers)
-        .catch((e) => console.error("[getCollectionWallpapers]", e));
-    }
-  }, [activeId]);
-
   const openPreview = useCallback((index: number) => {
     setPreviewIndex(index);
   }, []);
@@ -151,15 +128,6 @@ const App: React.FC = () => {
   const closePreview = useCallback(() => {
     setPreviewIndex(null);
   }, []);
-
-  // 收藏夹壁纸变更后刷新视图
-  const refreshCollectionView = useCallback(() => {
-    if (activeId > 0) {
-      getCollectionWallpapers(activeId)
-        .then(setViewWallpapers)
-        .catch((e) => console.error("[refreshCollectionView]", e));
-    }
-  }, [activeId]);
 
   return (
     <TooltipProvider>
@@ -207,13 +175,7 @@ const App: React.FC = () => {
                 </div>
               </Suspense>
 
-              <MainContent
-                activeId={activeId}
-                wallpapers={viewWallpapers}
-                onPreview={openPreview}
-                onCollectionChanged={refreshCollectionView}
-                onManageModeChange={setManageMode}
-              />
+              <MainContent onPreview={openPreview} onManageModeChange={setManageMode} />
             </div>
           </ErrorBoundary>
         </main>

@@ -36,22 +36,18 @@ const SortableGrid = lazy(() => import("@/components/wallpaper/SortableGrid"));
 
 interface MainContentProps {
   className?: string;
-  activeId: number;
-  wallpapers: Wallpaper[];
   onPreview: (index: number) => void;
-  onCollectionChanged?: () => void;
   onManageModeChange?: (active: boolean) => void;
 }
 
-const MainContent: React.FC<MainContentProps> = ({
-  className,
-  activeId,
-  wallpapers,
-  onPreview,
-  onCollectionChanged,
-  onManageModeChange,
-}) => {
+const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManageModeChange }) => {
   const { t } = useTranslation();
+
+  // 视图数据直接取自 store，不再由 App 自上而下灌入：
+  // activeId 变化时 store 内部已完成拉取（含竞态守卫），这里只消费结果。
+  const activeId = useWallpaperStore((s) => s.activeId);
+  const wallpapers = useWallpaperStore((s) => s.viewWallpapers);
+  const onCollectionChanged = useWallpaperStore((s) => s.refreshView);
 
   const isCollectionView = activeId > 0;
   const collectionId = isCollectionView ? activeId : null;

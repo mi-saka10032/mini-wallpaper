@@ -19,6 +19,13 @@ interface FavoritesState {
   favoriteIds: Set<number>;
   /** 初始化：定位内置收藏夹并拉取其壁纸 id 集合 */
   init: () => Promise<void>;
+  /**
+   * 重新拉取收藏 id 集合（复用已知的 builtinCollectionId，比 init 少一次 IPC）
+   *
+   * 删除类操作不会经过 toggle，也没有 favorites-changed 事件回流，
+   * 局部 patch 容易漏（彻底删除要清、软删除恢复后又要留），所以直接重取权威数据。
+   */
+  refresh: () => Promise<void>;
   /** 判断某壁纸是否已收藏 */
   isFavorite: (wallpaperId: number) => boolean;
   /** 切换收藏状态（调用后端，返回切换后的状态） */
@@ -43,6 +50,21 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
       });
     } catch (e) {
       console.error("[favoritesStore.init]", e);
+    }
+  },
+
+  refresh: async () => {
+    const collectionId = get().builtinCollectionId;
+    // 尚未初始化时退回 init，避免静默什么都不做
+    if (collectionId === null) {
+      await get().init();
+      return;
+    }
+    try {
+      const wallpapers = await getCollectionWallpapers(collectionId);
+      set({ favoriteIds: new Set(wallpapers.map((w) => w.id)) });
+    } catch (e) {
+      console.error("[favoritesStore.refresh]", e);
     }
   },
 

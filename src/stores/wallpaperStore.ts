@@ -2,38 +2,55 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import type { Wallpaper } from "@/api/config";
 import i18n from "@/i18n";
+import { getCollectionWallpapers } from "@/api/collection";
 import {
   getAll as fetchAllWallpapers,
   importFiles as importWallpaperFiles,
   importWallpaperBytes,
   deleteBatch as deleteWallpaperBatch,
-  getTrashed as fetchTrashedWallpapers,
-  restoreBatch as restoreWallpaperBatch,
-  purgeBatch as purgeWallpaperBatch,
-  emptyTrash as emptyTrashApi,
   getSupportedExtensions as fetchSupportedExtensions,
   getById as fetchWallpaperById,
   saveVideoThumbnail,
 } from "@/api/wallpaper";
 import { batchExtractVideoThumbnails } from "@/lib/videoThumbnail";
+import { useTrashedStore } from "@/stores/trashedStore";
 
 // 从 config 中 re-export Wallpaper 类型，方便外部使用
 export type { Wallpaper } from "@/api/config";
 
 interface WallpaperState {
+  /** 全部正常壁纸（activeId === 0 时即当前视图） */
   wallpapers: Wallpaper[];
   loading: boolean;
   /** 后端返回的支持扩展名列表（懒加载缓存） */
   supportedExtensions: string[];
-  /** 回收站内的壁纸（按移入时间倒序），仅回收站视图使用 */
-  trashed: Wallpaper[];
-  /** 回收站列表加载中 */
-  trashLoading: boolean;
+
+  /**
+   * 当前视图标识：0 = 本地壁纸，>0 = 收藏夹 id（普通/智能/「我喜欢」统一走后端分流），
+   * 负值为非壁纸视图（如 -1 显示器设置、TRASH_VIEW_ID 回收站），此时不拉取。
+   */
+  activeId: number;
+  /** 当前视图的壁纸列表 */
+  viewWallpapers: Wallpaper[];
+  /** 视图加载中 */
+  viewLoading: boolean;
 
   fetchSupportedExtensions: () => Promise<string[]>;
   fetchWallpapers: () => Promise<void>;
   /** 根据 ID 列表精确刷新 store 中对应壁纸（不全量拉取） */
   refreshByIds: (ids: number[]) => Promise<void>;
+
+  /** 切换视图并拉取对应数据（内部带竞态守卫） */
+  setActiveId: (id: number) => Promise<void>;
+  /**
+   * 按当前 activeId 重新拉取视图数据
+   *
+   * 任何改变壁纸归属的操作（导入 / 删除 / 恢复 / 收藏夹增删）完成后都应调用它。
+   * 智能夹是后端实时求值的，导入或打标签都可能改变其命中集，
+   * 所以不能只刷新 activeId === 0 的分支。
+   */
+  refreshView: () => Promise<void>;
+
   importWallpapers: () => Promise<void>;
   /**
    * 通过 H5 拖拽传入的 File[] 导入壁纸（字节方式，不依赖文件路径）
@@ -46,14 +63,6 @@ interface WallpaperState {
   }>;
   /** 移入回收站（可恢复） */
   deleteWallpapers: (ids: number[]) => Promise<void>;
-  /** 拉取回收站列表 */
-  fetchTrashed: () => Promise<void>;
-  /** 从回收站恢复（追加到原收藏夹末尾） */
-  restoreWallpapers: (ids: number[]) => Promise<number>;
-  /** 彻底删除（不可恢复） */
-  purgeWallpapers: (ids: number[]) => Promise<number>;
-  /** 清空回收站（不可恢复） */
-  emptyTrash: () => Promise<number>;
 }
 
 /**
@@ -89,12 +98,30 @@ async function generateVideoThumbnails(
   });
 }
 
+/**
+ * 视图请求序号：每次发起视图拉取自增，响应回来时比对。
+ *
+ * 快速切换收藏夹 A→B 时，A 的响应可能后到并覆盖 B 的数据（串台）。
+ * 放在模块作用域而非 store state，是因为它纯属内部簿记，
+ * 放进 state 会让每次自增都触发订阅者重渲染。
+ */
+let viewRequestSeq = 0;
+
+/** 按 activeId 取对应数据源。负值视图（显示器设置 / 回收站）不由本 store 负责 */
+async function fetchViewData(activeId: number): Promise<Wallpaper[] | null> {
+  if (activeId < 0) return null;
+  if (activeId === 0) return fetchAllWallpapers();
+  // 普通夹 / 智能夹 / 「我喜欢」统一走此命令，后端按 kind 分流
+  return getCollectionWallpapers(activeId);
+}
+
 export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   wallpapers: [],
   loading: false,
   supportedExtensions: [],
-  trashed: [],
-  trashLoading: false,
+  activeId: 0,
+  viewWallpapers: [],
+  viewLoading: false,
 
   /** 获取支持的扩展名（带缓存，仅首次调用时请求后端） */
   fetchSupportedExtensions: async () => {
@@ -114,24 +141,60 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   fetchWallpapers: async () => {
     try {
       const list = await fetchAllWallpapers();
-      set({ wallpapers: list });
+      // activeId === 0 时 wallpapers 就是当前视图，同步更新避免两份数据不一致
+      set((state) =>
+        state.activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { wallpapers: list },
+      );
     } catch (e) {
       console.error("[fetchWallpapers]", e);
+    }
+  },
+
+  setActiveId: async (id: number) => {
+    if (get().activeId === id) return;
+    set({ activeId: id });
+    await get().refreshView();
+  },
+
+  refreshView: async () => {
+    const activeId = get().activeId;
+    const seq = ++viewRequestSeq;
+
+    if (activeId < 0) return;
+
+    set({ viewLoading: true });
+    try {
+      const list = await fetchViewData(activeId);
+      // 响应回来时若已不是最新请求（用户又切了视图），丢弃本次结果
+      if (seq !== viewRequestSeq) return;
+      if (list === null) return;
+      set(activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { viewWallpapers: list });
+    } catch (e) {
+      console.error("[refreshView]", e);
+    } finally {
+      // 同样受守卫约束：过期请求不应关掉新请求的 loading
+      if (seq === viewRequestSeq) set({ viewLoading: false });
     }
   },
 
   refreshByIds: async (ids: number[]) => {
     try {
       const results = await Promise.all(ids.map((id) => fetchWallpaperById(id)));
-      set((state) => {
-        const updated = [...state.wallpapers];
+      // 同一壁纸对象可能同时存在于 wallpapers 与 viewWallpapers（收藏夹视图），
+      // 两处都要替换，否则缩略图在其中一个视图里不更新
+      const replaceIn = (list: Wallpaper[]) => {
+        const updated = [...list];
         for (const wp of results) {
           if (!wp) continue;
           const idx = updated.findIndex((w) => w.id === wp.id);
           if (idx >= 0) updated[idx] = wp;
         }
-        return { wallpapers: updated };
-      });
+        return updated;
+      };
+      set((state) => ({
+        wallpapers: replaceIn(state.wallpapers),
+        viewWallpapers: replaceIn(state.viewWallpapers),
+      }));
     } catch (e) {
       console.error("[refreshByIds]", e);
     }
@@ -161,7 +224,9 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       console.log(`[Import] ${imported.length} wallpapers imported`);
 
       // 先刷新列表（视频壁纸此时 thumb_path 为 null，显示占位图）
-      await get().fetchWallpapers();
+      // 用 refreshView 而非 fetchWallpapers：用户可能正停在智能夹视图上，
+      // 而智能夹是后端实时求值的，新导入的壁纸可能直接命中规则
+      await Promise.all([get().fetchWallpapers(), get().refreshView()]);
 
       // 异步分批生成视频缩略图（不阻塞 loading 状态）
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
@@ -186,13 +251,6 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   importByFiles: async (files: File[]) => {
     const extensions = await get().fetchSupportedExtensions();
     const extensionSet = new Set(extensions);
-
-    // 诊断：确认拖入的 File 列表与后端支持的扩展名
-    console.log(
-      `[DragImport] dropped ${files.length} files:`,
-      files.map((f) => `${f.name}(${f.size}B, type=${f.type || "?"})`),
-    );
-    console.log(`[DragImport] supportedExtensions:`, extensions);
 
     // 体积上限（字节）
     const SINGLE_LIMIT = 200 * 1024 * 1024; // 单文件 200MB
@@ -244,23 +302,14 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       for (const f of sizeAccepted) {
         try {
           const buf = await f.arrayBuffer();
-          // 诊断：WebView2 下拖拽得到的 File 可能 size 正常但读不出字节
-          console.log(`[DragImport] "${f.name}" file.size=${f.size} arrayBuffer=${buf.byteLength}`);
-          if (buf.byteLength === 0) {
-            console.error(`[DragImport] "${f.name}" 读到 0 字节，跳过`);
-            continue;
-          }
           const wp = await importWallpaperBytes(f.name, new Uint8Array(buf));
-          console.log(`[DragImport] "${f.name}" -> id=${wp.id} path=${wp.file_path}`);
           imported.push(wp);
         } catch (e) {
           console.error(`[DragImport] failed for ${f.name}`, e);
         }
       }
-      console.log(`[DragImport] ${imported.length} wallpapers imported (bytes)`);
 
-      await get().fetchWallpapers();
-      console.log(`[DragImport] after fetch, store has ${get().wallpapers.length} wallpapers`);
+      await Promise.all([get().fetchWallpapers(), get().refreshView()]);
 
       // 4) 异步分批生成视频缩略图
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
@@ -280,62 +329,17 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     try {
       const count = await deleteWallpaperBatch(ids);
       console.log(`[Trash] ${count} wallpapers moved to trash`);
-      await get().fetchWallpapers();
-      // TrashView 首次访问后常驻（切走仅隐藏），不会再触发挂载时的拉取，
-      // 所以这里必须无条件同步，否则回收站从空变为非空时切过去仍是空的
-      await get().fetchTrashed();
+      // 当前视图减少、回收站增加。回收站列表由 trashedStore 持有，
+      // 这里主动同步是因为 TrashView 常驻挂载（切走仅隐藏），
+      // 不会在切回时重新拉取。
+      await Promise.all([
+        get().fetchWallpapers(),
+        get().refreshView(),
+        useTrashedStore.getState().fetchTrashed(),
+      ]);
     } catch (e) {
       console.error("[deleteWallpapers]", e);
       throw e;
-    }
-  },
-
-  fetchTrashed: async () => {
-    try {
-      set({ trashLoading: true });
-      const list = await fetchTrashedWallpapers();
-      set({ trashed: list });
-    } catch (e) {
-      console.error("[fetchTrashed]", e);
-    } finally {
-      set({ trashLoading: false });
-    }
-  },
-
-  restoreWallpapers: async (ids: number[]) => {
-    try {
-      const count = await restoreWallpaperBatch(ids);
-      console.log(`[Trash] ${count} wallpapers restored`);
-      // 恢复影响两个列表：主网格新增、回收站减少
-      await Promise.all([get().fetchWallpapers(), get().fetchTrashed()]);
-      return count;
-    } catch (e) {
-      console.error("[restoreWallpapers]", e);
-      return 0;
-    }
-  },
-
-  purgeWallpapers: async (ids: number[]) => {
-    try {
-      const count = await purgeWallpaperBatch(ids);
-      console.log(`[Trash] ${count} wallpapers permanently deleted`);
-      await get().fetchTrashed();
-      return count;
-    } catch (e) {
-      console.error("[purgeWallpapers]", e);
-      return 0;
-    }
-  },
-
-  emptyTrash: async () => {
-    try {
-      const count = await emptyTrashApi();
-      console.log(`[Trash] emptied, ${count} wallpapers permanently deleted`);
-      await get().fetchTrashed();
-      return count;
-    } catch (e) {
-      console.error("[emptyTrash]", e);
-      return 0;
     }
   },
 }));

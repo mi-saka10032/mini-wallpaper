@@ -21,7 +21,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { cn } from "@/lib/utils";
 import { SETTING_KEYS, useSetting } from "@/stores/settingStore";
-import { useWallpaperStore } from "@/stores/wallpaperStore";
+import { useTrashedStore } from "@/stores/trashedStore";
 
 /** 默认保留天数，与后端 DEFAULT_TRASH_RETENTION_DAYS 保持一致 */
 const DEFAULT_RETENTION_DAYS = 30;
@@ -164,12 +164,12 @@ const TrashCard: React.FC<TrashCardProps> = ({
  */
 const TrashView: React.FC = () => {
   const { t } = useTranslation();
-  const trashed = useWallpaperStore((s) => s.trashed);
-  const trashLoading = useWallpaperStore((s) => s.trashLoading);
-  const fetchTrashed = useWallpaperStore((s) => s.fetchTrashed);
-  const restoreWallpapers = useWallpaperStore((s) => s.restoreWallpapers);
-  const purgeWallpapers = useWallpaperStore((s) => s.purgeWallpapers);
-  const emptyTrash = useWallpaperStore((s) => s.emptyTrash);
+  const trashed = useTrashedStore((s) => s.trashed);
+  const trashLoading = useTrashedStore((s) => s.trashLoading);
+  const fetchTrashed = useTrashedStore((s) => s.fetchTrashed);
+  const restoreWallpapers = useTrashedStore((s) => s.restoreWallpapers);
+  const purgeWallpapers = useTrashedStore((s) => s.purgeWallpapers);
+  const emptyTrash = useTrashedStore((s) => s.emptyTrash);
 
   const retentionRaw = useSetting(SETTING_KEYS.TRASH_RETENTION_DAYS);
   const autoPurgeRaw = useSetting(SETTING_KEYS.TRASH_AUTO_PURGE);

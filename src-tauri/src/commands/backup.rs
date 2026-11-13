@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use log::info;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
@@ -111,7 +112,8 @@ pub async fn import_backup(
     };
 
     // 先停掉会写库的后台任务，再关闭共享连接，最后才替换数据库文件。
-    // 连接关闭后本次进程不再打开新库，界面已要求导入后重启。
+    // 连接池固定 1 条且关闭后不会重开（见 ctx/db.rs），所以安装成功后必须重启进程，
+    // 否则 AppContext 仍注册在 Tauri state 里、后续所有 command 都会拿到已关闭的连接。
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
     scheduler_handle.lock().await.stop_all();
     if let Err(error) = app_ctx.db.close_by_ref().await {
@@ -129,6 +131,14 @@ pub async fn import_backup(
     installed
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
+
+    info!("备份导入完成（{count} 个文件），即将重启应用以重建数据库连接");
+
+    let handle = app_ctx.app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        handle.restart();
+    });
 
     Ok(count)
 }

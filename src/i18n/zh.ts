@@ -342,7 +342,7 @@ export default {
     import: "导入备份",
     exportSuccess: "备份导出成功",
     exportFailed: "导出失败",
-    importSuccess: "导入成功，已恢复 {{count}} 个文件，重启应用后生效",
+    importSuccess: "导入成功，已恢复 {{count}} 个文件，即将自动重启应用",
     importFailed: "导入失败",
   },
   trash: {

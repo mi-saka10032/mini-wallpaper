@@ -351,7 +351,7 @@ export default {
     import: "Import Backup",
     exportSuccess: "Backup exported successfully",
     exportFailed: "Export failed",
-    importSuccess: "Import complete. {{count}} files restored. Restart the app to apply.",
+    importSuccess: "Import complete. {{count}} files restored. Restarting the app...",
     importFailed: "Import failed",
   },
   trash: {

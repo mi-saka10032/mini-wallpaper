@@ -1,9 +1,10 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useCallback } from "react";
 import { Monitor, Plus, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useImportFeedback } from "@/hooks/useImportFeedback";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import WindowControls from "./WindowControls";
 import ThemeToggle from "./ThemeToggle";
@@ -20,6 +21,17 @@ interface ToolbarProps {
 const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
   const { t } = useTranslation();
   const importWallpapers = useWallpaperStore((s) => s.importWallpapers);
+  const { notify, notifyError } = useImportFeedback();
+
+  // 文件选择器导入。与拖拽两条通道共用同一套提示：
+  // 成功弹数量（批量时这是唯一能知道导入了几个的地方），取消则静默。
+  const handleImport = useCallback(async () => {
+    try {
+      notify(await importWallpapers());
+    } catch (e) {
+      notifyError(e);
+    }
+  }, [importWallpapers, notify, notifyError]);
 
   return (
     <div
@@ -31,7 +43,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
         <Button
           variant="ghost"
           size="sm"
-          onClick={importWallpapers}
+          onClick={handleImport}
           className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
         >
           <Plus className="size-4" />

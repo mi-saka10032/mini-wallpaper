@@ -93,9 +93,12 @@ export default {
     supportedFormats: "Supports images, videos, and GIF files",
     wallpaperFiles: "Wallpaper Files",
     refresh: "Refresh wallpapers",
-    importedCount: "Imported {{count}} file(s)",
-    skippedUnsupported: "Skipped {{count}} file(s): unsupported format",
-    skippedBySize: "Skipped {{count}} file(s): too large (max 200MB per file, 500MB total)",
+    importImported: "{{count}} imported",
+    importSkippedUnsupported: "{{count}} unsupported format",
+    importSkippedBySize: "{{count}} too large",
+    importSummarySeparator: ", ",
+    importFailed: "Import failed: {{reason}}",
+    importNothing: "No importable files",
   },
 
   // MonitorSettingsPanel

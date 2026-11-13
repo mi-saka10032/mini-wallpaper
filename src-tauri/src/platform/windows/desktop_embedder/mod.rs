@@ -105,9 +105,15 @@ pub fn embed_in_desktop(
 }
 
 /// 从桌面层级中移除嵌入的窗口
+///
+/// 必须在 `window.close()` 之前调用：还原 WndProc 需要 HWND 仍然有效，
+/// 且紧随其后的 WM_CLOSE / WM_DESTROY 要能回到 tao 自己的窗口过程。
 pub fn unembed_from_desktop(hwnd: isize) {
+    // ModernStrategy 才会子类化，其余情况内部静默跳过
+    wndproc::restore_and_unregister(hwnd as HWND);
+
     unsafe {
         SetParent(hwnd as HWND, std::ptr::null_mut());
-        info!("已解除嵌入: HWND=0x{:X}", hwnd);
     }
+    info!("已解除嵌入: HWND=0x{:X}", hwnd);
 }

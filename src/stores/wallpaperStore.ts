@@ -51,18 +51,40 @@ interface WallpaperState {
    */
   refreshView: () => Promise<void>;
 
-  importWallpapers: () => Promise<void>;
+  /** 通过系统文件选择器导入（失败时上抛，由调用方提示） */
+  importWallpapers: () => Promise<ImportResult>;
+  /**
+   * 按文件路径导入壁纸（Tauri 原生拖放场景）
+   *
+   * 与 importByFiles 的区别：后者依赖 WebView 读出文件字节，而 WebView2 在
+   * 生产构建（tauri:// 自定义协议）下会给出 size 正常但读不出内容的 File 对象。
+   * 原生拖放事件直接给路径，由后端自行读盘，与点击导入走同一条已验证的链路。
+   */
+  importByPaths: (paths: string[]) => Promise<ImportResult>;
   /**
    * 通过 H5 拖拽传入的 File[] 导入壁纸（字节方式，不依赖文件路径）
-   * 返回 { imported, skipped, rejectedBySize }，便于上层提示
    */
-  importByFiles: (files: File[]) => Promise<{
-    imported: number;
-    skipped: number;
-    rejectedBySize: number;
-  }>;
+  importByFiles: (files: File[]) => Promise<ImportResult>;
   /** 移入回收站（可恢复） */
   deleteWallpapers: (ids: number[]) => Promise<void>;
+}
+
+/**
+ * 三条导入路径（文件选择器 / 原生拖放 / HTML5 拖拽）统一的返回形状。
+ *
+ * `cancelled` 区分「用户主动取消选择」与「选了但全部失败」：
+ * 前者不该弹任何提示，后者必须报错。之前 importWallpapers 返回 void、
+ * 其余两条返回计数，调用方无从统一判断。
+ */
+export interface ImportResult {
+  /** 成功导入的数量 */
+  imported: number;
+  /** 因扩展名不受支持而跳过的数量 */
+  skipped: number;
+  /** 因体积超限而跳过的数量（仅字节通道可能非零） */
+  rejectedBySize: number;
+  /** 用户取消了文件选择（仅 importWallpapers 可能为 true） */
+  cancelled: boolean;
 }
 
 /**
@@ -106,6 +128,14 @@ async function generateVideoThumbnails(
  * 放进 state 会让每次自增都触发订阅者重渲染。
  */
 let viewRequestSeq = 0;
+
+/** 未导入任何文件时的中性结果（各字段为 0、未取消） */
+const EMPTY_IMPORT_RESULT: ImportResult = {
+  imported: 0,
+  skipped: 0,
+  rejectedBySize: 0,
+  cancelled: false,
+};
 
 /** 按 activeId 取对应数据源。负值视图（显示器设置 / 回收站）不由本 store 负责 */
 async function fetchViewData(activeId: number): Promise<Wallpaper[] | null> {
@@ -201,29 +231,28 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   },
 
   importWallpapers: async () => {
+    const extensions = await get().fetchSupportedExtensions();
+    if (extensions.length === 0) return EMPTY_IMPORT_RESULT;
+
+    const selected = await open({
+      multiple: true,
+      filters: [
+        {
+          name: i18n.t("main.wallpaperFiles"),
+          extensions,
+        },
+      ],
+    });
+
+    if (!selected || selected.length === 0) {
+      return { ...EMPTY_IMPORT_RESULT, cancelled: true };
+    }
+
+    set({ loading: true });
     try {
-      const extensions = await get().fetchSupportedExtensions();
-      if (extensions.length === 0) return;
-
-      const selected = await open({
-        multiple: true,
-        filters: [
-          {
-            name: i18n.t("main.wallpaperFiles"),
-            extensions,
-          },
-        ],
-      });
-
-      if (!selected || selected.length === 0) return;
-
-      set({ loading: true });
-
       const paths = selected as string[];
       const imported = await importWallpaperFiles(paths);
-      console.log(`[Import] ${imported.length} wallpapers imported`);
 
-      // 先刷新列表（视频壁纸此时 thumb_path 为 null，显示占位图）
       // 用 refreshView 而非 fetchWallpapers：用户可能正停在智能夹视图上，
       // 而智能夹是后端实时求值的，新导入的壁纸可能直接命中规则
       await Promise.all([get().fetchWallpapers(), get().refreshView()]);
@@ -232,8 +261,53 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
         console.error("[VideoThumbnail] batch failed", e),
       );
-    } catch (e) {
-      console.error("[importWallpapers]", e);
+
+      // 选择器已按扩展名过滤，正常不会出现 skipped；保留字段以统一形状
+      return { imported: imported.length, skipped: 0, rejectedBySize: 0, cancelled: false };
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  /**
+   * 按路径导入（Tauri 原生拖放），与点击导入共用后端 import_wallpapers。
+   *
+   * 传路径而非字节，因此不需要体积守卫：字节方式必须先把整个文件读进内存，
+   * 故 200MB/500MB 上限是防止前端 OOM 的保护；路径方式由后端
+   * `prepare_wallpaper_files` 用 `std::fs::copy` 做文件级拷贝，进程内存占用与
+   * 文件大小无关。数量也不设限——后端 `import_batch` 已用 buffer_unordered
+   * 按 CPU 核数限并发。
+   *
+   * 前端仅按扩展名预筛，目的是给出「N 个文件格式不支持」的准确计数；
+   * 真正的类型校验仍在后端 detect_file_type。
+   */
+  importByPaths: async (paths: string[]) => {
+    const extensions = await get().fetchSupportedExtensions();
+    const extensionSet = new Set(extensions);
+
+    const matched: string[] = [];
+    let skipped = 0;
+    for (const p of paths) {
+      const ext = p.split(".").pop()?.toLowerCase() ?? "";
+      if (extensionSet.has(ext)) matched.push(p);
+      else skipped += 1;
+    }
+
+    if (matched.length === 0) {
+      return { imported: 0, skipped, rejectedBySize: 0, cancelled: false };
+    }
+
+    try {
+      set({ loading: true });
+      const imported = await importWallpaperFiles(matched);
+
+      await Promise.all([get().fetchWallpapers(), get().refreshView()]);
+
+      generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
+        console.error("[VideoThumbnail] batch failed", e),
+      );
+
+      return { imported: imported.length, skipped, rejectedBySize: 0, cancelled: false };
     } finally {
       set({ loading: false });
     }
@@ -269,7 +343,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     }
 
     if (matched.length === 0) {
-      return { imported: 0, skipped, rejectedBySize: 0 };
+      return { imported: 0, skipped, rejectedBySize: 0, cancelled: false };
     }
 
     // 2) 体积守卫：单文件超限直接剔除；剩余总量再次校验
@@ -290,7 +364,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     }
 
     if (sizeAccepted.length === 0) {
-      return { imported: 0, skipped, rejectedBySize };
+      return { imported: 0, skipped, rejectedBySize, cancelled: false };
     }
 
     try {
@@ -299,14 +373,27 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       // 3) 逐文件串行导入：File → ArrayBuffer → Uint8Array，raw body 直传
       //    串行可将内存峰值控制在单个文件大小，且规避 SQLite 写锁竞争
       const imported: Wallpaper[] = [];
+      const failures: string[] = [];
       for (const f of sizeAccepted) {
         try {
           const buf = await f.arrayBuffer();
+          // WebView2 在生产构建（tauri:// 自定义协议）下，拖入的 File 可能
+          // size 正常但读不出字节。此时必须显式失败，不能把空数据发给后端。
+          if (buf.byteLength === 0) {
+            throw new Error(`读取到 0 字节（file.size=${f.size}）`);
+          }
           const wp = await importWallpaperBytes(f.name, new Uint8Array(buf));
           imported.push(wp);
         } catch (e) {
           console.error(`[DragImport] failed for ${f.name}`, e);
+          failures.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
         }
+      }
+
+      // 全部失败时必须上抛：否则三个计数都是 0，上层不弹任何 toast，
+      // 用户只看到 loading 一闪而过，无法区分「成功」与「静默失败」
+      if (imported.length === 0 && failures.length > 0) {
+        throw new Error(failures.join("; "));
       }
 
       await Promise.all([get().fetchWallpapers(), get().refreshView()]);
@@ -316,10 +403,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
         console.error("[VideoThumbnail] batch failed", e),
       );
 
-      return { imported: imported.length, skipped, rejectedBySize };
-    } catch (e) {
-      console.error("[importByFiles]", e);
-      return { imported: 0, skipped, rejectedBySize };
+      return { imported: imported.length, skipped, rejectedBySize, cancelled: false };
     } finally {
       set({ loading: false });
     }

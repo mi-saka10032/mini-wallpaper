@@ -9,7 +9,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { toast } from "@/components/ui/toast";
 import DropOverlay from "@/components/wallpaper/DropOverlay";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { WallpaperCard } from "@/components/wallpaper/WallpaperCard";
@@ -17,6 +16,7 @@ import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/Wallpap
 import { TagEditorDialog } from "@/components/wallpaper/TagEditorDialog";
 import { SmartCollectionDialog } from "@/components/wallpaper/SmartCollectionDialog";
 import { useDropImport } from "@/hooks/useDropImport";
+import { useImportFeedback } from "@/hooks/useImportFeedback";
 import { useManageMode } from "@/hooks/useManageMode";
 import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
@@ -182,25 +182,36 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
   // 仅本地壁纸普通模式生效：非收藏夹 + 非管理模式 + 非排序模式 + 非加载中
   const dropEnabled = !isCollectionView && !manage.manageMode && !sort.sortMode && !search.loading;
 
+  // 两条拖拽通道共用同一套反馈（批量导入时 success 里的数量是唯一的进度参照）
+  const { notify: notifyImport, notifyError } = useImportFeedback();
+
   const handleDropImport = useCallback(
     async (files: File[]) => {
-      const result = await useWallpaperStore.getState().importByFiles(files);
-      if (result.imported > 0) {
-        toast.success(t("main.importedCount", { count: result.imported }));
-      }
-      if (result.skipped > 0) {
-        toast.info(t("main.skippedUnsupported", { count: result.skipped }));
-      }
-      if (result.rejectedBySize > 0) {
-        toast.warning(t("main.skippedBySize", { count: result.rejectedBySize }));
+      try {
+        notifyImport(await useWallpaperStore.getState().importByFiles(files));
+      } catch (e) {
+        notifyError(e);
       }
     },
-    [t],
+    [notifyImport, notifyError],
+  );
+
+  // Tauri 原生拖放：拿到路径，走与「点击导入」相同的后端链路
+  const handleDropImportPaths = useCallback(
+    async (paths: string[]) => {
+      try {
+        notifyImport(await useWallpaperStore.getState().importByPaths(paths));
+      } catch (e) {
+        notifyError(e);
+      }
+    },
+    [notifyImport, notifyError],
   );
 
   const { isDragOver, dragHandlers } = useDropImport({
     enabled: dropEnabled,
     onImport: handleDropImport,
+    onImportPaths: handleDropImportPaths,
   });
 
   // 排序模式下的网格内容（懒加载 SortableGrid，包含 @dnd-kit）

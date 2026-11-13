@@ -50,6 +50,49 @@ pub(super) fn register_subclass(hwnd: HWND, original_proc: isize) {
     }
 }
 
+/// 还原原始窗口过程并注销映射，必须与 [`register_subclass`] 成对调用
+///
+/// 顺序是「先还原 WndProc，再移除映射」，反过来会留下一个窗口期：子类化仍挂在
+/// 窗口上但映射已空，此间到达的消息在 [`subclass_wndproc`] 查不到原 proc，会被
+/// 丢给 DefWindowProcW，绕过 tao 自己的窗口过程。
+///
+/// 还原与移除各自解决不同问题：
+/// - 还原 WndProc —— 让后续的 WM_CLOSE / WM_DESTROY 正确回到 tao，窗口销毁
+///   并非瞬时完成（见 WindowManager::create_window 对销毁延迟的处理）。
+/// - 移除映射 —— HWND 被系统回收复用后，残留表项会让新窗口的消息 transmute
+///   成已失效的函数指针并调用，即野指针跳转；同时避免 map 随窗口重建无界增长。
+///
+/// 未注册过该 HWND（LegacyStrategy 不做子类化）时静默返回。
+pub(super) fn restore_and_unregister(hwnd: HWND) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWL_WNDPROC};
+
+    let hwnd_val = hwnd as isize;
+    let mut map = match subclass_map().lock() {
+        Ok(map) => map,
+        Err(e) => {
+            warn!("子类化注销失败（锁中毒）: hwnd=0x{:X}, err={}", hwnd_val, e);
+            return;
+        }
+    };
+
+    let Some(&original_proc) = map.get(&hwnd_val) else {
+        return;
+    };
+
+    // 持锁期间完成还原，确保不存在「已挂子类化但映射缺失」的中间态
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWL_WNDPROC, original_proc);
+    }
+    map.remove(&hwnd_val);
+
+    debug!(
+        "子类化已注销: hwnd=0x{:X}, orig_proc=0x{:X}, 剩余数量={}",
+        hwnd_val,
+        original_proc,
+        map.len()
+    );
+}
+
 /// 子类化窗口过程：拦截 WM_NCCALCSIZE，强制 NC 区域为 0
 pub(super) unsafe extern "system" fn subclass_wndproc(
     hwnd: HWND,

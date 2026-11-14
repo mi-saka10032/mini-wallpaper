@@ -72,7 +72,7 @@ impl MigrationTrait for Migration {
         // - 不指定 id，让数据库自增分配（老用户的 id=1 通常已被占用）
         // - WHERE NOT EXISTS 保证幂等：即使迁移被人为重跑也只插一次
         // - sort_order = -1 让内置收藏夹永远排在最前面
-        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = format!(
             "INSERT INTO collections (name, sort_order, created_at, updated_at, is_builtin) \
              SELECT '我喜欢', -1, '{now}', '{now}', 1 \

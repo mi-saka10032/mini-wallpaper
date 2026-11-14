@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { FolderOpen, Heart, Pencil, Plus, Sparkles, Star, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -49,7 +49,6 @@ interface SidebarProps {
 const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
   const { t } = useTranslation();
   const collections = useCollectionStore((s) => s.collections);
-  const fetchCollections = useCollectionStore((s) => s.fetchCollections);
   const createCollection = useCollectionStore((s) => s.createCollection);
   const renameCollection = useCollectionStore((s) => s.renameCollection);
   const deleteCollection = useCollectionStore((s) => s.deleteCollection);
@@ -77,9 +76,8 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
     setSmartDialogOpen(true);
   }, []);
 
-  useEffect(() => {
-    fetchCollections();
-  }, [fetchCollections]);
+  // 收藏夹列表由 App 的启动编排统一拉取；创建/删除/重命名后各自的 action
+  // 仍会刷新，这里不再重复发起一次 getAll。
 
   // 打开新建 Dialog
   const openCreateDialog = useCallback(() => {

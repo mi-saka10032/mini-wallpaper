@@ -93,9 +93,14 @@ fn hide_main_on_autostart(app: &tauri::App) -> tauri::Result<()> {
 }
 
 /// 快捷键要读数据库键位，并派发到 Scheduler，所以放在两者注册之后。
+///
+/// 用 spawn 而非 block_on：注册所需的 AppContext / Scheduler / 快捷键 plugin
+/// 在调用本函数时已全部就绪，后续 setup 步骤也不依赖「键位已注册」，
+/// 因此无需阻塞启动。代价是进入事件循环后的极短窗口内按键可能无响应，
+/// 注册完成后即恢复；单个键位失败仍由 register_default_shortcuts 内部 warn。
 fn register_shortcuts(app: &tauri::App) {
     let app_handle = app.handle().clone();
-    tauri::async_runtime::block_on(async move {
+    tauri::async_runtime::spawn(async move {
         global_shortcut::register_default_shortcuts(&app_handle).await;
     });
 }

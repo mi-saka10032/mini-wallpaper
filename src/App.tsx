@@ -9,6 +9,7 @@ import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useFavoritesStore } from "@/stores/favoritesStore";
+import { useCollectionStore } from "@/stores/collectionStore";
 import { listen, EVENTS } from "@/api/event";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
 import { useWebGuard } from "@/hooks/useWebGuard";
@@ -38,6 +39,7 @@ export const AppShell: React.FC = () => {
   const fetchSettings = useSettingStore((s) => s.fetchSettings);
   const fetchWallpapers = useWallpaperStore((s) => s.fetchWallpapers);
   const initMonitors = useMonitorConfigStore((s) => s.init);
+  const fetchCollections = useCollectionStore((s) => s.fetchCollections);
   const initFavorites = useFavoritesStore((s) => s.init);
 
   useEffect(() => {
@@ -47,9 +49,11 @@ export const AppShell: React.FC = () => {
           fetchSettings(),
           fetchWallpapers(),
           initMonitors(),
-          initFavorites(),
+          fetchCollections(),
           invoke(COMMANDS.INIT_FULLSCREEN_DETECTION),
         ]);
+        // 依赖上面已就绪的 collections，复用同一次拉取来定位内置收藏夹
+        await initFavorites();
         // 初始化完成后立即同步语言，避免 App 挂载时出现语言闪烁
         const lang = useSettingStore.getState().settings[SETTING_KEYS.LANGUAGE];
         if (lang) changeLanguage(lang);
@@ -60,7 +64,7 @@ export const AppShell: React.FC = () => {
       }
     };
     init();
-  }, [fetchSettings, fetchWallpapers, initMonitors, initFavorites]);
+  }, [fetchSettings, fetchWallpapers, initMonitors, fetchCollections, initFavorites]);
 
   // 互斥渲染：Loading 退出后才挂载 App，避免 App 加载抢占主线程导致动画卡顿
   if (!loadingExited) {

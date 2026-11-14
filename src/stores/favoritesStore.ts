@@ -4,6 +4,7 @@ import {
   getCollectionWallpapers,
   toggleFavorite as toggleFavoriteApi,
 } from "@/api/collection";
+import { useCollectionStore } from "@/stores/collectionStore";
 
 /**
  * 收藏状态 store
@@ -38,7 +39,12 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
 
   init: async () => {
     try {
-      const collections = await fetchAllCollections();
+      // App 的启动编排会先拉好收藏夹列表并填入 collectionStore，这里直接复用，
+      // 避免启动期同一个 getAll 被调用两次。单独调用本方法时兜底自行拉取。
+      let collections = useCollectionStore.getState().collections;
+      if (collections.length === 0) {
+        collections = await fetchAllCollections();
+      }
       const builtin = collections.find((c) => c.is_builtin === 1);
       if (!builtin) return;
       const wallpapers = await getCollectionWallpapers(builtin.id);

@@ -333,7 +333,6 @@ const TrashView: React.FC = () => {
             items={trashed}
             getKey={(wp) => wp.id}
             className="h-full p-4"
-            renderVersion={selectedCount}
             renderItem={(wp) => (
               <TrashCard
                 wallpaper={wp}

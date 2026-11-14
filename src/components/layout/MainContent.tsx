@@ -149,15 +149,6 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
   const wallpapersRef = useRef(wallpapers);
   wallpapersRef.current = wallpapers;
 
-  // renderVersion：selectedIds 变化时递增，驱动 VirtualGrid 虚拟行重渲染
-  const renderVersionRef = useRef(0);
-  const prevSelectedIdsRef = useRef(manage.selectedIds);
-  if (prevSelectedIdsRef.current !== manage.selectedIds) {
-    prevSelectedIdsRef.current = manage.selectedIds;
-    renderVersionRef.current += 1;
-  }
-  const renderVersion = renderVersionRef.current;
-
   // ===== 稳定的单个删除回调（避免内联函数导致 WallpaperCard memo 失效） =====
   const handleSingleDelete = useCallback(
     (id: number) => manage.handleDeleteRequest([id]),
@@ -239,7 +230,6 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
       getKey={(wp) => wp.id}
       className="h-full p-4"
       forceDisable={false}
-      renderVersion={renderVersion}
       renderItem={(wp, index) => (
         <WallpaperCard
           wallpaper={wp}

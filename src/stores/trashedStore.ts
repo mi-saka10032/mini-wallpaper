@@ -45,6 +45,9 @@ export const useTrashedStore = create<TrashedState>((set, get) => ({
       const list = await fetchTrashedWallpapers();
       set({ trashed: list });
     } catch (e) {
+      // 尽力刷新：invoke 层已统一弹错误提示。这里不上抛，是因为本方法常被与
+      // refresh()/fetchWallpapers() 并发调用，刷新失败不该把「删除已成功」的
+      // action 整体判为失败；它返回 void，也不存在调用方误以为成功的问题。
       console.error("[fetchTrashed]", e);
     } finally {
       set({ trashLoading: false });
@@ -52,49 +55,34 @@ export const useTrashedStore = create<TrashedState>((set, get) => ({
   },
 
   restoreWallpapers: async (ids: number[]) => {
-    try {
-      const count = await restoreWallpaperBatch(ids);
-      console.log(`[Trash] ${count} wallpapers restored`);
-      // 恢复影响两侧：回收站减少、正常壁纸增加。
-      // 操作发生在回收站视图内（activeId 为负），refreshView 会 early return，
-      // 所以必须显式调 fetchWallpapers 更新基础列表；
-      // refreshView 仍然要调，覆盖「用户在别处恢复」的场景（智能夹是实时求值的，
-      // 恢复的壁纸可能重新命中规则）。
-      await Promise.all([
-        get().fetchTrashed(),
-        useWallpaperStore.getState().fetchWallpapers(),
-        useWallpaperStore.getState().refreshView(),
-      ]);
-      return count;
-    } catch (e) {
-      console.error("[restoreWallpapers]", e);
-      return 0;
-    }
+    const count = await restoreWallpaperBatch(ids);
+    console.log(`[Trash] ${count} wallpapers restored`);
+    // 恢复影响两侧：回收站减少、正常壁纸增加。
+    // 操作发生在回收站视图内（activeId 为负），refreshView 会 early return，
+    // 所以必须显式调 fetchWallpapers 更新基础列表；
+    // refreshView 仍然要调，覆盖「用户在别处恢复」的场景（智能夹是实时求值的，
+    // 恢复的壁纸可能重新命中规则）。
+    await Promise.all([
+      get().fetchTrashed(),
+      useWallpaperStore.getState().fetchWallpapers(),
+      useWallpaperStore.getState().refreshView(),
+    ]);
+    return count;
   },
 
   purgeWallpapers: async (ids: number[]) => {
-    try {
-      const count = await purgeWallpaperBatch(ids);
-      console.log(`[Trash] ${count} wallpapers permanently deleted`);
-      // 彻底删除会级联清掉收藏夹关系，而 favoriteIds 只在启动时初始化，
-      // 不重取会残留已删除的 id（SQLite 复用 id 时会让新壁纸错亮红心）
-      await Promise.all([get().fetchTrashed(), useFavoritesStore.getState().refresh()]);
-      return count;
-    } catch (e) {
-      console.error("[purgeWallpapers]", e);
-      return 0;
-    }
+    const count = await purgeWallpaperBatch(ids);
+    console.log(`[Trash] ${count} wallpapers permanently deleted`);
+    // 彻底删除会级联清掉收藏夹关系，而 favoriteIds 只在启动时初始化，
+    // 不重取会残留已删除的 id（SQLite 复用 id 时会让新壁纸错亮红心）
+    await Promise.all([get().fetchTrashed(), useFavoritesStore.getState().refresh()]);
+    return count;
   },
 
   emptyTrash: async () => {
-    try {
-      const count = await emptyTrashApi();
-      console.log(`[Trash] emptied, ${count} wallpapers permanently deleted`);
-      await Promise.all([get().fetchTrashed(), useFavoritesStore.getState().refresh()]);
-      return count;
-    } catch (e) {
-      console.error("[emptyTrash]", e);
-      return 0;
-    }
+    const count = await emptyTrashApi();
+    console.log(`[Trash] emptied, ${count} wallpapers permanently deleted`);
+    await Promise.all([get().fetchTrashed(), useFavoritesStore.getState().refresh()]);
+    return count;
   },
 }));

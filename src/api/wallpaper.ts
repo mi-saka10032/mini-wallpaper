@@ -2,9 +2,13 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { COMMANDS, type Wallpaper } from "./config";
 import { invoke } from "./invoke";
 
-/** 获取支持的壁纸文件扩展名列表 */
+/**
+ * 获取支持的壁纸文件扩展名列表。
+ * 静默错误：三个导入 action 会把异常上抛给各自的反馈层，由那边统一提示，
+ * 避免 invoke 层与业务层重复弹 toast。
+ */
 export async function getSupportedExtensions(): Promise<string[]> {
-  return invoke(COMMANDS.GET_SUPPORTED_EXTENSIONS);
+  return invoke(COMMANDS.GET_SUPPORTED_EXTENSIONS, { silent: true });
 }
 
 /** 获取所有壁纸 */

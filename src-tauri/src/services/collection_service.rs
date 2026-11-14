@@ -374,6 +374,11 @@ pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Re
 /// 判断某壁纸是否已在指定收藏夹中
 ///
 /// 用于 ToggleFavorite / 红心按钮的"切换"语义：先探测归属，再决定 add / remove。
+///
+/// 刻意按「关联表有无记录」判断，不加 `active_member_filter`：若把已软删除的
+/// 壁纸判为未收藏，切换就会走 add 分支，而 `add_wallpapers` 有 active 守卫，
+/// 会直接报 "not available (missing or in trash)"；走 remove 反而能顺手清理
+/// 掉残留关系。真正在意软删除的是列表查询，不是这里的归属探测。
 pub async fn is_wallpaper_in_collection(
     db: &DatabaseConnection,
     collection_id: i32,

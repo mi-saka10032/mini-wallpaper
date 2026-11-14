@@ -153,19 +153,18 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   viewWallpapers: [],
   viewLoading: false,
 
-  /** 获取支持的扩展名（带缓存，仅首次调用时请求后端） */
+  /**
+   * 获取支持的扩展名（带缓存，仅首次调用时请求后端）。
+   * 失败直接上抛，交给三个导入 action 各自的反馈层提示；返回空数组会让它们
+   * 静默返回「没有可导入的文件」，与真实错误相互矛盾。
+   */
   fetchSupportedExtensions: async () => {
     const cached = get().supportedExtensions;
     if (cached.length > 0) return cached;
 
-    try {
-      const extensions = await fetchSupportedExtensions();
-      set({ supportedExtensions: extensions });
-      return extensions;
-    } catch (e) {
-      console.error("[fetchSupportedExtensions]", e);
-      return [];
-    }
+    const extensions = await fetchSupportedExtensions();
+    set({ supportedExtensions: extensions });
+    return extensions;
   },
 
   fetchWallpapers: async () => {

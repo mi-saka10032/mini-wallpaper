@@ -221,11 +221,18 @@ const TrashView: React.FC = () => {
   const handleRestore = useCallback(
     async (ids: number[]) => {
       if (ids.length === 0) return;
-      const count = await restoreWallpapers(ids);
-      if (count > 0) {
-        toast.success(t("trash.restoredCount", { count }));
+      try {
+        const count = await restoreWallpapers(ids);
+        if (count > 0) {
+          toast.success(t("trash.restoredCount", { count }));
+        }
+      } catch (e) {
+        // invoke 层已统一弹错误提示，这里只保证不产生 unhandled rejection，
+        // 且 finally 仍会清掉选中态
+        console.error("[handleRestore]", e);
+      } finally {
+        clearSelection();
       }
-      clearSelection();
     },
     [restoreWallpapers, clearSelection, t],
   );
@@ -233,13 +240,18 @@ const TrashView: React.FC = () => {
   const handlePurgeConfirm = useCallback(async () => {
     if (purgeTarget === null) return;
 
-    const count = purgeTarget === "all" ? await emptyTrash() : await purgeWallpapers(purgeTarget);
-
-    if (count > 0) {
-      toast.success(t("trash.purgedCount", { count }));
+    try {
+      const count = purgeTarget === "all" ? await emptyTrash() : await purgeWallpapers(purgeTarget);
+      if (count > 0) {
+        toast.success(t("trash.purgedCount", { count }));
+      }
+    } catch (e) {
+      console.error("[handlePurgeConfirm]", e);
+    } finally {
+      // 失败也要收起对话框并清选中态，否则会卡在确认状态且无法再次操作
+      setPurgeTarget(null);
+      clearSelection();
     }
-    setPurgeTarget(null);
-    clearSelection();
   }, [purgeTarget, emptyTrash, purgeWallpapers, clearSelection, t]);
 
   const selectedCount = selectedIds.size;

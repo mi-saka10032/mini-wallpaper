@@ -56,8 +56,6 @@ export interface VirtualGridProps<T> {
   forceDisable?: boolean;
   /** 容器 className */
   className?: string;
-  /** 当外部状态（如选中态）变化时递增此值，强制虚拟行重渲染 */
-  renderVersion?: number;
 }
 
 // ============ 虚拟行组件（memo 化避免滚动时不必要的重渲染） ============
@@ -70,8 +68,6 @@ interface VirtualRowProps<T> {
   renderItem: (item: T, index: number) => ReactNode;
   style: CSSProperties;
   gap: number;
-  /** 用于强制刷新的版本号 */
-  renderVersion?: number;
 }
 
 function VirtualRowInner<T>({
@@ -103,8 +99,9 @@ function VirtualRowInner<T>({
 
 /** 自定义比较函数：避免 rowItems 因 slice 产生新引用而导致 memo 失效 */
 function virtualRowAreEqual<T>(prev: VirtualRowProps<T>, next: VirtualRowProps<T>): boolean {
-  // renderVersion 变化时强制重渲染
-  if (prev.renderVersion !== next.renderVersion) return false;
+  // renderItem 是渲染闭包的身份：引用变了说明它捕获的状态（选中态、模式等）变了，
+  // 必须重渲染该行，否则缓存下来的 ReactNode 会停留在旧闭包上
+  if (prev.renderItem !== next.renderItem) return false;
   if (prev.cols !== next.cols || prev.rowIndex !== next.rowIndex || prev.gap !== next.gap) {
     return false;
   }
@@ -135,20 +132,9 @@ function VirtualGrid<T>({
   renderItem,
   forceDisable = false,
   className,
-  renderVersion,
 }: VirtualGridProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
-
-  // 用 ref 持有 renderItem，避免内联函数引用变化导致 VirtualRow memo 失效
-  const renderItemRef = useRef(renderItem);
-  renderItemRef.current = renderItem;
-
-  // 稳定引用的 renderItem wrapper
-  const stableRenderItem = useMemo(
-    () => (item: T, index: number) => renderItemRef.current(item, index),
-    [],
-  );
 
   // 监听容器宽度变化
   useEffect(() => {
@@ -210,7 +196,7 @@ function VirtualGrid<T>({
           style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
         >
           {items.map((item, index) => (
-            <div key={getKey(item)}>{stableRenderItem(item, index)}</div>
+            <div key={getKey(item)}>{renderItem(item, index)}</div>
           ))}
         </div>
       </div>
@@ -239,9 +225,8 @@ function VirtualGrid<T>({
               cols={cols}
               rowIndex={virtualRow.index}
               getKey={getKey}
-              renderItem={stableRenderItem}
+              renderItem={renderItem}
               gap={GAP}
-              renderVersion={renderVersion}
               style={{
                 position: "absolute",
                 top: 0,

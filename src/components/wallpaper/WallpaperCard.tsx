@@ -1,5 +1,5 @@
 import { Check, GripVertical, Heart, Monitor } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { memo, startTransition, useCallback, useMemo, useOptimistic } from "react";
 import { useTranslation } from "react-i18next";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -50,15 +50,29 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   const isFavorite = useFavoritesStore((s) => s.favoriteIds.has(wallpaper.id));
   const toggleFavorite = useFavoritesStore((s) => s.toggle);
 
+  // 红心点击走乐观更新：后端 toggle 完成后 store 会经 applyChange / 事件回流
+  // 更新，useOptimistic 自动回落到真实值；失败则回落到旧值，无需手动回滚。
+  const [optimisticFavorite, setOptimisticFavorite] = useOptimistic(
+    isFavorite,
+    (_current: boolean, next: boolean) => next,
+  );
+
   // 反查该壁纸正被哪些 active 显示器使用（多显示器为默认场景，单显示器同样返回该显示器）
   const monitorsInUse = useMonitorsUsingWallpaper(wallpaper.id);
 
   const handleToggleFavorite = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      toggleFavorite(wallpaper.id).catch((err) => console.error("[toggleFavorite]", err));
+      startTransition(async () => {
+        setOptimisticFavorite(!optimisticFavorite);
+        try {
+          await toggleFavorite(wallpaper.id);
+        } catch (err) {
+          console.error("[toggleFavorite]", err);
+        }
+      });
     },
-    [toggleFavorite, wallpaper.id],
+    [optimisticFavorite, toggleFavorite, wallpaper.id],
   );
 
   // 右键菜单处理：仅在卡片范围内触发
@@ -93,18 +107,18 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
       <button
         type="button"
         onClick={handleToggleFavorite}
-        title={isFavorite ? t("main.unfavorite") : t("main.favorite")}
+        title={optimisticFavorite ? t("main.unfavorite") : t("main.favorite")}
         className={cn(
           "absolute left-1.5 top-1.5 z-20 flex size-6 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm transition-[background-color,transform] hover:bg-black/60 hover:scale-110 active:scale-95",
-          isFavorite
+          optimisticFavorite
             ? "opacity-100 text-red-500"
             : "text-white/90 opacity-0 group-hover:opacity-100",
         )}
       >
-        <Heart className={cn("size-3.5", isFavorite && "fill-current")} />
+        <Heart className={cn("size-3.5", optimisticFavorite && "fill-current")} />
       </button>
     );
-  }, [manageMode, selected, isFavorite, handleToggleFavorite, t]);
+  }, [manageMode, selected, optimisticFavorite, handleToggleFavorite, t]);
 
   // 右下角叠加层：拖拽手柄
   const overlayBottomRight = useMemo(() => {

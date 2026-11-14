@@ -178,7 +178,14 @@ fn prepare_wallpaper_files(
 
     // 1. 检查文件存在
     if !source.exists() {
-        anyhow::bail!("File not found: {}", source_path);
+        // 完整路径只进日志：CommandError 会把 anyhow 消息原样序列化给前端 toast，
+        // 直接拼 source_path 会把用户的磁盘目录结构暴露在界面上。
+        warn!("[Import] 源文件不存在: {}", source_path);
+        let name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        anyhow::bail!("File not found: {}", name);
     }
 
     // 2. 检查文件类型
@@ -342,7 +349,12 @@ pub async fn import_batch(
             Ok(model) => models.push(model),
             Err((path, e)) => {
                 warn!("[Import Error] {}: {}", path, e);
-                errors.push(format!("{}: {}", path, e));
+                // 同上：对外只带文件名，完整路径留在日志里
+                let name = Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                errors.push(format!("{}: {}", name, e));
             }
         }
     }

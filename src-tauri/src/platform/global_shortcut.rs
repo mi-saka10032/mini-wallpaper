@@ -109,7 +109,7 @@ const SHORTCUT_THROTTLE: Duration = Duration::from_millis(500);
 /// 每个快捷键上次实际派发的时间戳（进程级）
 ///
 /// key 用 `Shortcut::id()`（稳定 u32），使节流判断得以前置到
-/// `resolve_action`（含一次 DB 查询）之前——被节流丢弃的重复按键
+/// `resolve_action`（需读 DB 反查键位）之前——被节流丢弃的重复按键
 /// 因此不再付出反查开销。
 fn last_fire_map() -> &'static StdMutex<HashMap<u32, Instant>> {
     static MAP: OnceLock<StdMutex<HashMap<u32, Instant>>> = OnceLock::new();
@@ -150,23 +150,23 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
         return;
     }
 
-    // 反查命中的 Action
-    let action = match resolve_action(app, shortcut) {
-        Some(a) => a,
-        None => {
-            warn!(
-                "[GlobalShortcut] 未识别的快捷键: {:?}（已注册但未映射）",
-                shortcut
-            );
-            return;
-        }
-    };
-
-    info!("[GlobalShortcut] 触发动作: {:?}", action);
-
-    // 异步派发，避免阻塞 plugin 事件线程
+    // 反查与派发都放进异步任务：plugin handler 是同步 Fn，不能直接 await，
+    // 但可以在这里 spawn，无需用 block_on 把异步 DB 查询硬塞回同步上下文。
     let app_handle = app.clone();
+    let pressed = *shortcut; // Shortcut 是 Copy，可安全移入 'static 任务
     tauri::async_runtime::spawn(async move {
+        let action = match resolve_action(&app_handle, &pressed).await {
+            Some(a) => a,
+            None => {
+                warn!(
+                    "[GlobalShortcut] 未识别的快捷键: {:?}（已注册但未映射）",
+                    pressed
+                );
+                return;
+            }
+        };
+        info!("[GlobalShortcut] 触发动作: {:?}", action);
+
         let scheduler_state = match app_handle.try_state::<Arc<Mutex<Scheduler>>>() {
             Some(s) => s,
             None => {
@@ -182,25 +182,24 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
 
 /// 在已注册键位中反查 Action
 ///
-/// 注意：handler 是同步上下文，这里需要 `block_on` 一次 DB 查询。
-/// 由于 setting 表只有 ~10 行 + sqlite，开销可忽略；后续若性能敏感
-/// 可改造为启动期一次性构建 `HashMap<Shortcut, Action>` 缓存。
-fn resolve_action(app: &AppHandle, shortcut: &Shortcut) -> Option<Action> {
+/// 由 `handle_shortcut` 的异步任务 await 调用，因此可以直接用 async DB 查询，
+/// 不必在同步的 plugin handler 里 `block_on`（后者若在 tokio runtime 线程上
+/// 执行会 panic）。键位必须与注册时一致，所以同样经 `current_accelerator`
+/// 读取 DB 中的自定义值并以默认键位兜底。
+async fn resolve_action(app: &AppHandle, shortcut: &Shortcut) -> Option<Action> {
     let ctx = app.try_state::<AppContext>()?;
     let app_ctx: &AppContext = ctx.inner();
     let db = app_ctx.db.clone();
 
-    tauri::async_runtime::block_on(async move {
-        for def in DEFAULTS {
-            let accelerator = current_accelerator(&db, def).await;
-            if let Ok(parsed) = accelerator.parse::<Shortcut>() {
-                if &parsed == shortcut {
-                    return Some(def.action.clone());
-                }
+    for def in DEFAULTS {
+        let accelerator = current_accelerator(&db, def).await;
+        if let Ok(parsed) = accelerator.parse::<Shortcut>() {
+            if &parsed == shortcut {
+                return Some(def.action.clone());
             }
         }
-        None
-    })
+    }
+    None
 }
 
 // ==================== Setup 阶段批量注册 ====================

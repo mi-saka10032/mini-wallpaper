@@ -13,7 +13,7 @@
 //! 查询不进裸字符串。前端在保存规则前调用 [`resolve_or_create_many`]
 //! 把用户输入的标签名批量换成 id。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use sea_orm::prelude::Expr;
@@ -45,28 +45,38 @@ pub async fn get_all_with_count(db: &DatabaseConnection) -> Result<Vec<TagWithCo
         .all(db)
         .await?;
 
+    // 一次性按 tag_id 聚合引用数，避免每个标签各跑一次 COUNT 的 N+1 查询。
+    // 排除回收站内的壁纸：wallpaper_tags 关联行在软删除时保留（以便恢复后
+    // 标签不丢），若不显式过滤计数会虚高。
+    let counts: Vec<(i32, i64)> = wallpaper_tag::Entity::find()
+        .select_only()
+        .column(wallpaper_tag::Column::TagId)
+        .column_as(
+            Expr::col((wallpaper_tag::Entity, wallpaper_tag::Column::WallpaperId)).count(),
+            "cnt",
+        )
+        .filter(
+            wallpaper_tag::Column::WallpaperId.in_subquery(
+                Query::select()
+                    .column(wallpaper::Column::Id)
+                    .from(wallpaper::Entity)
+                    .and_where(wallpaper::Column::DeletedAt.is_null())
+                    .to_owned(),
+            ),
+        )
+        .group_by(wallpaper_tag::Column::TagId)
+        .into_tuple()
+        .all(db)
+        .await?;
+    let count_by_tag: HashMap<i32, i64> = counts.into_iter().collect();
+
     let mut out = Vec::with_capacity(tags.len());
     for t in tags {
-        // 排除回收站内的壁纸：wallpaper_tags 关联行在软删除时保留（以便恢复后
-        // 标签不丢），故计数必须显式过滤，否则标签数会虚高。
-        let count = wallpaper_tag::Entity::find()
-            .filter(wallpaper_tag::Column::TagId.eq(t.id))
-            .filter(
-                wallpaper_tag::Column::WallpaperId.in_subquery(
-                    sea_orm::sea_query::Query::select()
-                        .column(wallpaper::Column::Id)
-                        .from(wallpaper::Entity)
-                        .and_where(wallpaper::Column::DeletedAt.is_null())
-                        .to_owned(),
-                ),
-            )
-            .count(db)
-            .await? as i64;
         out.push(TagWithCount {
             id: t.id,
             name: t.name,
             created_at: t.created_at,
-            wallpaper_count: count,
+            wallpaper_count: count_by_tag.get(&t.id).copied().unwrap_or(0),
         });
     }
     // 引用多的排前面，其次按 name

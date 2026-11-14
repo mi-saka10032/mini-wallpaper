@@ -37,7 +37,7 @@ pub async fn find_builtin(db: &DatabaseConnection) -> Result<Option<collection::
 
 /// 创建收藏夹
 pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection::Model> {
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = collection::ActiveModel {
         name: Set(name),
         sort_order: Set(0),
@@ -66,7 +66,7 @@ pub async fn create_smart(
     // 校验规则合法性（非法直接拒绝，不落库）
     crate::services::smart_rule::SmartRule::parse_and_validate(&rule_json)?;
 
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = collection::ActiveModel {
         name: Set(name),
         sort_order: Set(0),
@@ -104,7 +104,7 @@ pub async fn update_smart(
 
     crate::services::smart_rule::SmartRule::parse_and_validate(&rule_json)?;
 
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut model = collection::ActiveModel {
         id: Set(id),
         rule_json: Set(Some(rule_json)),
@@ -139,7 +139,7 @@ pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<co
         }
     }
 
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = collection::ActiveModel {
         id: Set(id),
         name: Set(name),
@@ -272,7 +272,7 @@ pub async fn add_wallpapers(
     }
 
     let mut count = 0u32;
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     // 查询已有的关联，避免重复插入
     let existing = collection_wallpaper::Entity::find()

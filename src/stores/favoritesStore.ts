@@ -26,8 +26,6 @@ interface FavoritesState {
    * 局部 patch 容易漏（彻底删除要清、软删除恢复后又要留），所以直接重取权威数据。
    */
   refresh: () => Promise<void>;
-  /** 判断某壁纸是否已收藏 */
-  isFavorite: (wallpaperId: number) => boolean;
   /** 切换收藏状态（调用后端，返回切换后的状态） */
   toggle: (wallpaperId: number) => Promise<boolean>;
   /** 本地应用一次收藏状态变更（供事件回流复用，不触发后端） */
@@ -67,8 +65,6 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
       console.error("[favoritesStore.refresh]", e);
     }
   },
-
-  isFavorite: (wallpaperId: number) => get().favoriteIds.has(wallpaperId),
 
   toggle: async (wallpaperId: number) => {
     const favorited = await toggleFavoriteApi(wallpaperId);

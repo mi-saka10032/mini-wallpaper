@@ -310,11 +310,18 @@ pub use imp_stub::{
 /// - **Independent 模式动作派发**：决定全局快捷键/托盘动作作用于哪个 `monitor_config`
 /// - **托盘菜单 active 标记**：用于在菜单中标注"当前活跃屏"
 ///
-/// ## 探测策略（三级 fallback）
+/// ## 探测策略（两级 fallback）
 ///
-/// 1. 优先使用 `GetForegroundWindow` 所在显示器（用户视觉焦点最准确的来源）
-/// 2. 若前台窗口不可用，退化为 `GetCursorPos` 鼠标所在显示器
-/// 3. 若鼠标位置也不可用，最终回落到主显示器
+/// 1. `GetCursorPos` 鼠标所在显示器
+/// 2. 鼠标位置不可用时回落到主显示器
+///
+/// ## 为什么不用前台窗口
+///
+/// 壁纸窗口是嵌入桌面的子窗口（`always_on_bottom` + SetParent 到 WorkerW），
+/// 永远不会成为前台窗口；用户在副屏悬停/操作壁纸时，前台仍是资源管理器、
+/// 任务栏或 Progman/WorkerW（覆盖整个虚拟桌面，锚点在主屏）。用
+/// `GetForegroundWindow` 解析会恒命中主屏，导致副屏壁纸无法被操作。
+/// 鼠标位置是壁纸交互中唯一始终跟随用户意图的信号，故只用它做判定。
 ///
 /// ## device_name 一致性
 ///
@@ -324,26 +331,17 @@ pub use imp_stub::{
 ///
 /// ## 设计说明
 ///
-/// - 第 1 级**不排除** Shell_TrayWnd / Progman / WorkerW 等系统窗口类，
-///   因为用户聚焦在桌面/任务栏时，提示仍然应该弹在该屏幕。
-/// - 返回 `None` 仅在所有 fallback 路径都失败的极端情况下出现，
+/// - 返回 `None` 仅在 `primary_monitor_info()` 也失败的极端情况下出现，
 ///   调用方通常应当再次 fallback 到"广播所有 active 显示器"或忽略本次操作。
 /// - 非 Windows 平台始终返回 `None`（底层原子能力均为占位）。
 pub fn active_monitor() -> Option<MonitorRect> {
-    // ---- 第 1 级：前台窗口所在显示器（最贴近用户视觉焦点）----
-    if let Some(hwnd) = foreground_window() {
-        if let Some(info) = monitor_info_from_window(hwnd) {
-            return Some(info);
-        }
-    }
-
-    // ---- 第 2 级：鼠标所在显示器 ----
+    // ---- 第 1 级：鼠标所在显示器 ----
     if let Some((x, y)) = cursor_pos() {
         if let Some(info) = monitor_info_from_point(x, y) {
             return Some(info);
         }
     }
 
-    // ---- 第 3 级：主显示器兜底 ----
+    // ---- 第 2 级：主显示器兜底 ----
     primary_monitor_info()
 }

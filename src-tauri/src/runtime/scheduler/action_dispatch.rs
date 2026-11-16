@@ -27,7 +27,7 @@
 //! ## 目标显示器解析规则
 //!
 //! - **independent**：仅作用于"用户当前活跃显示器"对应的 active config
-//!   - 通过 [`monitor_geometry::active_monitor()`] 探测 device_name
+//!   - 通过 [`monitor_geometry::active_monitor()`] 探测 device_name（鼠标所在屏 → 主屏兜底）
 //!   - 与 `monitor_configs.monitor_id` 字符串相等比较命中
 //!   - 命中失败时静默放弃 + warn（不广播，避免误触发其它屏幕）
 //! - **mirror / extend**：作用于第一个 active config（语义同

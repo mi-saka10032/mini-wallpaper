@@ -23,7 +23,6 @@ mod setting_effects;
 mod task_lifecycle;
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
@@ -49,13 +48,6 @@ pub struct Scheduler {
     pub(super) app: tauri::AppHandle,
     /// key -> JoinHandle 映射
     pub(super) tasks: HashMap<String, JoinHandle<()>>,
-    /// 已暂停轮播的显示器集合（monitor_id），仅运行时态，不持久化
-    ///
-    /// 当 `monitor_id` 在该集合内时：
-    /// - 轮播定时器被显式 stop
-    /// - `start_all_carousel_timers` / `manage_carousel_timer` 跳过该 monitor
-    /// - 用户再次触发 TogglePause 时移除 + 通过常规编排恢复
-    pub(super) paused_monitors: HashSet<String>,
 }
 
 impl Scheduler {
@@ -64,7 +56,6 @@ impl Scheduler {
         Self {
             app,
             tasks: HashMap::new(),
-            paused_monitors: HashSet::new(),
         }
     }
 

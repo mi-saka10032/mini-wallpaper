@@ -259,7 +259,7 @@ impl ToastManager {
     /// ## 为什么不能用 `primary_monitor()`
     /// 多屏场景下 Toast 必须弹在用户正在看的那块屏，否则用户在副屏操作
     /// prev/next 时，提示会跑到主屏而完全看不到。这里复用
-    /// `monitor_geometry::active_monitor()`（前台窗口 → 鼠标 → 主屏三级 fallback），
+    /// `monitor_geometry::active_monitor()`（鼠标所在屏 → 主屏兜底），
     /// 与 `action_dispatch` 解析"动作作用于哪块屏"的口径保持一致，
     /// 保证"哪块屏换了壁纸"与"提示弹在哪块屏"始终同屏。
     ///

@@ -6,16 +6,10 @@ import { reorderWallpapers } from "@/api/collectionWallpaper";
 export interface UseSortModeOptions {
   wallpapers: Wallpaper[];
   collectionId: number | null;
-  onCollectionChanged?: () => void;
   onManageModeChange?: (active: boolean) => void;
 }
 
-export function useSortMode({
-  wallpapers,
-  collectionId,
-  onCollectionChanged,
-  onManageModeChange,
-}: UseSortModeOptions) {
+export function useSortMode({ wallpapers, collectionId, onManageModeChange }: UseSortModeOptions) {
   const [sortMode, setSortMode] = useState(false);
   const [localOrder, setLocalOrder] = useState<Wallpaper[] | null>(null);
   const [orderDirty, setOrderDirty] = useState(false);
@@ -34,7 +28,6 @@ export function useSortMode({
           collectionId,
           localOrder.map((w) => w.id),
         );
-        onCollectionChanged?.();
       } catch (e) {
         console.error("[exitSortMode]", e);
       }
@@ -43,7 +36,7 @@ export function useSortMode({
     setLocalOrder(null);
     setOrderDirty(false);
     onManageModeChange?.(false);
-  }, [collectionId, orderDirty, localOrder, onCollectionChanged, onManageModeChange]);
+  }, [collectionId, orderDirty, localOrder, onManageModeChange]);
 
   const cancelSortMode = useCallback(() => {
     setSortMode(false);

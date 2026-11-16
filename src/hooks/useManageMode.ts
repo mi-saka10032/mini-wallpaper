@@ -6,14 +6,12 @@ import { addWallpapers, removeWallpapers } from "@/api/collectionWallpaper";
 export interface UseManageModeOptions {
   isCollectionView: boolean;
   collectionId: number | null;
-  onCollectionChanged?: () => void;
   onManageModeChange?: (active: boolean) => void;
 }
 
 export function useManageMode({
   isCollectionView,
   collectionId,
-  onCollectionChanged,
   onManageModeChange,
 }: UseManageModeOptions) {
   const deleteWallpapers = useWallpaperStore((s) => s.deleteWallpapers);
@@ -66,12 +64,9 @@ export function useManageMode({
     try {
       if (isCollectionView && collectionId !== null && pendingRemovalsRef.current.length > 0) {
         await removeWallpapers(collectionId, pendingRemovalsRef.current);
-        onCollectionChanged?.();
       }
       if (!isCollectionView && pendingDeletionsRef.current.length > 0) {
         await deleteWallpapers(pendingDeletionsRef.current);
-        // 与 handleDeleteConfirm 同理：软删除影响收藏夹命中集，需刷新当前视图
-        onCollectionChanged?.();
       }
       pendingRemovalsRef.current = [];
       pendingDeletionsRef.current = [];
@@ -92,7 +87,6 @@ export function useManageMode({
     isCollectionView,
     collectionId,
     deleteWallpapers,
-    onCollectionChanged,
     onManageModeChange,
     beginSubmit,
     endSubmit,
@@ -154,12 +148,8 @@ export function useManageMode({
     try {
       if (isCollectionView && collectionId !== null) {
         await removeWallpapers(collectionId, ids);
-        onCollectionChanged?.();
       } else {
         await deleteWallpapers(ids);
-        // 软删除会改变收藏夹命中集（智能收藏夹实时求值、手动收藏夹过滤已删成员），
-        // 若当前正停留在收藏夹视图，需重新拉取，否则已入回收站的壁纸仍留在网格上
-        onCollectionChanged?.();
       }
       pendingDeleteIdsRef.current = [];
       setPendingDeleteIds([]);
@@ -170,14 +160,7 @@ export function useManageMode({
     } finally {
       endSubmit();
     }
-  }, [
-    deleteWallpapers,
-    isCollectionView,
-    collectionId,
-    onCollectionChanged,
-    beginSubmit,
-    endSubmit,
-  ]);
+  }, [deleteWallpapers, isCollectionView, collectionId, beginSubmit, endSubmit]);
 
   const handleAddToCollection = useCallback(
     async (wallpaperId: number, targetCollectionId: number) => {

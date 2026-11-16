@@ -33,8 +33,6 @@ export interface TagEditorDialogProps {
   mode: "single" | "batch";
   /** 目标壁纸 id：single 传 1 个，batch 传选中集 */
   wallpaperIds: number[];
-  /** 保存成功后回调（可用于刷新命中/提示） */
-  onSaved?: () => void;
 }
 
 /**
@@ -48,7 +46,6 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
   onOpenChange,
   mode,
   wallpaperIds,
-  onSaved,
 }) => {
   const { t } = useTranslation();
 
@@ -122,7 +119,6 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
         }
         toast.success(t("tags.batchApplied", { added, removed }));
       }
-      onSaved?.();
       onOpenChange(false);
     } catch (e) {
       console.error("[TagEditorDialog.save]", e);
@@ -130,7 +126,7 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
     } finally {
       setSaving(false);
     }
-  }, [mode, wallpaperIds, singleTags, addTags, removeTags, allTags, onSaved, onOpenChange, t]);
+  }, [mode, wallpaperIds, singleTags, addTags, removeTags, allTags, onOpenChange, t]);
 
   const isBatch = mode === "batch";
   const nothingToDo = isBatch ? addTags.length === 0 && removeTags.length === 0 : false;

@@ -287,21 +287,18 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
             />
           )}
         </div>
-        {/* 内容区 */}
+        {/* 内容区。导入期间刻意不替换网格：VirtualGrid 一旦卸载，内部滚动容器
+            的 scrollTop 会随 DOM 一起销毁，重新挂载后回顶；全屏蒙层由 App 叠加。 */}
         <div
           className={cn(
             "relative min-h-0 flex-1",
-            search.loading || isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled
+            isEmpty || displayWallpapers.length === 0 || sort.isDragEnabled
               ? "overflow-y-auto p-4"
               : "overflow-hidden",
           )}
           {...dragHandlers}
         >
-          {search.loading ? (
-            <div className="flex h-full items-center justify-center">
-              <p className="text-sm text-muted-foreground">{t("main.importing")}</p>
-            </div>
-          ) : isEmpty ? (
+          {isEmpty ? (
             <div className="flex h-full items-center justify-center">
               <div className="flex flex-col items-center gap-3 text-foreground/40">
                 <ImagePlus className="size-12" strokeWidth={1} />

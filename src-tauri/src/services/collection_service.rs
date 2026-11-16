@@ -305,6 +305,9 @@ pub async fn add_wallpapers(
 /// 前端传入的数组只含可见成员（回收站内的已被过滤），而回收站成员的关联行
 /// 仍在表中、其 sort_order 为哨兵 `-1`。此处按索引写 `0..n-1` 不会与哨兵冲突，
 /// 且显式排除哨兵行，避免把回收站成员误拉回可见序列。
+///
+/// 只更新 sort_order 实际变化的成员（不动点 diff）：先一次查询取当前顺序，
+/// 逐项比对新序，跳过 order 未变的 id，避免对全量成员逐条发 UPDATE。
 pub async fn reorder_wallpapers(
     db: &DatabaseConnection,
     collection_id: i32,
@@ -312,11 +315,26 @@ pub async fn reorder_wallpapers(
 ) -> Result<()> {
     let txn = db.begin().await?;
 
+    // 一次查出当前可见成员的 (wallpaper_id -> sort_order)，哨兵行不参与
+    let current: std::collections::HashMap<i32, i32> = collection_wallpaper::Entity::find()
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(collection_wallpaper::Column::SortOrder.ne(wallpaper_service::TRASH_SORT_ORDER))
+        .all(&txn)
+        .await?
+        .into_iter()
+        .map(|row| (row.wallpaper_id, row.sort_order))
+        .collect();
+
     for (index, wp_id) in wallpaper_ids.iter().enumerate() {
+        let new_order = index as i32;
+        // 不动点：sort_order 未变则跳过，不写库
+        if current.get(wp_id) == Some(&new_order) {
+            continue;
+        }
         collection_wallpaper::Entity::update_many()
             .col_expr(
                 collection_wallpaper::Column::SortOrder,
-                Expr::value(index as i32),
+                Expr::value(new_order),
             )
             .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
             .filter(collection_wallpaper::Column::WallpaperId.eq(*wp_id))

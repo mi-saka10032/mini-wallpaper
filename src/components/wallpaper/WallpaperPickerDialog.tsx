@@ -84,11 +84,10 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
         </div>
       </DialogHeader>
 
-      {/* Body: WallpaperGrid in select mode */}
+      {/* Body: 壁纸多选网格 */}
       <div className="min-h-0 flex-1">
         <WallpaperGrid
           wallpapers={allWallpapers}
-          mode="select"
           selectedIds={selectedIds}
           disabledIds={existingWallpaperIds}
           onSelectionChange={setSelectedIds}

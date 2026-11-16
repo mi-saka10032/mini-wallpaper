@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
-import type { Wallpaper } from "@/api/config";
+import { COMMANDS, type Wallpaper } from "@/api/config";
 import i18n from "@/i18n";
 import { getCollectionWallpapers } from "@/api/collection";
 import {
@@ -13,7 +13,7 @@ import {
   saveVideoThumbnail,
 } from "@/api/wallpaper";
 import { batchExtractVideoThumbnails } from "@/lib/videoThumbnail";
-import { useTrashedStore } from "@/stores/trashedStore";
+import { publishCommandSignals } from "@/stores/pubsubStore";
 
 // 从 config 中 re-export Wallpaper 类型，方便外部使用
 export type { Wallpaper } from "@/api/config";
@@ -43,12 +43,12 @@ interface WallpaperState {
   /** 切换视图并拉取对应数据（内部带竞态守卫） */
   setActiveId: (id: number) => Promise<void>;
   /**
-   * 按当前 activeId 重新拉取视图数据
-   *
-   * 任何改变壁纸归属的操作（导入 / 删除 / 恢复 / 收藏夹增删）完成后都应调用它。
-   * 智能夹是后端实时求值的，导入或打标签都可能改变其命中集，
-   * 所以不能只刷新 activeId === 0 的分支。
+   * 失效后统一对齐本 store 的两份快照：全局 `wallpapers` 基础缓存
+   * 与当前 `viewWallpapers` 视图快照。只由 pub/sub 订阅方调用，
+   * 业务 action 不自行触发任何 fetch / refresh。
    */
+  sync: () => Promise<void>;
+  /** 按当前 activeId 重新拉取视图数据（负值视图直接返回） */
   refreshView: () => Promise<void>;
 
   /** 通过系统文件选择器导入（失败时上抛，由调用方提示） */
@@ -185,6 +185,19 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     await get().refreshView();
   },
 
+  sync: async () => {
+    const activeId = get().activeId;
+    // 负值视图（回收站 / 显示器设置）下 refreshView 直接返回，但全局基础缓存
+    // 仍要对齐：恢复 / 清空都发生在回收站视图，picker 依赖这份列表。
+    // activeId === 0 时 fetchWallpapers 会同时写入 viewWallpapers，一次查询足矣。
+    if (activeId <= 0) {
+      await get().fetchWallpapers();
+      return;
+    }
+    // 收藏夹视图：基础缓存与当前视图是两次不同查询，都要重取
+    await Promise.all([get().fetchWallpapers(), get().refreshView()]);
+  },
+
   refreshView: async () => {
     const activeId = get().activeId;
     const seq = ++viewRequestSeq;
@@ -252,9 +265,8 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       const paths = selected as string[];
       const imported = await importWallpaperFiles(paths);
 
-      // 用 refreshView 而非 fetchWallpapers：用户可能正停在智能夹视图上，
-      // 而智能夹是后端实时求值的，新导入的壁纸可能直接命中规则
-      await Promise.all([get().fetchWallpapers(), get().refreshView()]);
+      // 新壁纸是否命中当前智能夹由后端实时求值，视图与基础缓存
+      // 统一由 invoke 的失效信号驱动 sync() 重取，这里不再自行刷新
 
       // 异步分批生成视频缩略图（不阻塞 loading 状态）
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
@@ -299,8 +311,6 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     try {
       set({ loading: true });
       const imported = await importWallpaperFiles(matched);
-
-      await Promise.all([get().fetchWallpapers(), get().refreshView()]);
 
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
         console.error("[VideoThumbnail] batch failed", e),
@@ -395,7 +405,9 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
         throw new Error(failures.join("; "));
       }
 
-      await Promise.all([get().fetchWallpapers(), get().refreshView()]);
+      // raw body 直传绕过 invoke 封装，由调用方在整批完成后统一发布一次信号；
+      // 逐条发布会让 N 个文件触发 N 次 sync()（每次两次重取）。
+      publishCommandSignals(COMMANDS.IMPORT_WALLPAPER_BYTES);
 
       // 4) 异步分批生成视频缩略图
       generateVideoThumbnails(imported, get().refreshByIds).catch((e) =>
@@ -412,14 +424,6 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     try {
       const count = await deleteWallpaperBatch(ids);
       console.log(`[Trash] ${count} wallpapers moved to trash`);
-      // 当前视图减少、回收站增加。回收站列表由 trashedStore 持有，
-      // 这里主动同步是因为 TrashView 常驻挂载（切走仅隐藏），
-      // 不会在切回时重新拉取。
-      await Promise.all([
-        get().fetchWallpapers(),
-        get().refreshView(),
-        useTrashedStore.getState().fetchTrashed(),
-      ]);
     } catch (e) {
       console.error("[deleteWallpapers]", e);
       throw e;

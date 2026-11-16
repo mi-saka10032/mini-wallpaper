@@ -6,9 +6,11 @@ import Sidebar from "@/components/layout/Sidebar";
 import MainContent from "@/components/layout/MainContent";
 import { Toaster } from "@/components/ui/toast";
 import ErrorBoundary from "@/components/ui/ErrorBoundary";
-import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useFavoritesStore } from "@/stores/favoritesStore";
+import { useTrashedStore } from "@/stores/trashedStore";
+import { useWallpaperStore } from "@/stores/wallpaperStore";
+import { publish, Signal, usePubSubStore } from "@/stores/pubsubStore";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { listen, EVENTS } from "@/api/event";
 import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
@@ -84,10 +86,32 @@ const App: React.FC = () => {
   const language = useSettingStore((s) => s.settings[SETTING_KEYS.LANGUAGE]);
   const applyFavoriteChange = useFavoritesStore((s) => s.applyChange);
 
-  // 监听后端收藏归属变更事件（快捷键 / 托盘触发时回流，保持红心状态一致）
+  // 失效信号的唯一订阅点：invoke 写命令与后端事件发布到同一个商店。
+  // 四类信号各自比对版本号，只重取受影响的那份快照；
+  // store 内部不再有任何手动 fetch / refresh，全部由这里统一驱动。
+  // subscribe 返回的注销函数交给 effect cleanup，StrictMode / HMR 不重复注册。
+  useEffect(() => {
+    return usePubSubStore.subscribe((state, prev) => {
+      if (state.viewVersion !== prev.viewVersion) {
+        void useWallpaperStore.getState().sync();
+      }
+      if (state.favoritesVersion !== prev.favoritesVersion) {
+        void useFavoritesStore.getState().refresh();
+      }
+      if (state.trashVersion !== prev.trashVersion) {
+        void useTrashedStore.getState().fetchTrashed();
+      }
+      if (state.collectionsVersion !== prev.collectionsVersion) {
+        void useCollectionStore.getState().fetchCollections();
+      }
+    });
+  }, []);
+
+  // 后端快捷键 / 托盘触发的收藏变更不经过前端 invoke，需手动发布
   useEffect(() => {
     const unlisten = listen(EVENTS.FAVORITES_CHANGED, ({ wallpaper_id, favorited }) => {
       applyFavoriteChange(wallpaper_id, favorited);
+      publish([Signal.VIEW, Signal.FAVORITES]);
     });
     return () => {
       unlisten.then((fn) => fn());

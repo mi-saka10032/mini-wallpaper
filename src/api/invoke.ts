@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { CommandMap } from "./config";
 import { toast } from "@/components/ui/toast";
+import { publishCommandSignals } from "@/stores/pubsubStore";
 
 /**
  * 从 CommandMap params 中提取 req 的类型
@@ -52,10 +53,16 @@ export async function invoke<K extends keyof CommandMap>(
   }
 
   try {
+    // 写命令成功后发布失效信号，业务层无需逐个入口调用失效函数。
+    // 放在成功分支：失败时后端未提交，不能让视图重取出旧数据。
     if (reqArg === undefined) {
-      return await tauriInvoke(command);
+      const result: CommandMap[K]["result"] = await tauriInvoke(command);
+      publishCommandSignals(command);
+      return result;
     }
-    return await tauriInvoke(command, { req: reqArg });
+    const result: CommandMap[K]["result"] = await tauriInvoke(command, { req: reqArg });
+    publishCommandSignals(command);
+    return result;
   } catch (err: unknown) {
     const message = typeof err === "string" ? err : ((err as Error)?.message ?? String(err));
     if (!options.silent) {

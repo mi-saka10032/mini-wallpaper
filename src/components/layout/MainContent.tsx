@@ -47,7 +47,6 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
   // activeId 变化时 store 内部已完成拉取（含竞态守卫），这里只消费结果。
   const activeId = useWallpaperStore((s) => s.activeId);
   const wallpapers = useWallpaperStore((s) => s.viewWallpapers);
-  const onCollectionChanged = useWallpaperStore((s) => s.refreshView);
 
   const isCollectionView = activeId > 0;
   const collectionId = isCollectionView ? activeId : null;
@@ -67,14 +66,12 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
   const manage = useManageMode({
     isCollectionView,
     collectionId,
-    onCollectionChanged,
     onManageModeChange,
   });
 
   const sort = useSortMode({
     wallpapers,
     collectionId,
-    onCollectionChanged,
     onManageModeChange,
   });
 
@@ -85,15 +82,6 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
 
   // 智能收藏夹规则编辑对话框（替代智能收藏夹下的壁纸管理模式）
   const [smartDialogOpen, setSmartDialogOpen] = useState(false);
-
-  const handleSmartDialogOpenChange = useCallback(
-    (open: boolean) => {
-      setSmartDialogOpen(open);
-      // 关闭即可能已保存新规则，命中成员随之变化，需刷新当前列表
-      if (!open) onCollectionChanged?.();
-    },
-    [onCollectionChanged],
-  );
 
   // ===== 进入/退出模式时联动搜索重置 =====
   const enterManageMode = useCallback(() => {
@@ -295,10 +283,7 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
               onEnterSortMode={enterSortMode}
               onEnterManageMode={enterManageMode}
               onEditSmartRule={() => setSmartDialogOpen(true)}
-              onPickerConfirm={() => {
-                search.resetNormalSearch();
-                onCollectionChanged?.();
-              }}
+              onPickerConfirm={() => search.resetNormalSearch()}
             />
           )}
         </div>
@@ -396,7 +381,7 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
         {isSmartCollection && (
           <SmartCollectionDialog
             open={smartDialogOpen}
-            onOpenChange={handleSmartDialogOpenChange}
+            onOpenChange={setSmartDialogOpen}
             editing={activeCollection}
           />
         )}{" "}

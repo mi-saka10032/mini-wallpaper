@@ -21,7 +21,7 @@ interface CollectionState {
   updateSmartCollection: (id: number, ruleJson: string, name?: string | null) => Promise<void>;
 }
 
-export const useCollectionStore = create<CollectionState>((set, get) => ({
+export const useCollectionStore = create<CollectionState>((set) => ({
   collections: [],
 
   fetchCollections: async () => {
@@ -36,7 +36,6 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
   createCollection: async (name: string) => {
     try {
       await createCollectionApi(name);
-      await get().fetchCollections();
     } catch (e) {
       console.error("[createCollection]", e);
     }
@@ -45,7 +44,6 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
   renameCollection: async (id: number, name: string) => {
     try {
       await renameCollectionApi(id, name);
-      await get().fetchCollections();
     } catch (e) {
       console.error("[renameCollection]", e);
     }
@@ -54,7 +52,6 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
   deleteCollection: async (id: number) => {
     try {
       await removeCollectionApi(id);
-      await get().fetchCollections();
     } catch (e) {
       console.error("[deleteCollection]", e);
     }
@@ -63,11 +60,9 @@ export const useCollectionStore = create<CollectionState>((set, get) => ({
   createSmartCollection: async (name: string, ruleJson: string) => {
     // 错误交由 invoke 层 toast，并向上抛出让对话框保持打开
     await createSmartApi(name, ruleJson);
-    await get().fetchCollections();
   },
 
   updateSmartCollection: async (id: number, ruleJson: string, name?: string | null) => {
     await updateSmartApi(id, ruleJson, name);
-    await get().fetchCollections();
   },
 }));

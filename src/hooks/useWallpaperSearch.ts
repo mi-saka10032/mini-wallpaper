@@ -1,32 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Wallpaper } from "@/api/config";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
-import { sortWallpapers } from "@/lib/sort";
+import { filterWallpapers } from "@/lib/wallpaperFilter";
 import type { SortField, SortOrder } from "@/lib/sort";
 
 export interface UseWallpaperSearchOptions {
   activeId: number;
-}
-
-/** 通用壁纸过滤工具函数：关键词过滤 + 可选排序 */
-function filterWallpapers(
-  source: Wallpaper[],
-  keyword: string,
-  sortField?: SortField,
-  sortOrder?: SortOrder,
-): Wallpaper[] {
-  let result = source;
-
-  const kw = keyword.trim().toLowerCase();
-  if (kw) {
-    result = result.filter((w) => w.name.toLowerCase().includes(kw));
-  }
-
-  if (sortField && sortOrder) {
-    result = sortWallpapers(result, sortField, sortOrder);
-  }
-
-  return result;
 }
 
 export function useWallpaperSearch({ activeId }: UseWallpaperSearchOptions) {
@@ -35,7 +14,7 @@ export function useWallpaperSearch({ activeId }: UseWallpaperSearchOptions) {
   // 管理模式搜索 + 排序状态
   const [keyword, setKeyword] = useState("");
   const [sortField, setSortField] = useState<SortField>("created_at");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
 
   // 常态模式搜索
   const [normalKeyword, setNormalKeyword] = useState("");

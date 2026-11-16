@@ -4,33 +4,25 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import ThumbnailCard from "@/components/wallpaper/ThumbnailCard";
 import type { Wallpaper } from "@/api/config";
-import { sortWallpapers } from "@/lib/sort";
 import type { SortField, SortOrder } from "@/lib/sort";
+import { filterWallpapers } from "@/lib/wallpaperFilter";
 import VirtualGrid from "./VirtualGrid";
 import { FilterBar } from "./FilterBar";
 
 // ============ 类型定义 ============
 
-export type GridMode = "browse" | "select";
-
 export interface WallpaperGridProps {
   /** 壁纸数据源 */
   wallpapers: Wallpaper[];
-  /** 模式：browse（浏览）或 select（多选） */
-  mode: GridMode;
-  /** select 模式下已选中的 ID 集合 */
+  /** 已选中的 ID 集合 */
   selectedIds?: Set<number>;
-  /** select 模式下已在收藏夹中的 ID（显示但禁用） */
+  /** 已在收藏夹中的 ID（显示但禁用） */
   disabledIds?: Set<number>;
-  /** select 模式下选中/取消选中回调 */
+  /** 选中/取消选中回调 */
   onSelectionChange?: (ids: Set<number>) => void;
-  /** browse 模式下点击卡片回调 */
-  onCardClick?: (wallpaper: Wallpaper, index: number) => void;
-  /** 自定义卡片渲染（用于 browse 模式下的右键菜单等） */
-  renderCard?: (wallpaper: Wallpaper, index: number) => React.ReactNode;
   /** 是否显示 FilterBar，默认 true */
   showFilter?: boolean;
-  /** 是否显示全选/取消全选操作栏（select 模式下有效），默认 false */
+  /** 是否显示全选/取消全选操作栏，默认 false */
   showSelectActions?: boolean;
   /** 空状态自定义内容 */
   emptyContent?: React.ReactNode;
@@ -38,7 +30,7 @@ export interface WallpaperGridProps {
   className?: string;
 }
 
-// ============ SelectableCard 组件（select 模式下的卡片） ============
+// ============ 卡片组件 ============
 
 interface SelectableCardProps {
   wallpaper: Wallpaper;
@@ -94,28 +86,19 @@ const SelectableCard: React.FC<SelectableCardProps> = memo(
 );
 SelectableCard.displayName = "SelectableCard";
 
-// ============ BrowseCard 组件（browse 模式下的默认卡片） ============
+// ============ 主组件 ============
 
-interface BrowseCardProps {
-  wallpaper: Wallpaper;
-  onClick: () => void;
-}
-
-const BrowseCard: React.FC<BrowseCardProps> = memo(({ wallpaper, onClick }) => {
-  return <ThumbnailCard wallpaper={wallpaper} onClick={onClick} />;
-});
-BrowseCard.displayName = "BrowseCard";
-
-// ============ WallpaperGrid 主组件 ============
-
+/**
+ * 收藏夹「添加壁纸」选择器的网格。
+ *
+ * 只保留多选语义（选中 / 禁用已在夹内的项 / 全选）；历史上预留的 browse
+ * 分支无任何调用方，已移除。过滤与排序复用 lib/wallpaperFilter，与主内容区同源。
+ */
 const WallpaperGrid: React.FC<WallpaperGridProps> = ({
   wallpapers,
-  mode,
   selectedIds = new Set(),
   disabledIds = new Set(),
   onSelectionChange,
-  onCardClick,
-  renderCard,
   showFilter = true,
   showSelectActions = false,
   emptyContent,
@@ -126,25 +109,14 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
   // FilterBar 状态
   const [keyword, setKeyword] = useState("");
   const [sortField, setSortField] = useState<SortField>("created_at");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
 
-  // 过滤 + 排序后的壁纸列表
-  const filteredWallpapers = useMemo(() => {
-    let result = wallpapers;
+  const filteredWallpapers = useMemo(
+    () => filterWallpapers(wallpapers, keyword, sortField, sortOrder),
+    [wallpapers, keyword, sortField, sortOrder],
+  );
 
-    // 关键词过滤
-    if (keyword.trim()) {
-      const kw = keyword.trim().toLowerCase();
-      result = result.filter((w) => w.name.toLowerCase().includes(kw));
-    }
-
-    // 排序
-    result = sortWallpapers(result, sortField, sortOrder);
-
-    return result;
-  }, [wallpapers, keyword, sortField, sortOrder]);
-
-  // select 模式下的 toggle 选中
+  // 切换选中
   const handleToggleSelect = useCallback(
     (id: number) => {
       const next = new Set(selectedIds);
@@ -188,7 +160,7 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
           onSortOrderChange={setSortOrder}
           totalCount={wallpapers.length}
           filteredCount={filteredWallpapers.length}
-          showSelectActions={showSelectActions && mode === "select"}
+          showSelectActions={showSelectActions}
           selectedCount={selectedIds.size}
           selectableCount={selectableWallpapers.length}
           onSelectAll={handleSelectAll}
@@ -211,25 +183,14 @@ const WallpaperGrid: React.FC<WallpaperGridProps> = ({
             items={filteredWallpapers}
             getKey={(wp) => wp.id}
             className="h-full"
-            renderItem={(wp, index) => {
-              if (mode === "select") {
-                return (
-                  <SelectableCard
-                    wallpaper={wp}
-                    selected={selectedIds.has(wp.id)}
-                    disabled={disabledIds.has(wp.id)}
-                    onClick={() => handleToggleSelect(wp.id)}
-                  />
-                );
-              }
-
-              // browse 模式：使用自定义渲染或默认卡片
-              if (renderCard) {
-                return renderCard(wp, index);
-              }
-
-              return <BrowseCard wallpaper={wp} onClick={() => onCardClick?.(wp, index)} />;
-            }}
+            renderItem={(wp) => (
+              <SelectableCard
+                wallpaper={wp}
+                selected={selectedIds.has(wp.id)}
+                disabled={disabledIds.has(wp.id)}
+                onClick={() => handleToggleSelect(wp.id)}
+              />
+            )}
           />
         )}
       </div>

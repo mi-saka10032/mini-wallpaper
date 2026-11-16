@@ -285,8 +285,6 @@ pub async fn import_single(
     .context("File preparation task panicked")??;
 
     // 阶段 2：异步写入数据库
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
     let active_model = wallpaper::ActiveModel {
         name: Set(prepared.original_name),
         r#type: Set(prepared.file_type),
@@ -297,8 +295,6 @@ pub async fn import_single(
         duration: Set(None),
         file_size: Set(Some(prepared.file_size)),
         play_count: Set(0),
-        created_at: Set(now.clone()),
-        updated_at: Set(now),
         ..Default::default()
     };
 
@@ -482,8 +478,6 @@ pub async fn import_single_from_bytes(
     .context("File preparation task panicked")??;
 
     // 阶段 2：异步写入数据库
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
     let active_model = wallpaper::ActiveModel {
         name: Set(prepared.original_name),
         r#type: Set(prepared.file_type),
@@ -494,8 +488,6 @@ pub async fn import_single_from_bytes(
         duration: Set(None),
         file_size: Set(Some(prepared.file_size)),
         play_count: Set(0),
-        created_at: Set(now.clone()),
-        updated_at: Set(now),
         ..Default::default()
     };
 
@@ -581,7 +573,7 @@ pub async fn trash_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64> 
     }
 
     let txn = db.begin().await?;
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = crate::utils::time::now_str();
 
     // 收集受影响的收藏夹，稍后统一连续化重排
     let mut affected_collections: std::collections::HashSet<i32> = std::collections::HashSet::new();
@@ -605,7 +597,7 @@ pub async fn trash_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64> 
         // 1. 打软删除标记
         let mut active: wallpaper::ActiveModel = model.into();
         active.deleted_at = Set(Some(now.clone()));
-        active.updated_at = Set(now.clone());
+        // updated_at 由 before_save 自动刷新，此处不再显式赋值
         active
             .update(&txn)
             .await
@@ -707,7 +699,6 @@ pub async fn restore_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64
     }
 
     let txn = db.begin().await?;
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut restored_count = 0u64;
 
     for id in &ids {
@@ -728,7 +719,7 @@ pub async fn restore_batch(db: &DatabaseConnection, ids: Vec<i32>) -> Result<u64
         // 1. 清除软删除标记
         let mut active: wallpaper::ActiveModel = model.into();
         active.deleted_at = Set(None);
-        active.updated_at = Set(now.clone());
+        // updated_at 由 before_save 自动刷新，此处不再显式赋值
         active
             .update(&txn)
             .await

@@ -55,8 +55,6 @@ pub async fn upsert(
     db: &DatabaseConnection,
     req: &UpsertMonitorConfigRequest,
 ) -> Result<monitor_config::Model> {
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
     // 写入前守卫：拒绝把不存在或回收站内的壁纸设为桌面壁纸（覆盖 update / insert 两个分支）
     if let Some(wid) = req.wallpaper_id {
         ensure_wallpaper_settable(db, wid).await?;
@@ -93,7 +91,6 @@ pub async fn upsert(
         if let Some(a) = req.active {
             active_model.active = Set(a);
         }
-        active_model.updated_at = Set(now);
 
         let model = active_model
             .update(db)
@@ -111,7 +108,6 @@ pub async fn upsert(
             play_interval: Set(req.play_interval.unwrap_or(300)),
             is_enabled: Set(req.is_enabled.unwrap_or(false)),
             active: Set(req.active.unwrap_or(false)),
-            updated_at: Set(now),
             ..Default::default()
         };
 
@@ -129,8 +125,6 @@ pub async fn update_wallpaper_id(
     monitor_id: &str,
     wallpaper_id: i32,
 ) -> Result<monitor_config::Model> {
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
     // 写入前守卫：轮播定时器持有的 id 可能已被移入回收站，此处兜底拦截
     ensure_wallpaper_settable(db, wallpaper_id).await?;
 
@@ -140,7 +134,6 @@ pub async fn update_wallpaper_id(
 
     let mut active_model: monitor_config::ActiveModel = existing.into();
     active_model.wallpaper_id = Set(Some(wallpaper_id));
-    active_model.updated_at = Set(now);
 
     let model = active_model
         .update(db)
@@ -154,15 +147,12 @@ pub async fn clear_wallpaper_id(
     db: &DatabaseConnection,
     monitor_id: &str,
 ) -> Result<monitor_config::Model> {
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
     let existing = get_by_monitor_id(db, monitor_id)
         .await?
         .context("Monitor config not found")?;
 
     let mut active_model: monitor_config::ActiveModel = existing.into();
     active_model.wallpaper_id = Set(None);
-    active_model.updated_at = Set(now);
 
     let model = active_model
         .update(db)
@@ -217,8 +207,6 @@ pub async fn sync_config_from(
     target_monitor_id: &str,
     source: &monitor_config::Model,
 ) -> Result<monitor_config::Model> {
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
     let existing = get_by_monitor_id(db, target_monitor_id)
         .await?
         .context("Target monitor config not found")?;
@@ -230,7 +218,6 @@ pub async fn sync_config_from(
     active_model.play_mode = Set(source.play_mode.clone());
     active_model.play_interval = Set(source.play_interval);
     active_model.is_enabled = Set(source.is_enabled);
-    active_model.updated_at = Set(now);
 
     let model = active_model
         .update(db)

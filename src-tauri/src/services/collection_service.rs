@@ -37,18 +37,16 @@ pub async fn find_builtin(db: &DatabaseConnection) -> Result<Option<collection::
 
 /// 创建收藏夹
 pub async fn create(db: &DatabaseConnection, name: String) -> Result<collection::Model> {
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    // 走 ActiveModel::insert，触发 before_save 自动填时间戳
     let model = collection::ActiveModel {
         name: Set(name),
         sort_order: Set(0),
-        created_at: Set(now.clone()),
-        updated_at: Set(now),
         is_builtin: Set(0),
         ..Default::default()
     };
-    let result = collection::Entity::insert(model).exec(db).await?;
+    let model = model.insert(db).await?;
 
-    collection::Entity::find_by_id(result.last_insert_id)
+    collection::Entity::find_by_id(model.id)
         .one(db)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Failed to find created collection"))
@@ -66,20 +64,18 @@ pub async fn create_smart(
     // 校验规则合法性（非法直接拒绝，不落库）
     crate::services::smart_rule::SmartRule::parse_and_validate(&rule_json)?;
 
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    // 走 ActiveModel::insert，触发 before_save 自动填时间戳
     let model = collection::ActiveModel {
         name: Set(name),
         sort_order: Set(0),
-        created_at: Set(now.clone()),
-        updated_at: Set(now),
         is_builtin: Set(0),
         kind: Set("smart".to_string()),
         rule_json: Set(Some(rule_json)),
         ..Default::default()
     };
-    let result = collection::Entity::insert(model).exec(db).await?;
+    let model = model.insert(db).await?;
 
-    collection::Entity::find_by_id(result.last_insert_id)
+    collection::Entity::find_by_id(model.id)
         .one(db)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Failed to find created smart collection"))
@@ -104,17 +100,16 @@ pub async fn update_smart(
 
     crate::services::smart_rule::SmartRule::parse_and_validate(&rule_json)?;
 
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut model = collection::ActiveModel {
         id: Set(id),
         rule_json: Set(Some(rule_json)),
-        updated_at: Set(now),
         ..Default::default()
     };
     if let Some(n) = name {
         model.name = Set(n);
     }
-    collection::Entity::update(model).exec(db).await?;
+    // 走 ActiveModel::update，触发 before_save 刷新 updated_at
+    model.update(db).await?;
 
     collection::Entity::find_by_id(id)
         .one(db)
@@ -139,14 +134,13 @@ pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<co
         }
     }
 
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = collection::ActiveModel {
         id: Set(id),
         name: Set(name),
-        updated_at: Set(now),
         ..Default::default()
     };
-    collection::Entity::update(model).exec(db).await?;
+    // 走 ActiveModel::update，触发 before_save 刷新 updated_at
+    model.update(db).await?;
 
     collection::Entity::find_by_id(id)
         .one(db)
@@ -272,7 +266,6 @@ pub async fn add_wallpapers(
     }
 
     let mut count = 0u32;
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     // 查询已有的关联，避免重复插入
     let existing = collection_wallpaper::Entity::find()
@@ -294,11 +287,9 @@ pub async fn add_wallpapers(
             collection_id: Set(collection_id),
             wallpaper_id: Set(wp_id),
             sort_order: Set(next_order),
-            added_at: Set(now.clone()),
+            ..Default::default()
         };
-        collection_wallpaper::Entity::insert(model)
-            .exec(&txn)
-            .await?;
+        model.insert(&txn).await?;
         count += 1;
         next_order += 1;
     }

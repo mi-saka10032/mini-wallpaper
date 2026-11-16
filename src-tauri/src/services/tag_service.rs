@@ -34,10 +34,6 @@ pub struct TagWithCount {
     pub wallpaper_count: i64,
 }
 
-fn now_str() -> String {
-    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 /// 获取全部标签（按引用计数降序、name 升序），带引用计数
 pub async fn get_all_with_count(db: &DatabaseConnection) -> Result<Vec<TagWithCount>> {
     let tags = tag::Entity::find()
@@ -128,13 +124,13 @@ pub async fn resolve_or_create(db: &DatabaseConnection, name: &str) -> Result<i3
         return Ok(existing.id);
     }
 
+    // 走 ActiveModel::insert，触发 before_save 自动填时间戳
     let model = tag::ActiveModel {
         name: Set(name.to_string()),
-        created_at: Set(now_str()),
         ..Default::default()
     };
-    let res = tag::Entity::insert(model).exec(db).await?;
-    Ok(res.last_insert_id)
+    let model = model.insert(db).await?;
+    Ok(model.id)
 }
 
 /// resolve-or-create 批量标签名 → tag id 列表（去重、保序）
@@ -170,7 +166,6 @@ pub async fn tag_wallpapers(
     }
 
     let txn = db.begin().await?;
-    let now = now_str();
     let mut added = 0u64;
 
     for &wid in &wallpaper_ids {
@@ -190,9 +185,9 @@ pub async fn tag_wallpapers(
             let model = wallpaper_tag::ActiveModel {
                 wallpaper_id: Set(wid),
                 tag_id: Set(tid),
-                created_at: Set(now.clone()),
+                ..Default::default()
             };
-            wallpaper_tag::Entity::insert(model).exec(&txn).await?;
+            model.insert(&txn).await?;
             added += 1;
         }
     }
@@ -244,7 +239,6 @@ pub async fn set_wallpaper_tags(
     let to_remove: Vec<i32> = current_ids.difference(&target_ids).copied().collect();
 
     let txn = db.begin().await?;
-    let now = now_str();
 
     if !to_remove.is_empty() {
         wallpaper_tag::Entity::delete_many()
@@ -258,9 +252,9 @@ pub async fn set_wallpaper_tags(
         let model = wallpaper_tag::ActiveModel {
             wallpaper_id: Set(wallpaper_id),
             tag_id: Set(tid),
-            created_at: Set(now.clone()),
+            ..Default::default()
         };
-        wallpaper_tag::Entity::insert(model).exec(&txn).await?;
+        model.insert(&txn).await?;
     }
 
     txn.commit().await?;
@@ -298,7 +292,7 @@ pub async fn rename_tag(
         name: Set(new_name),
         ..Default::default()
     };
-    tag::Entity::update(model).exec(db).await?;
+    model.update(db).await?;
     tag::Entity::find_by_id(tag_id)
         .one(db)
         .await?

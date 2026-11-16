@@ -7,7 +7,7 @@ const VALID_FIT_MODES: &[&str] = &["cover", "contain", "fill", "stretch", "cente
 const VALID_PLAY_MODES: &[&str] = &["sequential", "random"];
 
 /// 创建或更新显示器配置请求
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Default, Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
 pub struct UpsertMonitorConfigRequest {
     /// 显示器标识：非空字符串

@@ -37,8 +37,10 @@ use log::{info, warn};
 
 use super::Scheduler;
 use crate::ctx::AppContext;
+use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
+use crate::events::{MonitorConfigRefreshedPayload, TypedEmitTo};
 use crate::runtime::action::Action;
 use crate::services::monitor_config_service;
 use tauri::Manager;
@@ -122,14 +124,15 @@ impl Scheduler {
 
     /// 切换暂停 / 恢复轮播
     ///
-    /// 实现思路：
-    /// - 若 active 目标当前**已暂停** → 从 `paused_monitors` 移除，
-    ///   通过 `manage_carousel_timer` 走常规编排恢复定时器
-    /// - 若 active 目标当前**未暂停** → 加入 `paused_monitors`，
-    ///   `manage_carousel_timer` 内部会因暂停集合命中而 stop 定时器
+    /// 暂停态持久化在 `monitor_config.is_enabled`（不在内存 HashSet），
+    /// 因此重启后仍保持用户最后的暂停/恢复选择，显示器设置页开关也与之同源。
+    /// - 翻转目标 config 的 is_enabled 并写回 DB
+    /// - 用更新后的 config 调 manage_carousel_timer 启停定时器
+    ///   （should_start_timer 已覆盖 active && is_enabled，无需额外开关）
+    /// - emit monitor-config-refreshed 到主窗口，前端重拉 configs 刷新开关
     ///
-    /// 同步模式下只对"primary active config"操作；其它显示器跟随广播
-    /// 由 `manage_carousel_timer` 内部统一处理。
+    /// 同步模式下只对 "primary active config" 操作；其它显示器跟随广播
+    /// 由 manage_carousel_timer 内部统一处理。
     async fn dispatch_toggle_pause(&mut self) {
         let targets = match self.resolve_action_targets().await {
             Some(t) if !t.is_empty() => t,
@@ -139,26 +142,49 @@ impl Scheduler {
             }
         };
 
+        let db = self.db();
         let mut paused = false;
+        let mut updated_any = false;
+
         for cfg in &targets {
-            let mid = cfg.monitor_id.clone();
-            let was_paused = self.paused_monitors.contains(&mid);
-
-            if was_paused {
-                self.paused_monitors.remove(&mid);
-                info!("[ActionDispatch] 恢复轮播: {}", mid);
-            } else {
-                self.paused_monitors.insert(mid.clone());
-                info!("[ActionDispatch] 暂停轮播: {}", mid);
-                paused = true;
+            let mid = &cfg.monitor_id;
+            let next_enabled = !cfg.is_enabled;
+            // 复用 upsert：只带 is_enabled，其余字段 Default 为 None 不覆盖既有值
+            let req = UpsertMonitorConfigRequest {
+                monitor_id: mid.clone(),
+                is_enabled: Some(next_enabled),
+                ..Default::default()
+            };
+            match monitor_config_service::upsert(&db, &req).await {
+                Ok(updated) => {
+                    updated_any = true;
+                    paused = !next_enabled;
+                    info!(
+                        "[ActionDispatch] {} 轮播已{}",
+                        mid,
+                        if next_enabled { "恢复" } else { "暂停" }
+                    );
+                    // need_restart=false：只启停，不重置轮播间隔
+                    self.manage_carousel_timer(&updated, false).await;
+                }
+                Err(e) => {
+                    warn!("[ActionDispatch] 切换 is_enabled 失败 {}: {}", mid, e);
+                }
             }
-
-            // 复用既有编排：暂停集合状态变化后让 manage_carousel_timer 自动
-            // 决定 stop / spawn（need_restart=false，避免重置间隔）
-            self.manage_carousel_timer(cfg, false).await;
         }
 
-        // 根据最终状态发送 toast
+        if !updated_any {
+            return;
+        }
+
+        // 主窗口监听此事件后重新拉取 configs，显示器设置页开关随之更新
+        if let Err(e) = self
+            .app
+            .typed_emit_to("main", &MonitorConfigRefreshedPayload)
+        {
+            warn!("[ActionDispatch] 发送 monitor-config-refreshed 失败: {}", e);
+        }
+
         let msg = if paused {
             "已暂停轮播"
         } else {

@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+use sea_orm::Set;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
@@ -53,4 +54,22 @@ impl Related<super::collection::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+#[async_trait::async_trait]
+impl ActiveModelBehavior for ActiveModel {
+    async fn before_save<C>(mut self, _db: &C, insert: bool) -> Result<Self, DbErr>
+    where
+        C: ConnectionTrait,
+    {
+        let now = crate::utils::time::now_str();
+        if insert {
+            if self.updated_at.is_not_set() {
+                self.updated_at = Set(now);
+            }
+        } else if !self.updated_at.is_set() {
+            // update 时 ActiveModel 来自 Model::into()，updated_at 为 Unchanged。
+            // 除显式 Set（哨兵值）外一律刷新，否则 updated_at 永远不会更新。
+            self.updated_at = Set(now);
+        }
+        Ok(self)
+    }
+}

@@ -195,9 +195,11 @@ export function ruleToText(rule: RuleItem, ctx: NlContext): string {
       break;
     }
     case "typeEnum":
+      // loccy-used-keys: smart.type_*
       valueText = t(`smart.type_${String(rule.value)}`);
       break;
     case "orientationEnum":
+      // loccy-used-keys: smart.orientation_*
       valueText = t(`smart.orientation_${String(rule.value)}`);
       break;
     case "numberRange": {

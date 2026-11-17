@@ -1,0 +1,9 @@
+modules:
+  default:
+    framework: react-i18next
+    translations:
+      glob: src/i18n/*.json
+      layout: "{locale}.json"
+    usages:
+      include:
+        - src/**/*.{ts,tsx}

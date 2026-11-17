@@ -24,6 +24,7 @@ export const COMMANDS = {
   // tag
   GET_TAGS: "get_tags",
   GET_WALLPAPER_TAGS: "get_wallpaper_tags",
+  GET_WALLPAPERS_BY_TAGS: "get_wallpapers_by_tags",
   TAG_WALLPAPERS: "tag_wallpapers",
   UNTAG_WALLPAPERS: "untag_wallpapers",
   SET_WALLPAPER_TAGS: "set_wallpaper_tags",
@@ -236,6 +237,11 @@ export interface SetWallpaperTagsReq {
 /** 查某壁纸标签 */
 export interface GetWallpaperTagsReq {
   wallpaperId: number;
+}
+
+/** 按标签筛选壁纸（命中任一 tag 即返回） */
+export interface WallpapersByTagsReq {
+  tagIds: number[];
 }
 
 /** 重命名标签 */
@@ -515,6 +521,10 @@ export interface CommandMap {
   [COMMANDS.GET_WALLPAPER_TAGS]: {
     params: { req: GetWallpaperTagsReq };
     result: Tag[];
+  };
+  [COMMANDS.GET_WALLPAPERS_BY_TAGS]: {
+    params: { req: WallpapersByTagsReq };
+    result: Wallpaper[];
   };
   [COMMANDS.TAG_WALLPAPERS]: {
     params: { req: TagWallpapersReq };

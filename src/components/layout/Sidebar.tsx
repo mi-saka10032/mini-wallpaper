@@ -186,8 +186,8 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
           {collections.map((collection) => {
             const isBuiltin = collection.is_builtin === 1;
             const isSmart = collection.kind === "smart";
-            // 内置收藏夹的展示名走 i18n（让中英文环境分别显示「我喜欢」/ "My Favorites"），
-            // 用户自建收藏夹直接显示 DB 中的名字
+            // 内置收藏夹的展示名走 i18n（中文「我喜欢」/ 英文 "My Favorites"）。
+            // 数据层名称由 m006 种入为「我喜欢」，用户自建收藏夹直接显示 DB 中的名字
             const displayName = isBuiltin ? t("sidebar.builtinFavorites") : collection.name;
             const Icon = isBuiltin ? Heart : isSmart ? Sparkles : Star;
 

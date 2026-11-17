@@ -52,6 +52,7 @@ const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
   disabled = false,
 }) => {
   const { t } = useTranslation();
+  // loccy-used-keys: preview.*
   const TypeIcon = wallpaper.type === "video" ? Film : Image;
 
   return (

@@ -1,4 +1,4 @@
-import { COMMANDS, type Tag, type TagWithCount } from "./config";
+import { COMMANDS, type Tag, type TagWithCount, type Wallpaper } from "./config";
 import { invoke } from "./invoke";
 
 /** 获取全部标签（带引用计数） */
@@ -9,6 +9,11 @@ export async function getTags(): Promise<TagWithCount[]> {
 /** 获取某壁纸的标签列表 */
 export async function getWallpaperTags(wallpaperId: number): Promise<Tag[]> {
   return invoke(COMMANDS.GET_WALLPAPER_TAGS, { wallpaperId });
+}
+
+/** 按标签筛选壁纸（命中任一 tag 即返回，回收站壁纸不含） */
+export async function getWallpapersByTags(tagIds: number[]): Promise<Wallpaper[]> {
+  return invoke(COMMANDS.GET_WALLPAPERS_BY_TAGS, { tagIds });
 }
 
 /** 给一批壁纸打一批标签（resolve-or-create + 幂等），返回新增关联条数 */

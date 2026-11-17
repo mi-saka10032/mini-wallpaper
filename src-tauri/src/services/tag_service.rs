@@ -262,6 +262,35 @@ pub async fn set_wallpaper_tags(
     get_wallpaper_tags(db, wallpaper_id).await
 }
 
+/// 按标签筛选壁纸（收藏夹「添加壁纸」选择器的标签筛选）
+///
+/// 命中任一 tag 即返回（OR 语义，与智能收藏夹规则的 includes_any 同构）；
+/// 回收站内的壁纸不参与——复用 `wallpaper_service::active()` 的
+/// `deleted_at IS NULL` 过滤（软删除时关联行保留，不排除会漏出回收站壁纸）。
+/// 空列表直接返回空集，不下发 SQL。
+pub async fn wallpapers_by_tags(
+    db: &DatabaseConnection,
+    tag_ids: Vec<i32>,
+) -> Result<Vec<wallpaper::Model>> {
+    if tag_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let rows = crate::services::wallpaper_service::active()
+        .filter(
+            wallpaper::Column::Id.in_subquery(
+                Query::select()
+                    .column(wallpaper_tag::Column::WallpaperId)
+                    .from(wallpaper_tag::Entity)
+                    .and_where(wallpaper_tag::Column::TagId.is_in(tag_ids))
+                    .to_owned(),
+            ),
+        )
+        .order_by_asc(wallpaper::Column::Id)
+        .all(db)
+        .await?;
+    Ok(rows)
+}
+
 /// 删除一个标签（连带清理其在 join 表中的全部关联，事务保护）
 ///
 /// 智能收藏夹规则里若引用了被删标签的 id，命中集会自动少掉该维度约束的这一项——
@@ -322,4 +351,130 @@ pub async fn wallpaper_exists(db: &DatabaseConnection, wallpaper_id: i32) -> Res
         .count(db)
         .await?;
     Ok(count > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use sea_orm::prelude::Expr;
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    };
+    use sea_orm_migration::MigratorTrait;
+
+    use super::wallpapers_by_tags;
+    use crate::entities::{tag, wallpaper, wallpaper_tag};
+    use crate::migration::Migrator;
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "mini-wallpaper-tag-filter-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn test_db(root: &TempDir) -> DatabaseConnection {
+        let path = root.0.join("app.db");
+        let db = Database::connect(format!("sqlite:{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    async fn insert_wallpaper(db: &DatabaseConnection, name: &str) -> wallpaper::Model {
+        wallpaper::ActiveModel {
+            name: Set(name.to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set(format!("wallpapers/{name}.png")),
+            play_count: Set(0),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn insert_tag(db: &DatabaseConnection, name: &str) -> tag::Model {
+        tag::ActiveModel {
+            name: Set(name.to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn link(db: &DatabaseConnection, wallpaper_id: i32, tag_id: i32) {
+        wallpaper_tag::ActiveModel {
+            wallpaper_id: Set(wallpaper_id),
+            tag_id: Set(tag_id),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn matches_any_tag_and_excludes_trashed() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+
+        let w1 = insert_wallpaper(&db, "a").await;
+        let w2 = insert_wallpaper(&db, "b").await;
+        let w3 = insert_wallpaper(&db, "c").await;
+        let t1 = insert_tag(&db, "风景").await;
+        let t2 = insert_tag(&db, "动漫").await;
+
+        // w1: t1；w2: t2；w3: 无标签；t1 另挂一张回收站壁纸 w4
+        link(&db, w1.id, t1.id).await;
+        link(&db, w2.id, t2.id).await;
+        let w4 = insert_wallpaper(&db, "trashed").await;
+        link(&db, w4.id, t1.id).await;
+        // w4 软删除（对齐 trash_wallpapers 的打标方式，不删关联行）
+        wallpaper::Entity::update_many()
+            .col_expr(
+                wallpaper::Column::DeletedAt,
+                Expr::value("2026-01-02 00:00:00"),
+            )
+            .filter(wallpaper::Column::Id.eq(w4.id))
+            .exec(&db)
+            .await
+            .unwrap();
+
+        // OR 语义：t1+t2 命中 w1、w2，回收站的 w4 与无标签的 w3 不出现
+        let got = wallpapers_by_tags(&db, vec![t1.id, t2.id]).await.unwrap();
+        let ids: Vec<i32> = got.iter().map(|w| w.id).collect();
+        assert_eq!(ids, vec![w1.id, w2.id]);
+
+        // 单 tag 同样正确
+        let got = wallpapers_by_tags(&db, vec![t2.id]).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, w2.id);
+
+        // 不存在的 tag id → 空集
+        assert!(wallpapers_by_tags(&db, vec![9999])
+            .await
+            .unwrap()
+            .is_empty());
+
+        // 空 tag_ids 短路返回，不下发 SQL
+        assert!(wallpapers_by_tags(&db, vec![]).await.unwrap().is_empty());
+    }
 }

@@ -36,8 +36,8 @@ pub use monitor_config::{
 pub use shortcut::switch_wallpaper;
 #[allow(unused_imports)]
 pub use tag::{
-    delete_tag, get_tags, get_wallpaper_tags, rename_tag, set_wallpaper_tags, tag_wallpapers,
-    untag_wallpapers,
+    delete_tag, get_tags, get_wallpaper_tags, get_wallpapers_by_tags, rename_tag,
+    set_wallpaper_tags, tag_wallpapers, untag_wallpapers,
 };
 #[allow(unused_imports)]
 pub use toast::close_toast_window;
@@ -114,6 +114,7 @@ macro_rules! all_handlers {
             // tag
             $crate::commands::tag::get_tags,
             $crate::commands::tag::get_wallpaper_tags,
+            $crate::commands::tag::get_wallpapers_by_tags,
             $crate::commands::tag::tag_wallpapers,
             $crate::commands::tag::untag_wallpapers,
             $crate::commands::tag::set_wallpaper_tags,

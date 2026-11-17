@@ -1,8 +1,10 @@
 import { Check, ImagePlus } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { addWallpapers } from "@/api/collectionWallpaper";
+import { getTags } from "@/api/tag";
+import type { TagWithCount } from "@/api/config";
 import { Button } from "@/components/ui/button";
 import {
   DialogContent,
@@ -30,6 +32,23 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
   const { t } = useTranslation();
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const [tagOptions, setTagOptions] = useState<TagWithCount[]>([]);
+
+  // 打开时拉取标签列表供筛选（Dialog 无 forceMount，每次打开重新挂载执行一次）
+  useEffect(() => {
+    let cancelled = false;
+    getTags()
+      .then((tags) => {
+        if (!cancelled) setTagOptions(tags);
+      })
+      .catch((e) => {
+        // 失败只降级为「无标签可筛」，不阻塞选择器主流程；错误已由 invoke 层 toast
+        console.error("[WallpaperPickerDialog.loadTags]", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleConfirm = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -93,6 +112,7 @@ const WallpaperPickerDialog: React.FC<WallpaperPickerDialogProps> = ({
           onSelectionChange={setSelectedIds}
           showFilter={true}
           showSelectActions={true}
+          tagOptions={tagOptions}
           className="h-full"
           emptyContent={
             availableCount === 0 ? (

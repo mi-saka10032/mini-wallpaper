@@ -3,10 +3,11 @@ use tauri::State;
 use crate::ctx::AppContext;
 use crate::dto::tag_dto::{
     DeleteTagRequest, GetWallpaperTagsRequest, RenameTagRequest, SetWallpaperTagsRequest,
-    TagWallpapersRequest, UntagWallpapersRequest,
+    TagWallpapersRequest, UntagWallpapersRequest, WallpapersByTagsRequest,
 };
 use crate::dto::Validated;
 use crate::entities::tag;
+use crate::entities::wallpaper;
 use crate::services::tag_service::{self, TagWithCount};
 
 use super::error::CommandResult;
@@ -60,6 +61,17 @@ pub async fn set_wallpaper_tags(
     let req = req.into_inner();
     let app_ctx: &AppContext = ctx.inner();
     Ok(tag_service::set_wallpaper_tags(&app_ctx.db, req.wallpaper_id, req.tag_names).await?)
+}
+
+/// 按标签筛选壁纸（收藏夹「添加壁纸」选择器的标签筛选，命中任一 tag 即返回）
+#[tauri::command]
+pub async fn get_wallpapers_by_tags(
+    ctx: State<'_, AppContext>,
+    req: Validated<WallpapersByTagsRequest>,
+) -> CommandResult<Vec<wallpaper::Model>> {
+    let req = req.into_inner();
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(tag_service::wallpapers_by_tags(&app_ctx.db, req.tag_ids).await?)
 }
 
 /// 重命名标签

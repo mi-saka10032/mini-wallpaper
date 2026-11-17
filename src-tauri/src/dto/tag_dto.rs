@@ -46,6 +46,15 @@ pub struct GetWallpaperTagsRequest {
     pub wallpaper_id: i32,
 }
 
+/// 按标签筛选壁纸请求（命中任一 tag 即返回）
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpapersByTagsRequest {
+    /// 标签 ID 列表：非空
+    #[garde(length(min = 1))]
+    pub tag_ids: Vec<i32>,
+}
+
 /// 重命名标签请求
 #[derive(Debug, Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]

@@ -1,5 +1,6 @@
 import { Search, SortAsc, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { TagWithCount } from "@/api/config";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { SortField, SortOrder } from "@/lib/sort";
+import TagSelect from "./TagSelect";
 
 // ============ 类型定义 ============
 
@@ -22,6 +24,12 @@ export interface FilterBarProps {
   onSortOrderChange: (order: SortOrder) => void;
   totalCount: number;
   filteredCount: number;
+  /** 标签筛选选项；传入才渲染标签筛选控件，空数组时控件禁用（库内无标签） */
+  tagOptions?: TagWithCount[];
+  /** 已选标签 id 集合（受控） */
+  selectedTagIds?: Set<number>;
+  /** 标签选择变化 */
+  onSelectedTagIdsChange?: (ids: Set<number>) => void;
   /** select 模式下的全选/取消全选操作 */
   showSelectActions?: boolean;
   selectedCount?: number;
@@ -41,6 +49,9 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   onSortOrderChange,
   totalCount,
   filteredCount,
+  tagOptions,
+  selectedTagIds,
+  onSelectedTagIdsChange,
   showSelectActions = false,
   selectedCount = 0,
   selectableCount = 0,
@@ -48,6 +59,9 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   onClearSelection,
 }) => {
   const { t } = useTranslation();
+
+  // 任一筛选生效（关键词或标签）且收窄了结果时显示计数
+  const hasActiveFilter = Boolean(keyword) || (selectedTagIds?.size ?? 0) > 0;
 
   return (
     <div className="flex items-center gap-2 border-b border-border/50 px-4 py-2">
@@ -95,6 +109,16 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         )}
       </div>
 
+      {/* 标签筛选（仅选择器场景传入 tagOptions 时渲染；Select 形态宽度恒定，不撑高工具栏） */}
+      {tagOptions && selectedTagIds && onSelectedTagIdsChange && (
+        <TagSelect
+          options={tagOptions}
+          selectedIds={selectedTagIds}
+          onChange={onSelectedTagIdsChange}
+          className="w-32"
+        />
+      )}
+
       {/* 排序选择 */}
       <Select value={sortField} onValueChange={(v) => onSortFieldChange(v as SortField)}>
         <SelectTrigger size="sm" className="h-8 w-auto gap-1.5 text-xs">
@@ -123,7 +147,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
       </button>
 
       {/* 筛选结果计数 */}
-      {keyword && filteredCount !== totalCount && (
+      {hasActiveFilter && filteredCount !== totalCount && (
         <span className="text-xs text-foreground/40">
           {t("grid.filterResult", { filtered: filteredCount, total: totalCount })}
         </span>

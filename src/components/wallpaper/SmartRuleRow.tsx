@@ -68,9 +68,10 @@ export const SmartRuleRow: React.FC<SmartRuleRowProps> = ({ rule, tags, onChange
   })();
 
   const handleTagNamesChange = (names: string[]) => {
-    // 名字 → id：仅保留已存在的标签（不存在的忽略，保存前无 id）
-    // 允许输入新标签名：用负数占位 id 不可行（后端按 id 求值），故规则里标签必须已存在。
-    // 这里策略：把不存在的名字也保留为「待创建」——但规则存 id，故仅收已存在 id。
+    // 规则按 tag id 求值（改名不影响规则），名字仅是 UI 投影：解析不到 id 的
+    // 名字在此静默丢弃，受控回写后 chip 不会渲染，等效于「禁止创建新标签」。
+    // 不允许规则创建新标签：否则取消编辑会留下零引用的孤儿 tag 实体，
+    // 想创建标签应先去壁纸标签编辑器（那边由后端 resolve_or_create 兜底）。
     const idByName = new Map(tags.map((tenta) => [tenta.name, tenta.id]));
     const ids = names.map((n) => idByName.get(n)).filter((id): id is number => id != null);
     onChange({ ...rule, value: ids });

@@ -93,8 +93,10 @@ impl WallpaperWindowManager {
         }
 
         let url = match extra_query {
-            Some(q) if !q.is_empty() => format!("/wallpaper?monitorId={}&{}", monitor_id, q),
-            _ => format!("/wallpaper?monitorId={}", monitor_id),
+            Some(q) if !q.is_empty() => {
+                format!("/wallpaper.html?monitorId={}&{}", monitor_id, q)
+            }
+            _ => format!("/wallpaper.html?monitorId={}", monitor_id),
         };
 
         let window =

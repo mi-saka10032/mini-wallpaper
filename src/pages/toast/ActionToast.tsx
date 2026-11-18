@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SkipForward, SkipBack, Pause, Play, AppWindow, X } from "lucide-react";
@@ -25,7 +24,7 @@ const ACTION_CONFIG: Record<string, { icon: React.ElementType; color: string; bg
  * - 入场/退场动画
  */
 const ActionToast: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const searchParams = new URLSearchParams(window.location.search);
   const action = searchParams.get("action") || "next";
   const message = searchParams.get("message") || "";
   const label = searchParams.get("label") || "";

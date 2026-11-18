@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { useWallpaperLoader } from "@/hooks/useWallpaperLoader";
+import { useWallpaperLoader } from "./useWallpaperLoader";
 import { useExtendViewport } from "@/hooks/useExtendViewport";
 import { useVideoSync } from "@/hooks/useVideoSync";
 import { useInputBlock } from "@/hooks/useInputBlock";
@@ -17,8 +16,7 @@ import { useFullscreenPause } from "@/hooks/useFullscreenPause";
  * - extend: 一张壁纸横跨所有显示器，当前窗口只渲染对应区域
  */
 const WallpaperRenderer: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const monitorId = searchParams.get("monitorId");
+  const monitorId = new URLSearchParams(window.location.search).get("monitorId");
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // 加载壁纸数据 + 监听变更事件

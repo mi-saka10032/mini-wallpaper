@@ -110,7 +110,7 @@ impl ToastManager {
         // 构建 URL（通过 query 传参给前端）
         let encoded_message = urlencoding::encode(message);
         let url = format!(
-            "/toast?action={}&message={}&label={}&duration={}",
+            "/toast.html?action={}&message={}&label={}&duration={}",
             action, encoded_message, label, TOAST_DURATION_MS
         );
 

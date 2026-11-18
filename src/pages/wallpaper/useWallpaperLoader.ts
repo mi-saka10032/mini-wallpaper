@@ -1,25 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@/api/invoke";
 import { listen, EVENTS } from "@/api/event";
-import { COMMANDS, type Wallpaper, type MonitorConfig } from "@/api/config";
-import { getById as getWallpaperById } from "@/api/wallpaper";
-import { useWallpaperStore } from "@/stores/wallpaperStore";
+import type { Wallpaper, MonitorConfig } from "@/api/config";
+import { getMonitorConfig, getSetting, getWallpaperById } from "./api";
 
-/**
- * useWallpaperLoader - 加载壁纸数据并监听变更事件
- *
- * 职责：
- * - 初始化时根据 monitorId 读取 config → 获取壁纸
- * - 监听 WALLPAPER_CHANGED / WALLPAPER_CLEARED / FIT_MODE_CHANGED / DISPLAY_MODE_CHANGED / VOLUME_CHANGED 事件
- * - 返回当前壁纸、fitMode、displayMode、volume
- */
 export function useWallpaperLoader(monitorId: string | null) {
   const [wallpaper, setWallpaper] = useState<Wallpaper | null>(null);
   const [fitMode, setFitMode] = useState<string>("cover");
   const [displayMode, setDisplayMode] = useState<string>("independent");
   const [volume, setVolume] = useState<number>(0);
 
-  // 根据 config 获取壁纸并更新状态
   const loadFromConfig = useCallback(async (config: MonitorConfig) => {
     setFitMode(config.fit_mode || "cover");
 
@@ -28,15 +17,6 @@ export function useWallpaperLoader(monitorId: string | null) {
       return;
     }
 
-    // 优先从 store 缓存中查找，命中则直接使用
-    const storeWallpapers = useWallpaperStore.getState().wallpapers;
-    const found = storeWallpapers.find((w) => w.id === config.wallpaper_id) ?? null;
-    if (found) {
-      setWallpaper(found);
-      return;
-    }
-
-    // 缓存未命中，通过 getById 接口精确查询单个壁纸
     try {
       const detail = await getWallpaperById(config.wallpaper_id);
       setWallpaper(detail);
@@ -48,7 +28,7 @@ export function useWallpaperLoader(monitorId: string | null) {
   const loadConfig = useCallback(
     async (monitorId: string) => {
       try {
-        const config = await invoke(COMMANDS.GET_MONITOR_CONFIG, { monitorId }, { silent: true });
+        const config = await getMonitorConfig(monitorId);
         if (config) loadFromConfig(config);
       } catch (e) {
         console.error("[useWallpaperLoader] loadConfig failed:", e);
@@ -57,27 +37,25 @@ export function useWallpaperLoader(monitorId: string | null) {
     [loadFromConfig],
   );
 
-  // 初始化：加载 config + 音量 + displayMode
   useEffect(() => {
     if (!monitorId) return;
 
     loadConfig(monitorId);
 
-    invoke(COMMANDS.GET_SETTING, { key: "display_mode" }, { silent: true })
+    getSetting("display_mode")
       .then((val) => {
         if (val) setDisplayMode(val);
       })
       .catch(() => {});
 
-    invoke(COMMANDS.GET_SETTING, { key: "global_volume" }, { silent: true })
+    getSetting("global_volume")
       .then((val) => {
         const v = Number(val ?? "0");
         setVolume(Math.min(Math.max(v, 0), 100));
       })
       .catch(() => {});
-  }, [monitorId, loadFromConfig]);
+  }, [monitorId, loadConfig]);
 
-  // 统一事件监听
   useEffect(() => {
     if (!monitorId) return;
 
@@ -127,7 +105,7 @@ export function useWallpaperLoader(monitorId: string | null) {
         p.then((fn) => fn());
       }
     };
-  }, [monitorId, loadFromConfig]);
+  }, [monitorId, loadConfig]);
 
   return { wallpaper, fitMode, displayMode, volume };
 }

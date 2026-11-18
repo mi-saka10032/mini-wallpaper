@@ -23,7 +23,7 @@ import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
 import AppLoading from "@/components/ui/AppLoading";
 import { SETTINGS_VIEW_ID, TRASH_VIEW_ID } from "@/constants/views";
-import { cn } from "./lib/utils";
+import { cn } from "@/lib/utils";
 
 // 非首屏组件懒加载
 const PreviewDialog = lazy(() => import("@/components/wallpaper/PreviewDialog"));

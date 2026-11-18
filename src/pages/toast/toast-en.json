@@ -1,0 +1,11 @@
+{
+  "next_switched": "Switched to next wallpaper",
+  "prev_switched": "Switched to previous wallpaper",
+  "pause_paused": "Carousel paused",
+  "pause_resumed": "Carousel resumed",
+  "favorite_no_monitor": "No wallpaper on current monitor",
+  "favorite_no_wallpaper": "No wallpaper is displayed",
+  "favorite_added": "Added to favorites",
+  "favorite_removed": "Removed from favorites",
+  "favorite_failed": "Failed to toggle favorite"
+}

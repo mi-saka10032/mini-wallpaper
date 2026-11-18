@@ -1,0 +1,11 @@
+{
+  "next_switched": "已切换下一张壁纸",
+  "prev_switched": "已切换上一张壁纸",
+  "pause_paused": "已暂停轮播",
+  "pause_resumed": "已恢复轮播",
+  "favorite_no_monitor": "当前显示器未启用壁纸",
+  "favorite_no_wallpaper": "当前没有正在显示的壁纸",
+  "favorite_added": "已收藏当前壁纸",
+  "favorite_removed": "已取消收藏",
+  "favorite_failed": "收藏操作失败"
+}

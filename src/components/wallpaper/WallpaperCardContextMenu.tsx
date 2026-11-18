@@ -7,8 +7,18 @@ import {
   useRef,
   useState,
 } from "react";
-import { FolderPlus, Monitor, Star, Tag as TagIcon, Trash2, Unlink, Heart } from "lucide-react";
+import {
+  FolderOpen,
+  FolderPlus,
+  Monitor,
+  Star,
+  Tag as TagIcon,
+  Trash2,
+  Unlink,
+  Heart,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Wallpaper } from "@/api/config";
 import { getCollectionWallpapers } from "@/api/collection";
 import { useCollectionStore } from "@/stores/collectionStore";
@@ -261,6 +271,14 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
     closeMenu();
   }, [payload, closeMenu]);
 
+  const handleRevealInFolder = useCallback(() => {
+    if (!payload) return;
+    revealItemInDir(payload.wallpaper.file_path).catch((e) =>
+      console.error("[contextMenu.revealInFolder]", e),
+    );
+    closeMenu();
+  }, [payload, closeMenu]);
+
   // 计算菜单位置（确保不超出视口，且在鼠标右侧弹出）
   const menuStyle = useMemo((): React.CSSProperties => {
     if (!payload) return { display: "none" };
@@ -402,6 +420,19 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
                 <span className="ml-auto text-muted-foreground">›</span>
               </button>
             )}
+
+            <button
+              type="button"
+              className={cn(
+                "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none",
+                "hover:bg-accent hover:text-accent-foreground",
+              )}
+              onMouseEnter={() => setSubMenu(null)}
+              onClick={handleRevealInFolder}
+            >
+              <FolderOpen className="size-4 text-muted-foreground" />
+              {t("main.revealInFolder")}
+            </button>
 
             {/* 删除/移除 */}
             <button

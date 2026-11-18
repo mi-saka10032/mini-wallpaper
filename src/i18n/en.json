@@ -63,6 +63,7 @@
     "save": "Save",
     "removeFromCollection": "Remove from Collection",
     "addTo": "Add to",
+    "revealInFolder": "Show in Folder",
     "deleteConfirmTitle": "Move to Recycle Bin",
     "removeConfirmTitle": "Remove from Collection",
     "deleteConfirmDesc": "Move {{count}} selected wallpaper(s) to the Recycle Bin? You can restore them later.",

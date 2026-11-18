@@ -48,12 +48,14 @@ pub struct MonitorRect {
 impl MonitorRect {
     /// 显示器宽度（物理像素）
     #[inline]
+    #[allow(dead_code)]
     pub fn width(&self) -> i32 {
         self.right - self.left
     }
 
     /// 显示器高度（物理像素）
     #[inline]
+    #[allow(dead_code)]
     pub fn height(&self) -> i32 {
         self.bottom - self.top
     }
@@ -250,7 +252,7 @@ mod imp {
 #[cfg(target_os = "windows")]
 pub use imp::{
     cursor_pos, foreground_window, is_shell_window, monitor_info_from_point,
-    monitor_info_from_window, primary_monitor_info, window_class_name, window_rect,
+    monitor_info_from_window, primary_monitor_info, window_rect,
 };
 
 // ===================== 非 Windows 平台占位 =====================

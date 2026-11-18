@@ -75,7 +75,7 @@ export function useDropImport({
           setIsDragOver(false);
           if (!enabledRef.current) return;
           if (payload.paths.length === 0) return;
-          void onImportPathsRef.current?.(payload.paths);
+          void Promise.resolve(onImportPathsRef.current?.(payload.paths)).catch(() => {});
         }
       })
       .then((fn) => {
@@ -142,7 +142,7 @@ export function useDropImport({
 
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
-      void onImport(files);
+      void Promise.resolve(onImport(files)).catch(() => {});
     };
 
     return {

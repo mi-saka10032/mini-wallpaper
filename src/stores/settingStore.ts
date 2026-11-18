@@ -39,26 +39,20 @@ export const useSettingStore = create<SettingState>((set, get) => ({
   loading: false,
 
   fetchSettings: async () => {
+    set({ loading: true });
     try {
-      set({ loading: true });
       const settings = await getSettings();
       set({ settings });
-    } catch (e) {
-      console.error("[fetchSettings]", e);
     } finally {
       set({ loading: false });
     }
   },
 
   updateSetting: async (key: string, value: string, monitorId?: string) => {
-    try {
-      await setSetting(key, value, monitorId);
-      set((state) => ({
-        settings: { ...state.settings, [key]: value },
-      }));
-    } catch (e) {
-      console.error("[updateSetting]", e);
-    }
+    await setSetting(key, value, monitorId);
+    set((state) => ({
+      settings: { ...state.settings, [key]: value },
+    }));
   },
 
   get: (key: string, defaultValue = "") => {

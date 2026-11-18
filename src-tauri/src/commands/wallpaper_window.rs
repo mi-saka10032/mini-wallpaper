@@ -18,15 +18,47 @@ pub async fn create_wallpaper_window(
 ) -> CommandResult<()> {
     let req = req.into_inner();
     let app_ctx: &AppContext = ctx.inner();
-    let mut mgr = app_ctx.window_manager.lock().await;
-    mgr.create_window(
-        &req.monitor_id,
-        req.x,
-        req.y,
-        req.width,
-        req.height,
-        req.extra_query.as_deref(),
-    )?;
+
+    // 阶段 1：持锁建窗，拿到嵌入目标后立即释放锁
+    let created = {
+        let mut mgr = app_ctx.window_manager.lock().await;
+        mgr.create_window(
+            &req.monitor_id,
+            req.x,
+            req.y,
+            req.width,
+            req.height,
+            req.extra_query.as_deref(),
+        )?
+    };
+
+    let Some(created) = created else {
+        return Ok(());
+    };
+
+    // 阶段 2：锁外把含 1 秒 Win32 调用的嵌入丢到阻塞线程池
+    #[cfg(target_os = "windows")]
+    if let Some(target) = created.embed_target {
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            crate::platform::windows::desktop_embedder::embed_in_desktop(
+                target.hwnd,
+                target.x,
+                target.y,
+                target.width,
+                target.height,
+            )
+        })
+        .await;
+        match result {
+            Ok(Err(e)) => log::error!("桌面嵌入失败: {:#}", e),
+            Err(e) => log::error!("桌面嵌入任务异常: {}", e),
+            Ok(Ok(())) => {}
+        }
+    }
+
+    // 阶段 3：重新持锁，嵌入完成后才显示窗口
+    let mgr = app_ctx.window_manager.lock().await;
+    mgr.show_window(&created.label);
     Ok(())
 }
 

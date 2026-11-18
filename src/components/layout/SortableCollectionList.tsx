@@ -84,7 +84,7 @@ const SortableCollectionList: React.FC<SortableCollectionListProps> = memo(
         const updated = [...custom];
         const [moved] = updated.splice(oldIndex, 1);
         updated.splice(newIndex, 0, moved);
-        void reorderCollections(updated.map((c) => c.id));
+        void reorderCollections(updated.map((c) => c.id)).catch(() => {});
       },
       [custom, reorderCollections],
     );

@@ -20,6 +20,29 @@ use crate::events::{
     WallpaperClearedPayload,
 };
 
+/// 批量壁纸窗口通知指令，供调用方在锁外收集、短锁内一次性派发
+pub enum WmNotification {
+    Updated(String, i32, bool),
+    Cleared(String, bool),
+}
+
+/// 建窗结果，供调用方在锁外完成嵌入、再回锁显示窗口
+pub struct CreatedWindow {
+    pub label: String,
+    #[cfg(target_os = "windows")]
+    pub embed_target: Option<EmbedTarget>,
+}
+
+/// Windows 桌面嵌入所需的目标信息，全部 Send，可安全移入阻塞线程
+#[cfg(target_os = "windows")]
+pub struct EmbedTarget {
+    pub hwnd: isize,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 /// 壁纸窗口管理器
 pub struct WallpaperWindowManager {
     /// Tauri 应用句柄（构造时注入）
@@ -39,11 +62,11 @@ impl WallpaperWindowManager {
         }
     }
 
-    /// 为指定显示器创建壁纸窗口
+    /// 建窗阶段（持锁）：创建窗口并返回稍后需要嵌入的目标。
     ///
-    /// - 窗口 URL 为 /wallpaper?monitorId=xxx[&extend 参数]
-    /// - 窗口属性：无边框、无任务栏、透明背景、不可缩放、初始隐藏
-    /// - Windows 上创建后自动嵌入桌面层级
+    /// 桌面嵌入含最长 1 秒的 Win32 同步调用，不能在本方法内执行，否则会
+    /// 让调用方持有的 wm 锁跨越这段耗时。嵌入与 show 由调用方在锁外编排。
+    /// 返回 None 表示同 label 窗口仍存在、跳过创建。
     pub fn create_window(
         &mut self,
         monitor_id: &str,
@@ -52,7 +75,7 @@ impl WallpaperWindowManager {
         width: u32,
         height: u32,
         extra_query: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<CreatedWindow>, String> {
         let label = format!("wallpaper-{}", sanitize_label(monitor_id));
 
         // 如果已经存在，先销毁旧的
@@ -66,7 +89,7 @@ impl WallpaperWindowManager {
                 "WebviewWindow '{}' 仍存在于运行时中（可能尚未完成销毁），跳过创建",
                 label
             );
-            return Ok(());
+            return Ok(None);
         }
 
         let url = match extra_query {
@@ -88,25 +111,16 @@ impl WallpaperWindowManager {
                 .build()
                 .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
 
-        // Windows 平台：嵌入桌面
         #[cfg(target_os = "windows")]
-        {
-            if let Ok(hwnd) = window.hwnd() {
-                let hwnd_isize = hwnd.0 as isize;
-                if let Err(e) = desktop_embedder::embed_in_desktop(
-                    hwnd_isize,
-                    x,
-                    y,
-                    width as i32,
-                    height as i32,
-                ) {
-                    log::error!("桌面嵌入失败: {:#}", e);
-                }
-            }
-        }
-
-        // 嵌入完成后显示窗口
-        let _ = window.show();
+        let embed_target = window.hwnd().ok().map(|hwnd| EmbedTarget {
+            hwnd: hwnd.0 as isize,
+            x,
+            y,
+            width: width as i32,
+            height: height as i32,
+        });
+        #[cfg(not(target_os = "windows"))]
+        let _ = &window;
 
         self.windows.insert(monitor_id.to_string(), label.clone());
         info!(
@@ -114,7 +128,20 @@ impl WallpaperWindowManager {
             label, monitor_id, x, y, width, height
         );
 
-        Ok(())
+        #[cfg(target_os = "windows")]
+        return Ok(Some(CreatedWindow {
+            label,
+            embed_target,
+        }));
+        #[cfg(not(target_os = "windows"))]
+        return Ok(Some(CreatedWindow { label }));
+    }
+
+    /// 收尾阶段（持锁）：嵌入完成后显示窗口
+    pub fn show_window(&self, label: &str) {
+        if let Some(window) = self.app_handle.get_webview_window(label) {
+            let _ = window.show();
+        }
     }
 
     /// 销毁指定显示器的壁纸窗口
@@ -419,6 +446,20 @@ impl WallpaperWindowManager {
                 "[WallpaperWindowManager] 发送 monitor-config-refreshed 失败: {}",
                 e
             );
+        }
+    }
+
+    /// 批量派发已收集的通知指令，锁的持有范围由调用方收窄
+    pub fn dispatch_notifications(&self, notifications: Vec<WmNotification>) {
+        for n in notifications {
+            match n {
+                WmNotification::Updated(mid, wid, is_sync) => {
+                    self.notify_wallpaper_update(&mid, wid, is_sync);
+                }
+                WmNotification::Cleared(mid, is_sync) => {
+                    self.notify_wallpaper_cleared(&mid, is_sync);
+                }
+            }
         }
     }
 }

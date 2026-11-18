@@ -16,7 +16,7 @@ const LanguageToggle: React.FC = () => {
 
   const handleChange = (lang: string) => {
     changeLanguage(lang);
-    updateSetting(SETTING_KEYS.LANGUAGE, lang);
+    void updateSetting(SETTING_KEYS.LANGUAGE, lang).catch(() => {});
   };
 
   return (

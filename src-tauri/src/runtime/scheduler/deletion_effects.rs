@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use log::{error, warn};
 
 use super::Scheduler;
-use crate::ctx::window_manager::WallpaperWindowManager;
+use crate::ctx::window_manager::WmNotification;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
@@ -58,10 +58,10 @@ impl Scheduler {
             return;
         }
 
+        // —— 阶段 1：DB 查询 + 定时器管理（无 wm 锁） ——
         let db = self.db();
         let is_sync = self.resolve_is_sync_mode().await;
-        let wm = self.window_manager();
-        let wm_guard = wm.lock().await;
+        let mut notifications: Vec<WmNotification> = Vec::new();
 
         for config in affected_configs {
             let mid = &config.monitor_id;
@@ -69,11 +69,10 @@ impl Scheduler {
 
             match config.collection_id {
                 Some(cid) => {
-                    // 收藏夹模式：当前壁纸被删，尝试切换到下一张或清空
                     Self::handle_current_wallpaper_removed_inner(
                         &db,
                         self,
-                        &wm_guard,
+                        &mut notifications,
                         config,
                         cid,
                         deleted_ids,
@@ -82,21 +81,22 @@ impl Scheduler {
                     .await;
                 }
                 None => {
-                    // 场景 1b：单张模式，壁纸被删 → 清空窗口 + 停止定时器
                     self.stop(&key);
-                    wm_guard.notify_wallpaper_cleared(mid, is_sync);
+                    notifications.push(WmNotification::Cleared(mid.clone(), is_sync));
                 }
             }
         }
 
-        // 场景 1d：检查未直接受影响的显示器的定时器状态
         let affected_mids: HashSet<String> = affected_configs
             .iter()
             .map(|c| c.monitor_id.clone())
             .collect();
         Self::check_orphaned_timers_inner(&db, self, &affected_mids).await;
 
-        // 通知主窗口刷新 config 状态
+        // —— 阶段 2：短锁批量通知 ——
+        let wm = self.window_manager();
+        let wm_guard = wm.lock().await;
+        wm_guard.dispatch_notifications(notifications);
         wm_guard.notify_config_refreshed();
     }
 
@@ -114,29 +114,24 @@ impl Scheduler {
             return;
         }
 
+        // —— 阶段 1：定时器管理 + 收集通知（无 wm 锁） ——
         let is_sync = self.resolve_is_sync_mode().await;
-        let wm = self.window_manager();
-        let wm_guard = wm.lock().await;
+        let mut notifications: Vec<WmNotification> = Vec::new();
 
         for config in affected_configs {
             let mid = &config.monitor_id;
             let key = carousel_key(mid);
-
-            // 无论哪种子场景，定时器都需要停止（收藏夹已删除，轮播不再可能）
             self.stop(&key);
 
-            match config.wallpaper_id {
-                Some(_wid) => {
-                    // 场景 2c：有 wallpaper_id → 回退单张模式，壁纸继续显示
-                }
-                None => {
-                    // 场景 2b：无 wallpaper_id → 清空壁纸窗口
-                    wm_guard.notify_wallpaper_cleared(mid, is_sync);
-                }
+            if config.wallpaper_id.is_none() {
+                notifications.push(WmNotification::Cleared(mid.clone(), is_sync));
             }
         }
 
-        // 通知主窗口刷新 config 状态
+        // —— 阶段 2：短锁批量通知 ——
+        let wm = self.window_manager();
+        let wm_guard = wm.lock().await;
+        wm_guard.dispatch_notifications(notifications);
         wm_guard.notify_config_refreshed();
     }
 
@@ -163,10 +158,10 @@ impl Scheduler {
             return false;
         }
 
+        // —— 阶段 1：DB 查询 + 定时器管理（无 wm 锁） ——
         let db = self.db();
         let is_sync = self.resolve_is_sync_mode().await;
-        let wm = self.window_manager();
-        let wm_guard = wm.lock().await;
+        let mut notifications: Vec<WmNotification> = Vec::new();
         let mut config_changed = false;
 
         for config in bound_configs {
@@ -179,11 +174,10 @@ impl Scheduler {
                 .unwrap_or(false);
 
             if current_wid_removed {
-                // 当前播放的壁纸被移除，处理切换逻辑
                 let changed = Self::handle_current_wallpaper_removed_inner(
                     &db,
                     self,
-                    &wm_guard,
+                    &mut notifications,
                     config,
                     collection_id,
                     removing_ids,
@@ -192,7 +186,6 @@ impl Scheduler {
                 .await;
                 config_changed = config_changed || changed;
             } else {
-                // 场景 3a：当前壁纸未被移除，但收藏夹内容减少了
                 if self.is_running(&key) {
                     Self::manage_timer_by_collection_inner(&db, self, mid, collection_id, false)
                         .await;
@@ -200,9 +193,14 @@ impl Scheduler {
             }
         }
 
-        // 如果有 config 变更，通知主窗口刷新状态
-        if config_changed {
-            wm_guard.notify_config_refreshed();
+        // —— 阶段 2：短锁批量通知 ——
+        if config_changed || !notifications.is_empty() {
+            let wm = self.window_manager();
+            let wm_guard = wm.lock().await;
+            wm_guard.dispatch_notifications(notifications);
+            if config_changed {
+                wm_guard.notify_config_refreshed();
+            }
         }
 
         config_changed
@@ -307,7 +305,7 @@ impl Scheduler {
     async fn handle_current_wallpaper_removed_inner(
         db: &sea_orm::DatabaseConnection,
         sched: &mut Scheduler,
-        wm: &WallpaperWindowManager,
+        notifications: &mut Vec<WmNotification>,
         config: &monitor_config::Model,
         collection_id: i32,
         removed_ids: &HashSet<i32>,
@@ -318,13 +316,13 @@ impl Scheduler {
 
         match persist_current_wallpaper_removal(db, config, collection_id, removed_ids).await {
             Some(CurrentWallpaperOutcome::Advanced(next_wid)) => {
-                wm.notify_wallpaper_update(mid, next_wid, is_sync);
+                notifications.push(WmNotification::Updated(mid.clone(), next_wid, is_sync));
                 Self::manage_timer_by_collection_inner(db, sched, mid, collection_id, true).await;
                 true
             }
             Some(CurrentWallpaperOutcome::Cleared) => {
                 sched.stop(&key);
-                wm.notify_wallpaper_cleared(mid, is_sync);
+                notifications.push(WmNotification::Cleared(mid.clone(), is_sync));
                 true
             }
             None => false,

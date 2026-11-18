@@ -225,7 +225,7 @@ pub async fn reorder_collections(db: &DatabaseConnection, collection_ids: Vec<i3
         }
         // 单条更新走 ActiveModel::update 以触发 before_save 刷新 updated_at；
         // NotSet 字段（含 id 之外的全部列）会被跳过，只写 sort_order + updated_at。
-        let mut active: collection::ActiveModel = collection::ActiveModel {
+        let active: collection::ActiveModel = collection::ActiveModel {
             id: Set(*cid),
             sort_order: Set(new_order),
             ..Default::default()

@@ -168,15 +168,11 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   },
 
   fetchWallpapers: async () => {
-    try {
-      const list = await fetchAllWallpapers();
-      // activeId === 0 时 wallpapers 就是当前视图，同步更新避免两份数据不一致
-      set((state) =>
-        state.activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { wallpapers: list },
-      );
-    } catch (e) {
-      console.error("[fetchWallpapers]", e);
-    }
+    const list = await fetchAllWallpapers();
+    // activeId === 0 时 wallpapers 就是当前视图，同步更新避免两份数据不一致
+    set((state) =>
+      state.activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { wallpapers: list },
+    );
   },
 
   setActiveId: async (id: number) => {
@@ -211,8 +207,6 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       if (seq !== viewRequestSeq) return;
       if (list === null) return;
       set(activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { viewWallpapers: list });
-    } catch (e) {
-      console.error("[refreshView]", e);
     } finally {
       // 同样受守卫约束：过期请求不应关掉新请求的 loading
       if (seq === viewRequestSeq) set({ viewLoading: false });
@@ -220,26 +214,22 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   },
 
   refreshByIds: async (ids: number[]) => {
-    try {
-      const results = await Promise.all(ids.map((id) => fetchWallpaperById(id)));
-      // 同一壁纸对象可能同时存在于 wallpapers 与 viewWallpapers（收藏夹视图），
-      // 两处都要替换，否则缩略图在其中一个视图里不更新
-      const replaceIn = (list: Wallpaper[]) => {
-        const updated = [...list];
-        for (const wp of results) {
-          if (!wp) continue;
-          const idx = updated.findIndex((w) => w.id === wp.id);
-          if (idx >= 0) updated[idx] = wp;
-        }
-        return updated;
-      };
-      set((state) => ({
-        wallpapers: replaceIn(state.wallpapers),
-        viewWallpapers: replaceIn(state.viewWallpapers),
-      }));
-    } catch (e) {
-      console.error("[refreshByIds]", e);
-    }
+    const results = await Promise.all(ids.map((id) => fetchWallpaperById(id)));
+    // 同一壁纸对象可能同时存在于 wallpapers 与 viewWallpapers（收藏夹视图），
+    // 两处都要替换，否则缩略图在其中一个视图里不更新
+    const replaceIn = (list: Wallpaper[]) => {
+      const updated = [...list];
+      for (const wp of results) {
+        if (!wp) continue;
+        const idx = updated.findIndex((w) => w.id === wp.id);
+        if (idx >= 0) updated[idx] = wp;
+      }
+      return updated;
+    };
+    set((state) => ({
+      wallpapers: replaceIn(state.wallpapers),
+      viewWallpapers: replaceIn(state.viewWallpapers),
+    }));
   },
 
   importWallpapers: async () => {
@@ -421,12 +411,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   },
 
   deleteWallpapers: async (ids: number[]) => {
-    try {
-      const count = await deleteWallpaperBatch(ids);
-      console.log(`[Trash] ${count} wallpapers moved to trash`);
-    } catch (e) {
-      console.error("[deleteWallpapers]", e);
-      throw e;
-    }
+    const count = await deleteWallpaperBatch(ids);
+    console.log(`[Trash] ${count} wallpapers moved to trash`);
   },
 }));

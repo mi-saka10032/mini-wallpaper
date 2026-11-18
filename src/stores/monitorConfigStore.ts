@@ -64,9 +64,8 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
     if (_initialized) return;
     _initialized = true;
 
+    set({ loading: true });
     try {
-      set({ loading: true });
-
       await doSyncMonitors(set);
 
       // 壁纸窗口创建完成后，启动所有满足条件的轮播定时器
@@ -90,27 +89,19 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       // 监听 monitor-config-refreshed 事件（后端删除操作导致 config 变更，重新拉取）
       if (!_configRefreshUnlisten) {
         _configRefreshUnlisten = await listen(EVENTS.MONITOR_CONFIG_REFRESHED, async () => {
-          try {
-            const configs = await getMonitorConfigs();
-            set({ configs });
-          } catch (e) {
-            console.error("[monitorConfigStore] config refresh failed:", e);
-          }
+          const configs = await getMonitorConfigs();
+          set({ configs });
         });
       }
-    } catch (e) {
-      console.error("[monitorConfigStore.init]", e);
     } finally {
       set({ loading: false });
     }
   },
 
   syncMonitors: async () => {
+    set({ loading: true });
     try {
-      set({ loading: true });
       await doSyncMonitors(set);
-    } catch (e) {
-      console.error("[monitorConfigStore.syncMonitors]", e);
     } finally {
       set({ loading: false });
     }
@@ -121,8 +112,6 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
     try {
       const configs = await getMonitorConfigs();
       set({ configs });
-    } catch (e) {
-      console.error("[fetchMonitorConfigs]", e);
     } finally {
       set({ loading: false });
     }

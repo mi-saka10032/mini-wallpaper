@@ -45,6 +45,38 @@ use crate::runtime::action::Action;
 use crate::services::monitor_config_service;
 use tauri::Manager;
 
+/// Toast 反馈消息标识。
+///
+/// Rust 侧只发送稳定的字符串枚举值，文案由 Toast 窗口按当前语言查表渲染，
+/// 避免后端硬编码中文、也无法随前端语言切换的问题。
+pub enum ToastMessage {
+    NextSwitched,
+    PrevSwitched,
+    PausePaused,
+    PauseResumed,
+    FavoriteNoMonitor,
+    FavoriteNoWallpaper,
+    FavoriteAdded,
+    FavoriteRemoved,
+    FavoriteFailed,
+}
+
+impl ToastMessage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NextSwitched => "next_switched",
+            Self::PrevSwitched => "prev_switched",
+            Self::PausePaused => "pause_paused",
+            Self::PauseResumed => "pause_resumed",
+            Self::FavoriteNoMonitor => "favorite_no_monitor",
+            Self::FavoriteNoWallpaper => "favorite_no_wallpaper",
+            Self::FavoriteAdded => "favorite_added",
+            Self::FavoriteRemoved => "favorite_removed",
+            Self::FavoriteFailed => "favorite_failed",
+        }
+    }
+}
+
 // `platform::windows` 仅在 windows target 编译，因此这里通过本地 cfg 包装
 // 把"探测 active 显示器 device_name"抽象为跨平台可调用的小函数。
 // 非 windows target 下（CI 编译 / 跨平台开发体验）固定返回 None，
@@ -69,8 +101,8 @@ impl Scheduler {
     /// 操作即便失败也不应阻塞 UI 或导致 Tauri 命令报错。
     pub async fn dispatch_action(&mut self, action: Action) {
         let toast_message = match &action {
-            Action::Next => Some("已切换下一张壁纸"),
-            Action::Prev => Some("已切换上一张壁纸"),
+            Action::Next => Some(ToastMessage::NextSwitched),
+            Action::Prev => Some(ToastMessage::PrevSwitched),
             Action::TogglePause => None, // TogglePause 的 toast 在内部根据状态动态生成
             Action::OpenMain => None,    // 打开窗口无需 toast
             Action::Quit => None,        // 退出无需 toast
@@ -88,7 +120,7 @@ impl Scheduler {
 
         // 发送 toast 反馈（仅对需要反馈的动作）
         if let Some(msg) = toast_message {
-            self.show_action_toast(&action, msg).await;
+            self.show_action_toast(&action, msg.as_str()).await;
         }
     }
 
@@ -186,11 +218,11 @@ impl Scheduler {
         }
 
         let msg = if paused {
-            "已暂停轮播"
+            ToastMessage::PausePaused
         } else {
-            "已恢复轮播"
+            ToastMessage::PauseResumed
         };
-        self.show_action_toast(&Action::TogglePause, msg).await;
+        self.show_action_toast(&Action::TogglePause, msg.as_str()).await;
     }
 
     /// 显示并聚焦主窗口
@@ -213,7 +245,7 @@ impl Scheduler {
             Some(t) if !t.is_empty() => t,
             _ => {
                 warn!("[ActionDispatch] 找不到合适的目标显示器，跳过 ToggleFavorite 动作");
-                self.show_action_toast(&Action::ToggleFavorite, "当前显示器未启用壁纸")
+                self.show_action_toast(&Action::ToggleFavorite, ToastMessage::FavoriteNoMonitor.as_str())
                     .await;
                 return;
             }
@@ -224,7 +256,7 @@ impl Scheduler {
             Some(wid) => wid,
             None => {
                 warn!("[ActionDispatch] 当前显示器无壁纸，跳过 ToggleFavorite");
-                self.show_action_toast(&Action::ToggleFavorite, "当前没有正在显示的壁纸")
+                self.show_action_toast(&Action::ToggleFavorite, ToastMessage::FavoriteNoWallpaper.as_str())
                     .await;
                 return;
             }
@@ -233,15 +265,15 @@ impl Scheduler {
         match self.toggle_favorite(wallpaper_id).await {
             Ok(favorited) => {
                 let msg = if favorited {
-                    "已收藏当前壁纸"
+                    ToastMessage::FavoriteAdded
                 } else {
-                    "已取消收藏"
+                    ToastMessage::FavoriteRemoved
                 };
-                self.show_action_toast(&Action::ToggleFavorite, msg).await;
+                self.show_action_toast(&Action::ToggleFavorite, msg.as_str()).await;
             }
             Err(e) => {
                 warn!("[ActionDispatch] ToggleFavorite 失败: {}", e);
-                self.show_action_toast(&Action::ToggleFavorite, "收藏操作失败")
+                self.show_action_toast(&Action::ToggleFavorite, ToastMessage::FavoriteFailed.as_str())
                     .await;
             }
         }

@@ -1,15 +1,14 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { SkipForward, SkipBack, Pause, Play, AppWindow, X } from "lucide-react";
+import { SkipForward, SkipBack, Pause, Play, X } from "lucide-react";
+import { initToastI18n, t } from "./i18n";
 
-/** 动作类型 → 图标 & 颜色映射 */
 const ACTION_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string }> = {
-  next: { icon: SkipForward, color: "text-blue-400", bg: "bg-blue-500/10" },
-  prev: { icon: SkipBack, color: "text-blue-400", bg: "bg-blue-500/10" },
-  togglePause_paused: { icon: Pause, color: "text-amber-400", bg: "bg-amber-500/10" },
-  togglePause_resumed: { icon: Play, color: "text-emerald-400", bg: "bg-emerald-500/10" },
-  openMain: { icon: AppWindow, color: "text-purple-400", bg: "bg-purple-500/10" },
+  next_switched: { icon: SkipForward, color: "text-blue-400", bg: "bg-blue-500/10" },
+  prev_switched: { icon: SkipBack, color: "text-blue-400", bg: "bg-blue-500/10" },
+  pause_paused: { icon: Pause, color: "text-amber-400", bg: "bg-amber-500/10" },
+  pause_resumed: { icon: Play, color: "text-emerald-400", bg: "bg-emerald-500/10" },
 };
 
 /**
@@ -25,8 +24,7 @@ const ACTION_CONFIG: Record<string, { icon: React.ElementType; color: string; bg
  */
 const ActionToast: React.FC = () => {
   const searchParams = new URLSearchParams(window.location.search);
-  const action = searchParams.get("action") || "next";
-  const message = searchParams.get("message") || "";
+  const msgKey = searchParams.get("message") || "";
   const label = searchParams.get("label") || "";
   /** 自动关闭时长（毫秒），由 Rust 端透传，缺省 3000ms */
   const duration = (() => {
@@ -36,6 +34,11 @@ const ActionToast: React.FC = () => {
 
   const [visible, setVisible] = useState(false);
   const [exiting, setExiting] = useState(false);
+  const [i18nReady, setI18nReady] = useState(false);
+
+  useEffect(() => {
+    void initToastI18n().finally(() => setI18nReady(true));
+  }, []);
 
   // Toast 窗口专属 body class：保证根容器完全透明，无灰色底
   useEffect(() => {
@@ -45,11 +48,11 @@ const ActionToast: React.FC = () => {
     };
   }, []);
 
-  // 入场动画
   useEffect(() => {
+    if (!i18nReady) return;
     const timer = setTimeout(() => setVisible(true), 50);
     return () => clearTimeout(timer);
-  }, []);
+  }, [i18nReady]);
 
   // 关闭 toast 窗口
   const handleClose = useCallback(async () => {
@@ -73,15 +76,9 @@ const ActionToast: React.FC = () => {
     return () => clearTimeout(timer);
   }, [duration, handleClose]);
 
-  // 解析动作配置
-  const configKey =
-    action === "togglePause"
-      ? message.includes("暂停") || message.includes("Paused")
-        ? "togglePause_paused"
-        : "togglePause_resumed"
-      : action;
-  const config = ACTION_CONFIG[configKey] || ACTION_CONFIG.next;
+  const config = ACTION_CONFIG[msgKey] || ACTION_CONFIG.next_switched;
   const Icon = config.icon;
+  const message = t(msgKey);
 
   return (
     <div
@@ -104,7 +101,7 @@ const ActionToast: React.FC = () => {
 
         {/* 消息内容 */}
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-white/90 truncate">{message}</p>
+          <p className="text-xs font-medium text-white/90 truncate">{i18nReady ? message : ""}</p>
           <p className="text-[10px] text-white/40 mt-0.5">Mini Wallpaper</p>
         </div>
 

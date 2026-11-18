@@ -31,10 +31,10 @@ import {
 import { cn } from "@/lib/utils";
 import { TRASH_VIEW_ID } from "@/constants/views";
 import { useCollectionStore, type Collection } from "@/stores/collectionStore";
-import { SmartCollectionDialog } from "@/components/wallpaper/SmartCollectionDialog";
 import { memo, type FC } from "react";
 
 const SortableCollectionList = lazy(() => import("./SortableCollectionList"));
+const SmartCollectionDialog = lazy(() => import("@/components/wallpaper/SmartCollectionDialog"));
 
 interface SidebarProps {
   activeId: number;
@@ -271,12 +271,15 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 智能收藏夹规则构建器（创建 / 编辑） */}
-      <SmartCollectionDialog
-        open={smartDialogOpen}
-        onOpenChange={setSmartDialogOpen}
-        editing={smartEditing}
-      />
+      {smartDialogOpen && (
+        <Suspense fallback={null}>
+          <SmartCollectionDialog
+            open={smartDialogOpen}
+            onOpenChange={setSmartDialogOpen}
+            editing={smartEditing}
+          />
+        </Suspense>
+      )}
     </div>
   );
 });

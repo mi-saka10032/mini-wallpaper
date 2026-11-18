@@ -13,8 +13,6 @@ import DropOverlay from "@/components/wallpaper/DropOverlay";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
-import { TagEditorDialog } from "@/components/wallpaper/TagEditorDialog";
-import { SmartCollectionDialog } from "@/components/wallpaper/SmartCollectionDialog";
 import { useDropImport } from "@/hooks/useDropImport";
 import { useImportFeedback } from "@/hooks/useImportFeedback";
 import { useManageMode } from "@/hooks/useManageMode";
@@ -33,6 +31,8 @@ import StatusBar from "./StatusBar";
 
 // 排序网格组件懒加载（包含 @dnd-kit 依赖）
 const SortableGrid = lazy(() => import("@/components/wallpaper/SortableGrid"));
+const TagEditorDialog = lazy(() => import("@/components/wallpaper/TagEditorDialog"));
+const SmartCollectionDialog = lazy(() => import("@/components/wallpaper/SmartCollectionDialog"));
 
 interface MainContentProps {
   className?: string;
@@ -368,21 +368,25 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-        {/* 批量标签编辑对话框 */}
-        <TagEditorDialog
-          open={tagDialogOpen}
-          onOpenChange={setTagDialogOpen}
-          mode="batch"
-          wallpaperIds={Array.from(manage.selectedIds)}
-        />
-        {/* 智能收藏夹规则编辑对话框（复用创建/编辑共用的构建器） */}
-        {isSmartCollection && (
-          <SmartCollectionDialog
-            open={smartDialogOpen}
-            onOpenChange={setSmartDialogOpen}
-            editing={activeCollection}
-          />
-        )}{" "}
+        {tagDialogOpen && (
+          <Suspense fallback={null}>
+            <TagEditorDialog
+              open={tagDialogOpen}
+              onOpenChange={setTagDialogOpen}
+              mode="batch"
+              wallpaperIds={Array.from(manage.selectedIds)}
+            />
+          </Suspense>
+        )}
+        {isSmartCollection && smartDialogOpen && (
+          <Suspense fallback={null}>
+            <SmartCollectionDialog
+              open={smartDialogOpen}
+              onOpenChange={setSmartDialogOpen}
+              editing={activeCollection}
+            />
+          </Suspense>
+        )}
       </div>
     </WallpaperCardContextMenuProvider>
   );

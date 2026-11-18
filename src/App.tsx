@@ -169,7 +169,7 @@ const App: React.FC = () => {
           {manageMode && <div className="absolute inset-0 z-40 bg-black/20 backdrop-blur-[1px]" />}
         </div>
 
-        <main className="flex h-[calc(100vh-48px)]">
+        <main className="main-gradient flex h-[calc(100vh-48px)]">
           {/* 侧边栏 */}
           <div className="relative h-full shrink-0">
             <Sidebar activeId={activeId} onActiveIdChange={setActiveId} />

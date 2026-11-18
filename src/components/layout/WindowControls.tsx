@@ -49,13 +49,13 @@ const WindowControls: React.FC = () => {
     <div className="flex items-center">
       <button
         onClick={handleMinimize}
-        className="flex h-8 w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-foreground/6 hover:text-foreground"
+        className="flex h-8 w-11 items-center justify-center transition-colors"
       >
         <Minus className="size-4" />
       </button>
       <button
         onClick={handleMaximize}
-        className="flex h-8 w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-foreground/6 hover:text-foreground"
+        className="flex h-8 w-11 items-center justify-center transition-colors"
       >
         {isMaximized ? (
           <svg
@@ -66,7 +66,7 @@ const WindowControls: React.FC = () => {
             strokeWidth="1.2"
           >
             <rect x="2.5" y="0.5" width="9" height="9" rx="1" />
-            <rect x="0.5" y="2.5" width="9" height="9" rx="1" fill="var(--background)" />
+            <rect x="0.5" y="2.5" width="9" height="9" rx="1" fill="var(--primary)" />
           </svg>
         ) : (
           <Square className="size-3.5" />
@@ -74,7 +74,8 @@ const WindowControls: React.FC = () => {
       </button>
       <button
         onClick={handleClose}
-        className="flex h-8 w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-[#c42b1c] hover:text-white"
+        data-window-close
+        className="flex h-8 w-11 items-center justify-center transition-colors hover:bg-[#c42b1c] hover:text-white"
       >
         <X className="size-4" />
       </button>

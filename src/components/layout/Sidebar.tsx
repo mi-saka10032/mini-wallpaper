@@ -127,7 +127,7 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
   }, [deleteTarget, activeId, onActiveIdChange, deleteCollection]);
 
   return (
-    <div className="flex h-full w-52 shrink-0 flex-col overflow-hidden border-r border-border/50 bg-sidebar-background">
+    <div className="flex h-full w-52 shrink-0 flex-col overflow-hidden border-r border-border/50">
       <div className="flex-1 overflow-y-auto p-1">
         {/* 壁纸库 */}
         <div className="h-8">

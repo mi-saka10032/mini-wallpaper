@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState, type FC } from "react";
-import { GripVertical, Plus, RefreshCw, Search, Settings2, Sparkles, X } from "lucide-react";
+import { Move, Plus, RefreshCw, Search, Settings2, Sparkles, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
@@ -29,9 +29,6 @@ interface NormalToolbarProps {
   /** picker 确认后的回调 */
   onPickerConfirm: () => void;
 }
-
-/** 图标槽位的统一尺寸，与 Button 的 icon-sm 变体保持一致，供占位符复用 */
-const SLOT_SIZE = "size-8";
 
 /**
  * 常态模式下的操作栏。
@@ -125,9 +122,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
                   onConfirm={handlePickerConfirm}
                 />
               </Dialog>
-            ) : (
-              <div className={SLOT_SIZE} aria-hidden />
-            )
+            ) : null
           ) : (
             <Button
               variant="ghost"
@@ -147,9 +142,7 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
 
         {/* ===== 槽位二：搜索区（折叠态与展开态共用同一槽位） ===== */}
         <div className="flex shrink-0 items-center">
-          {isEmpty ? (
-            <div className={SLOT_SIZE} aria-hidden />
-          ) : searchExpanded ? (
+          {isEmpty ? null : searchExpanded ? (
             <div className="relative animate-in fade-in slide-in-from-right-2 duration-200">
               <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-foreground/40" />
               <Input
@@ -189,21 +182,24 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
 
         {/* ===== 槽位三：右操作区（次操作 + 主操作，主操作恒定居于末尾） ===== */}
         <div className="flex shrink-0 items-center gap-1">
-          {/* 次操作位：仅手动收藏夹有拖拽排序；其余视图渲染等宽占位以锁定主操作位置 */}
           {!isEmpty && isCollectionView && !isSmartCollection ? (
             <Button
               variant="ghost"
-              size="icon-sm"
+              size="sm"
               onClick={onEnterSortMode}
-              className="text-muted-foreground hover:bg-primary-hover hover:text-foreground"
-              title={t("main.sortWallpapers")}
-              aria-label={t("main.sortWallpapers")}
+              className="gap-1.5 text-muted-foreground hover:bg-primary-hover hover:text-foreground"
             >
-              <GripVertical className="size-3.5" />
+              <Move className="size-3.5" />
+              {t("main.sortWallpapers")}
             </Button>
-          ) : (
-            <div className={SLOT_SIZE} aria-hidden />
-          )}
+          ) : !isEmpty ? (
+            <span
+              className="truncate whitespace-nowrap text-xs text-foreground/40"
+              title={!isCollectionView ? t("main.localNoSort") : t("main.smartNoSort")}
+            >
+              {!isCollectionView ? t("main.localNoSort") : t("main.smartNoSort")}
+            </span>
+          ) : null}
 
           {/* 主操作位：智能收藏夹为「编辑规则」，其余为「管理壁纸」。
               智能收藏夹空结果时同样要显示，因为此时正是需要修正规则的场景。 */}

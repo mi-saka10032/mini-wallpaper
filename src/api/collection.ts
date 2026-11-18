@@ -21,6 +21,10 @@ export async function remove(id: number): Promise<void> {
   return invoke(COMMANDS.DELETE_COLLECTION, { id });
 }
 
+export async function reorderCollections(collectionIds: number[]): Promise<void> {
+  return invoke(COMMANDS.REORDER_COLLECTIONS, { collectionIds });
+}
+
 /** 获取收藏夹内的壁纸列表 */
 export async function getCollectionWallpapers(collectionId: number): Promise<Wallpaper[]> {
   return invoke(COMMANDS.GET_COLLECTION_WALLPAPERS, { collectionId });

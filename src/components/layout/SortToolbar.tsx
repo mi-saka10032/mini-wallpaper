@@ -1,5 +1,5 @@
 import { memo, type FC } from "react";
-import { GripVertical } from "lucide-react";
+import { Move } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 
@@ -15,7 +15,7 @@ const SortToolbar: FC<SortToolbarProps> = memo(({ orderDirty, onCancel, onSave }
 
   return (
     <>
-      <GripVertical className="size-3.5 text-muted-foreground" />
+      <Move className="size-3.5 text-muted-foreground" />
       <span className="text-sm text-muted-foreground">{t("main.sortModeHint")}</span>
       {orderDirty && (
         <span className="ml-1 text-xs text-primary/80">{t("main.orderModified")}</span>

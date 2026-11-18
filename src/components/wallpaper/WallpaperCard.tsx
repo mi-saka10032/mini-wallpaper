@@ -1,4 +1,4 @@
-import { Check, GripVertical, Heart, Monitor } from "lucide-react";
+import { Check, Move, Heart, Monitor } from "lucide-react";
 import { memo, startTransition, useCallback, useMemo, useOptimistic } from "react";
 import { useTranslation } from "react-i18next";
 import { useSortable } from "@dnd-kit/sortable";
@@ -20,7 +20,7 @@ export interface WallpaperCardProps {
   selected: boolean;
   isCollectionView: boolean;
   isDragging?: boolean;
-  dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
+  sortable?: boolean;
   onClick: (wp: Wallpaper, index: number, e: React.MouseEvent) => void;
   onDelete: (id: number) => void;
   onAddToCollection: (wallpaperId: number, collectionId: number) => void;
@@ -37,7 +37,7 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
   selected,
   isCollectionView,
   isDragging = false,
-  dragHandleProps,
+  sortable = false,
   onClick,
   onDelete,
   onAddToCollection,
@@ -120,19 +120,14 @@ const WallpaperCardContent: React.FC<WallpaperCardProps & { style?: React.CSSPro
     );
   }, [manageMode, selected, optimisticFavorite, handleToggleFavorite, t]);
 
-  // 右下角叠加层：拖拽手柄
   const overlayBottomRight = useMemo(() => {
-    if (!dragHandleProps) return null;
+    if (!sortable) return null;
     return (
-      <div
-        {...dragHandleProps}
-        onClick={(e) => e.stopPropagation()}
-        className="absolute right-1.5 bottom-8 z-20 flex size-6 cursor-grab items-center justify-center rounded bg-black/40 text-white opacity-0 transition-opacity active:cursor-grabbing group-hover:opacity-100"
-      >
-        <GripVertical className="size-3.5" />
+      <div className="pointer-events-none absolute right-1.5 bottom-8 z-20 flex size-6 items-center justify-center rounded bg-black/40 text-white opacity-0 transition-opacity group-hover:opacity-100">
+        <Move className="size-3.5" />
       </div>
     );
-  }, [dragHandleProps]);
+  }, [sortable]);
 
   // 缩略图左下角叠加层：「使用中」角标（常驻，无需右键即可识别当前壁纸）
   const overlayBottomLeft = useMemo(() => {
@@ -215,8 +210,14 @@ const SortableWallpaperCardInner: React.FC<WallpaperCardProps> = (props) => {
   };
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes}>
-      <WallpaperCardContent {...props} isDragging={isDragging} dragHandleProps={listeners} />
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="cursor-grab active:cursor-grabbing"
+    >
+      <WallpaperCardContent {...props} isDragging={isDragging} sortable />
     </div>
   );
 };

@@ -184,6 +184,59 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
     Ok(())
 }
 
+/// 重新排序收藏夹列表（事务保护）
+///
+/// 内置收藏夹（is_builtin = 1）固定占据 sort_order = 0，不参与排序；
+/// 用户夹按传入顺序分配 1..n。请求必须恰好包含全部用户夹 id——既防止
+/// 漏传导致部分夹 id 停留在旧 order 产生重复，也防止传入内置夹 id 越权。
+/// 与 reorder_wallpapers 一致做不动点 diff：order 未变的夹不写库。
+pub async fn reorder_collections(db: &DatabaseConnection, collection_ids: Vec<i32>) -> Result<()> {
+    let all = collection::Entity::find().all(db).await?;
+    let (builtin, custom): (Vec<_>, Vec<_>) = all.into_iter().partition(|m| m.is_builtin == 1);
+
+    let custom_ids: std::collections::HashSet<i32> = custom.iter().map(|m| m.id).collect();
+    let incoming: std::collections::HashSet<i32> = collection_ids.iter().copied().collect();
+
+    // 完整性校验：传入集合必须恰好等于全部用户夹集合，且不重复。
+    // HashSet 的 != 会先去重，单靠它无法发现重复 id——重复会让下游
+    // enumerate() 对同一 id 写入两个 order，造成 sort_order 冲突。
+    if incoming != custom_ids || collection_ids.len() != custom_ids.len() {
+        anyhow::bail!("Collection order must contain exactly all user collections, no duplicates");
+    }
+
+    let txn = db.begin().await?;
+
+    // 内置夹钉在 0（若历史数据非 0 也顺带纠正，保证顶部唯一）
+    for m in &builtin {
+        if m.sort_order != 0 {
+            let mut active: collection::ActiveModel = m.clone().into();
+            active.sort_order = Set(0);
+            active.update(&txn).await?;
+        }
+    }
+
+    // 不动点 diff：仅写 sort_order 实际变化的用户夹
+    let current: std::collections::HashMap<i32, i32> =
+        custom.iter().map(|m| (m.id, m.sort_order)).collect();
+    for (index, cid) in collection_ids.iter().enumerate() {
+        let new_order = index as i32 + 1;
+        if current.get(cid) == Some(&new_order) {
+            continue;
+        }
+        // 单条更新走 ActiveModel::update 以触发 before_save 刷新 updated_at；
+        // NotSet 字段（含 id 之外的全部列）会被跳过，只写 sort_order + updated_at。
+        let mut active: collection::ActiveModel = collection::ActiveModel {
+            id: Set(*cid),
+            sort_order: Set(new_order),
+            ..Default::default()
+        };
+        active.update(&txn).await?;
+    }
+
+    txn.commit().await?;
+    Ok(())
+}
+
 /// 获取收藏夹内的壁纸列表
 pub async fn get_wallpapers(
     db: &DatabaseConnection,
@@ -637,7 +690,7 @@ mod tests {
     };
     use sea_orm_migration::MigratorTrait;
 
-    use super::add_wallpapers;
+    use super::{add_wallpapers, reorder_collections};
     use crate::entities::{collection, collection_wallpaper, wallpaper};
     use crate::migration::Migrator;
     use crate::services::wallpaper_service;
@@ -761,5 +814,43 @@ mod tests {
             .await
             .unwrap_err();
         assert!(missing_wallpaper.to_string().contains("not available"));
+    }
+
+    #[tokio::test]
+    async fn reorders_collections_and_rejects_duplicates() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let a = insert_collection(&db, "a").await;
+        let b = insert_collection(&db, "b").await;
+
+        // 正常重排 [b, a] → b=1, a=2
+        reorder_collections(&db, vec![b.id, a.id]).await.unwrap();
+        let orders: std::collections::HashMap<i32, i32> = collection::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.id, m.sort_order))
+            .collect();
+        assert_eq!(orders[&b.id], 1);
+        assert_eq!(orders[&a.id], 2);
+
+        // ActiveModel::update 只应写 sort_order + updated_at，其余 NotSet 字段保持原值；
+        // before_save 应刷新 updated_at（哨兵 "2026-01-01" 应被替换）
+        let b_after = collection::Entity::find_by_id(b.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(b_after.name, "b");
+        assert_eq!(b_after.kind, "b");
+        assert_ne!(b_after.updated_at, "2026-01-01 00:00:00");
+
+        // 重复 id：HashSet 去重后集合相等，但长度校验必须拒绝
+        assert!(reorder_collections(&db, vec![b.id, a.id, a.id])
+            .await
+            .is_err());
+        // 漏传：集合不等，拒绝
+        assert!(reorder_collections(&db, vec![a.id]).await.is_err());
     }
 }

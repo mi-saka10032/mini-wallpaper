@@ -8,8 +8,8 @@ use crate::ctx::AppContext;
 use crate::dto::collection_dto::{
     AddWallpapersRequest, CreateCollectionRequest, CreateSmartCollectionRequest,
     DeleteCollectionRequest, GetCollectionWallpapersRequest, PreviewSmartCountRequest,
-    RemoveWallpapersRequest, RenameCollectionRequest, ReorderWallpapersRequest,
-    ToggleFavoriteRequest, UpdateSmartCollectionRequest,
+    RemoveWallpapersRequest, RenameCollectionRequest, ReorderCollectionsRequest,
+    ReorderWallpapersRequest, ToggleFavoriteRequest, UpdateSmartCollectionRequest,
 };
 use crate::dto::Validated;
 use crate::entities::{collection, wallpaper};
@@ -136,6 +136,17 @@ pub async fn remove_wallpapers_from_collection(
         .await;
 
     Ok(removed)
+}
+
+/// 重新排序收藏夹列表（内置收藏夹固定顶部，不参与）
+#[tauri::command]
+pub async fn reorder_collections(
+    ctx: State<'_, AppContext>,
+    req: Validated<ReorderCollectionsRequest>,
+) -> CommandResult<()> {
+    let req = req.into_inner();
+    let app_ctx: &AppContext = ctx.inner();
+    Ok(collection_service::reorder_collections(&app_ctx.db, req.collection_ids).await?)
 }
 
 /// 重新排序收藏夹内的壁纸

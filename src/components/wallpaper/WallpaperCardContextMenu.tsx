@@ -1,5 +1,7 @@
 import {
   createContext,
+  lazy,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -25,8 +27,9 @@ import { useCollectionStore } from "@/stores/collectionStore";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useFavoritesStore } from "@/stores/favoritesStore";
-import { TagEditorDialog } from "@/components/wallpaper/TagEditorDialog";
 import { cn } from "@/lib/utils";
+
+const TagEditorDialog = lazy(() => import("@/components/wallpaper/TagEditorDialog"));
 
 // ============ Context 类型定义 ============
 
@@ -528,15 +531,17 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
 
       {/* 单张标签编辑对话框（全局单例） */}
       {tagTargetId != null && (
-        <TagEditorDialog
-          open={tagDialogOpen}
-          onOpenChange={(v) => {
-            setTagDialogOpen(v);
-            if (!v) setTagTargetId(null);
-          }}
-          mode="single"
-          wallpaperIds={[tagTargetId]}
-        />
+        <Suspense fallback={null}>
+          <TagEditorDialog
+            open={tagDialogOpen}
+            onOpenChange={(v) => {
+              setTagDialogOpen(v);
+              if (!v) setTagTargetId(null);
+            }}
+            mode="single"
+            wallpaperIds={[tagTargetId]}
+          />
+        </Suspense>
       )}
     </WallpaperCardContextMenuContext.Provider>
   );

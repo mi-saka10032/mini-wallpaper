@@ -369,6 +369,24 @@
   animation: dialog-exit 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+.toolbar-primary button:not([data-window-close]) {
+  color: var(--primary-foreground);
+  opacity: 0.7;
+}
+
+.toolbar-primary button:not([data-window-close]):hover {
+  background: transparent !important;
+  opacity: 1;
+}
+
+.main-gradient {
+  background: radial-gradient(
+    circle at center,
+    color-mix(in oklab, var(--primary) 25%, var(--background)),
+    var(--background)
+  );
+}
+
 .panel-animate {
   opacity: 0;
   visibility: hidden;

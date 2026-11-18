@@ -36,7 +36,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-12 shrink-0 items-center border-b border-border/50 bg-surface px-3"
+      className="toolbar-primary flex h-12 shrink-0 items-center border-b border-primary-foreground/15 bg-primary px-3"
     >
       {/* 左侧操作按钮 */}
       <div className="flex items-center gap-1">
@@ -44,7 +44,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
           variant="ghost"
           size="sm"
           onClick={handleImport}
-          className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
+          className="gap-1.5 text-primary-foreground/70 hover:text-primary-foreground hover:bg-transparent"
         >
           <Plus className="size-4" />
           <span className="text-sm">{t("toolbar.import")}</span>
@@ -53,7 +53,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
           variant="ghost"
           size="sm"
           onClick={() => onActiveIdChange(-1)}
-          className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
+          className="gap-1.5 text-primary-foreground/70 hover:text-primary-foreground hover:bg-transparent"
         >
           <Monitor className="size-4" />
           <span className="text-sm">{t("toolbar.monitor")}</span>
@@ -77,7 +77,7 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8 text-muted-foreground hover:text-foreground hover:bg-primary-hover"
+                  className="size-8 text-primary-foreground/70 hover:text-primary-foreground hover:bg-transparent"
                 >
                   <Settings className="size-4" />
                 </Button>

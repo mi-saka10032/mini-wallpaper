@@ -52,6 +52,7 @@ export default defineConfig(async () => ({
     emptyOutDir: true,
     // Tauri 的三种窗口各有独立入口，避免壁纸/Toast 窗口加载主窗口的 UI 框架
     rollupOptions: {
+      output: { minify: { compress: { dropConsole: true, dropDebugger: true } } },
       input: {
         main: path.resolve(projectRoot, "src/pages/index.html"),
         wallpaper: path.resolve(projectRoot, "src/pages/wallpaper.html"),

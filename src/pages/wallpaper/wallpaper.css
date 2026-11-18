@@ -1,0 +1,30 @@
+@import "tailwindcss" source(none);
+@source "./WallpaperRenderer.tsx";
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body.wallpaper-body {
+  background: transparent !important;
+}
+
+*,
+*::before,
+*::after {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+img,
+video,
+a {
+  -webkit-user-drag: none;
+}

@@ -6,13 +6,19 @@ import path from "path";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+const projectRoot = __dirname;
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  root: path.resolve(projectRoot, "src/pages"),
+  publicDir: path.resolve(projectRoot, "public"),
+  cacheDir: path.resolve(projectRoot, "node_modules/.vite"),
+
   plugins: [react(), tailwindcss()],
 
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(projectRoot, "./src"),
     },
   },
 
@@ -25,6 +31,9 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    fs: {
+      allow: [projectRoot],
+    },
     hmr: host
       ? {
           protocol: "ws",
@@ -38,16 +47,20 @@ export default defineConfig(async () => ({
     },
   },
 
-  // 构建优化：将 Radix UI 提取为独立 chunk
   build: {
+    outDir: path.resolve(projectRoot, "dist"),
+    emptyOutDir: true,
+    // Tauri 的三种窗口各有独立入口，避免壁纸/Toast 窗口加载主窗口的 UI 框架
     rollupOptions: {
-      output: {
-        manualChunks(id: string) {
-          if (id.includes("@radix-ui")) {
-            return "vendor-radix";
-          }
-        },
+      input: {
+        main: path.resolve(projectRoot, "src/pages/index.html"),
+        wallpaper: path.resolve(projectRoot, "src/pages/wallpaper.html"),
+        toast: path.resolve(projectRoot, "src/pages/toast.html"),
       },
+    },
+    // Tauri WebView 原生支持 modulepreload，无需注入 polyfill
+    modulePreload: {
+      polyfill: false,
     },
   },
 }));

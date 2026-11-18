@@ -368,3 +368,16 @@
 .dialog-animate[data-state="closed"] {
   animation: dialog-exit 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+.panel-animate {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.3s ease-out,
+    visibility 0.3s;
+}
+
+.panel-animate[data-state="open"] {
+  opacity: 1;
+  visibility: visible;
+}

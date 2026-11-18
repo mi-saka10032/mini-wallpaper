@@ -22,7 +22,7 @@ import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
 import AppLoading from "@/components/ui/AppLoading";
-import { TRASH_VIEW_ID } from "@/constants/views";
+import { SETTINGS_VIEW_ID, TRASH_VIEW_ID } from "@/constants/views";
 import { cn } from "./lib/utils";
 
 // 非首屏组件懒加载
@@ -135,6 +135,8 @@ const App: React.FC = () => {
     if (activeId === TRASH_VIEW_ID) setTrashMounted(true);
   }, [activeId]);
 
+  const isOverlayView = activeId === SETTINGS_VIEW_ID || activeId === TRASH_VIEW_ID;
+
   // 跳过首次执行的标记（AppShell 已完成初始化，无需重复）
   const langInitRef = useRef(true);
 
@@ -179,31 +181,37 @@ const App: React.FC = () => {
 
           <ErrorBoundary>
             <div className="relative flex flex-1 flex-col overflow-hidden">
-              {/* 显示器设置面板 - 懒加载覆盖层，不影响首屏加载 */}
               <Suspense fallback={null}>
                 <div
+                  aria-hidden={activeId !== SETTINGS_VIEW_ID}
+                  inert={activeId !== SETTINGS_VIEW_ID}
+                  data-state={activeId === SETTINGS_VIEW_ID ? "open" : "closed"}
                   className={cn(
-                    "absolute inset-0 z-30 overflow-hidden bg-background",
-                    activeId === -1 ? "block" : "hidden",
+                    "panel-animate absolute inset-0 z-30 overflow-hidden bg-background",
+                    activeId !== SETTINGS_VIEW_ID && "pointer-events-none",
                   )}
                 >
                   <MonitorSettingsPanel />
                 </div>
               </Suspense>
 
-              {/* 回收站 - 懒加载覆盖层，仅在选中回收站时展示 */}
               <Suspense fallback={null}>
                 <div
+                  aria-hidden={activeId !== TRASH_VIEW_ID}
+                  inert={activeId !== TRASH_VIEW_ID}
+                  data-state={activeId === TRASH_VIEW_ID ? "open" : "closed"}
                   className={cn(
-                    "absolute inset-0 z-30 overflow-hidden bg-background",
-                    activeId === TRASH_VIEW_ID ? "block" : "hidden",
+                    "panel-animate absolute inset-0 z-30 overflow-hidden bg-background",
+                    activeId !== TRASH_VIEW_ID && "pointer-events-none",
                   )}
                 >
                   {trashMounted && <TrashView />}
                 </div>
               </Suspense>
 
-              <MainContent onPreview={openPreview} onManageModeChange={setManageMode} />
+              <div className={cn("flex min-h-0 flex-1 flex-col", isOverlayView && "hidden")}>
+                <MainContent onPreview={openPreview} onManageModeChange={setManageMode} />
+              </div>
             </div>
           </ErrorBoundary>
         </main>

@@ -57,6 +57,8 @@
     "cancelConfirmDiscard": "放弃",
     "cancelConfirmKeep": "继续编辑",
     "sortWallpapers": "排序",
+    "localNoSort": "本地壁纸不可排序",
+    "smartNoSort": "智能收藏夹不可排序",
     "sortModeHint": "拖拽卡片调整顺序",
     "save": "保存",
     "removeFromCollection": "从收藏夹移除",

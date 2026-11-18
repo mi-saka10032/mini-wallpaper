@@ -17,6 +17,7 @@ export const COMMANDS = {
   CREATE_COLLECTION: "create_collection",
   RENAME_COLLECTION: "rename_collection",
   DELETE_COLLECTION: "delete_collection",
+  REORDER_COLLECTIONS: "reorder_collections",
   GET_COLLECTION_WALLPAPERS: "get_collection_wallpapers",
   CREATE_SMART_COLLECTION: "create_smart_collection",
   UPDATE_SMART_COLLECTION: "update_smart_collection",
@@ -261,6 +262,10 @@ export interface ReorderWallpapersReq {
   wallpaperIds: number[];
 }
 
+export interface ReorderCollectionsReq {
+  collectionIds: number[];
+}
+
 /** 导入壁纸请求 */
 export interface ImportWallpapersReq {
   paths: string[];
@@ -404,6 +409,10 @@ export interface CommandMap {
   };
   [COMMANDS.DELETE_COLLECTION]: {
     params: { req: DeleteCollectionReq };
+    result: void;
+  };
+  [COMMANDS.REORDER_COLLECTIONS]: {
+    params: { req: ReorderCollectionsReq };
     result: void;
   };
   [COMMANDS.GET_COLLECTION_WALLPAPERS]: {

@@ -5,6 +5,7 @@ import {
   create as createCollectionApi,
   rename as renameCollectionApi,
   remove as removeCollectionApi,
+  reorderCollections as reorderCollectionsApi,
   createSmart as createSmartApi,
   updateSmart as updateSmartApi,
 } from "@/api/collection";
@@ -17,6 +18,7 @@ interface CollectionState {
   createCollection: (name: string) => Promise<void>;
   renameCollection: (id: number, name: string) => Promise<void>;
   deleteCollection: (id: number) => Promise<void>;
+  reorderCollections: (ids: number[]) => Promise<void>;
   createSmartCollection: (name: string, ruleJson: string) => Promise<void>;
   updateSmartCollection: (id: number, ruleJson: string, name?: string | null) => Promise<void>;
 }
@@ -55,6 +57,10 @@ export const useCollectionStore = create<CollectionState>((set) => ({
     } catch (e) {
       console.error("[deleteCollection]", e);
     }
+  },
+
+  reorderCollections: async (ids: number[]) => {
+    await reorderCollectionsApi(ids);
   },
 
   createSmartCollection: async (name: string, ruleJson: string) => {

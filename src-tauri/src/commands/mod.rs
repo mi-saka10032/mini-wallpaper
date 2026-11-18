@@ -23,7 +23,7 @@ pub use collection::{
     add_wallpapers_to_collection, create_collection, create_smart_collection, delete_collection,
     get_collection_wallpapers, get_collections, preview_smart_count,
     remove_wallpapers_from_collection, rename_collection, reorder_collection_wallpapers,
-    toggle_favorite, update_smart_collection,
+    reorder_collections, toggle_favorite, update_smart_collection,
 };
 #[allow(unused_imports)]
 pub use fullscreen::init_fullscreen_detection;
@@ -78,6 +78,7 @@ macro_rules! all_handlers {
             $crate::commands::collection::add_wallpapers_to_collection,
             $crate::commands::collection::remove_wallpapers_from_collection,
             $crate::commands::collection::reorder_collection_wallpapers,
+            $crate::commands::collection::reorder_collections,
             $crate::commands::collection::toggle_favorite,
             $crate::commands::collection::create_smart_collection,
             $crate::commands::collection::update_smart_collection,

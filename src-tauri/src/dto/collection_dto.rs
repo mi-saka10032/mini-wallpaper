@@ -64,6 +64,15 @@ pub struct RemoveWallpapersRequest {
     pub wallpaper_ids: Vec<i32>,
 }
 
+/// 重新排序收藏夹列表请求（内置收藏夹不参与，由服务层守卫）
+#[derive(Debug, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderCollectionsRequest {
+    /// 按新顺序排列的收藏夹 ID 列表（仅用户自建夹）：非空
+    #[garde(length(min = 1))]
+    pub collection_ids: Vec<i32>,
+}
+
 /// 重新排序收藏夹内壁纸请求
 #[derive(Debug, Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]

@@ -57,6 +57,8 @@
     "cancelConfirmDiscard": "Discard",
     "cancelConfirmKeep": "Keep Editing",
     "sortWallpapers": "Sort",
+    "localNoSort": "Local: no sorting",
+    "smartNoSort": "Smart: no sorting",
     "sortModeHint": "Drag cards to reorder",
     "save": "Save",
     "removeFromCollection": "Remove from Collection",

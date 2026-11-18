@@ -135,6 +135,7 @@ const App: React.FC = () => {
   const activeId = useWallpaperStore((s) => s.activeId);
   const setActiveId = useWallpaperStore((s) => s.setActiveId);
   const viewWallpapers = useWallpaperStore((s) => s.viewWallpapers);
+  const viewSwitching = useWallpaperStore((s) => s.viewSwitching);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   // 管理模式状态（用于蒙层遮挡）
@@ -221,7 +222,12 @@ const App: React.FC = () => {
                 </div>
               </Suspense>
 
-              <div className={cn("flex min-h-0 flex-1 flex-col", isOverlayView && "hidden")}>
+              <div
+                className={cn(
+                  "flex min-h-0 flex-1 flex-col",
+                  (isOverlayView || viewSwitching) && "hidden",
+                )}
+              >
                 <MainContent onPreview={openPreview} onManageModeChange={setManageMode} />
               </div>
             </div>

@@ -32,8 +32,7 @@ interface WallpaperState {
   activeId: number;
   /** 当前视图的壁纸列表 */
   viewWallpapers: Wallpaper[];
-  /** 视图加载中 */
-  viewLoading: boolean;
+  viewSwitching: boolean;
 
   fetchSupportedExtensions: () => Promise<string[]>;
   fetchWallpapers: () => Promise<void>;
@@ -151,7 +150,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   supportedExtensions: [],
   activeId: 0,
   viewWallpapers: [],
-  viewLoading: false,
+  viewSwitching: false,
 
   /**
    * 获取支持的扩展名（带缓存，仅首次调用时请求后端）。
@@ -177,7 +176,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
 
   setActiveId: async (id: number) => {
     if (get().activeId === id) return;
-    set({ activeId: id });
+    set({ activeId: id, viewSwitching: true });
     await get().refreshView();
   },
 
@@ -198,9 +197,11 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     const activeId = get().activeId;
     const seq = ++viewRequestSeq;
 
-    if (activeId < 0) return;
+    if (activeId < 0) {
+      set({ viewSwitching: false });
+      return;
+    }
 
-    set({ viewLoading: true });
     try {
       const list = await fetchViewData(activeId);
       // 响应回来时若已不是最新请求（用户又切了视图），丢弃本次结果
@@ -208,8 +209,7 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       if (list === null) return;
       set(activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { viewWallpapers: list });
     } finally {
-      // 同样受守卫约束：过期请求不应关掉新请求的 loading
-      if (seq === viewRequestSeq) set({ viewLoading: false });
+      if (seq === viewRequestSeq) set({ viewSwitching: false });
     }
   },
 

@@ -93,16 +93,28 @@ const App: React.FC = () => {
   useEffect(() => {
     return usePubSubStore.subscribe((state, prev) => {
       if (state.viewVersion !== prev.viewVersion) {
-        void useWallpaperStore.getState().sync();
+        void useWallpaperStore
+          .getState()
+          .sync()
+          .catch(() => {});
       }
       if (state.favoritesVersion !== prev.favoritesVersion) {
-        void useFavoritesStore.getState().refresh();
+        void useFavoritesStore
+          .getState()
+          .refresh()
+          .catch(() => {});
       }
       if (state.trashVersion !== prev.trashVersion) {
-        void useTrashedStore.getState().fetchTrashed();
+        void useTrashedStore
+          .getState()
+          .fetchTrashed()
+          .catch(() => {});
       }
       if (state.collectionsVersion !== prev.collectionsVersion) {
-        void useCollectionStore.getState().fetchCollections();
+        void useCollectionStore
+          .getState()
+          .fetchCollections()
+          .catch(() => {});
       }
     });
   }, []);

@@ -42,7 +42,7 @@ const TrashSection: FC = memo(() => {
 
   const handleToggleAutoPurge = useCallback(
     (checked: boolean) => {
-      updateSetting(SETTING_KEYS.TRASH_AUTO_PURGE, checked ? "true" : "false");
+      void updateSetting(SETTING_KEYS.TRASH_AUTO_PURGE, checked ? "true" : "false").catch(() => {});
     },
     [updateSetting],
   );
@@ -62,7 +62,7 @@ const TrashSection: FC = memo(() => {
     setError("");
     setDraft(null);
     if (parsed !== storedDays) {
-      updateSetting(SETTING_KEYS.TRASH_RETENTION_DAYS, String(parsed));
+      void updateSetting(SETTING_KEYS.TRASH_RETENTION_DAYS, String(parsed)).catch(() => {});
     }
   }, [draft, storedDays, updateSetting, t]);
 

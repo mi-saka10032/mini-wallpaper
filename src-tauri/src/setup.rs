@@ -73,7 +73,12 @@ fn register_runtime_state(app: &mut tauri::App) -> tauri::Result<()> {
     let handle = app.handle();
 
     let ctx: AppContext =
-        tauri::async_runtime::block_on(async { AppContext::new(handle.clone()).await })?;
+        tauri::async_runtime::block_on(async { AppContext::new(handle.clone()).await }).map_err(
+            |error| {
+                log::error!("[Setup] 数据库初始化失败: {error:#}");
+                error
+            },
+        )?;
     app.manage(ctx);
 
     let scheduler: Arc<Mutex<Scheduler>> = Arc::new(Mutex::new(Scheduler::new(handle.clone())));

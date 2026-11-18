@@ -37,14 +37,10 @@ export const useTrashedStore = create<TrashedState>((set) => ({
   trashLoading: false,
 
   fetchTrashed: async () => {
+    set({ trashLoading: true });
     try {
-      set({ trashLoading: true });
       const list = await fetchTrashedWallpapers();
       set({ trashed: list });
-    } catch (e) {
-      // 尽力刷新：由 pub/sub 订阅方 fire-and-forget 调用，失败时 invoke 层
-      // 已统一弹提示；这里不上抛，避免未处理的 rejection 打断其它信号的重取。
-      console.error("[fetchTrashed]", e);
     } finally {
       set({ trashLoading: false });
     }

@@ -27,36 +27,20 @@ export const useCollectionStore = create<CollectionState>((set) => ({
   collections: [],
 
   fetchCollections: async () => {
-    try {
-      const list = await fetchAllCollections();
-      set({ collections: list });
-    } catch (e) {
-      console.error("[fetchCollections]", e);
-    }
+    const list = await fetchAllCollections();
+    set({ collections: list });
   },
 
   createCollection: async (name: string) => {
-    try {
-      await createCollectionApi(name);
-    } catch (e) {
-      console.error("[createCollection]", e);
-    }
+    await createCollectionApi(name);
   },
 
   renameCollection: async (id: number, name: string) => {
-    try {
-      await renameCollectionApi(id, name);
-    } catch (e) {
-      console.error("[renameCollection]", e);
-    }
+    await renameCollectionApi(id, name);
   },
 
   deleteCollection: async (id: number) => {
-    try {
-      await removeCollectionApi(id);
-    } catch (e) {
-      console.error("[deleteCollection]", e);
-    }
+    await removeCollectionApi(id);
   },
 
   reorderCollections: async (ids: number[]) => {

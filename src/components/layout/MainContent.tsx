@@ -355,7 +355,7 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
                 disabled={manage.submitting}
                 onClick={(event) => {
                   event.preventDefault();
-                  void manage.handleDeleteConfirm();
+                  void manage.handleDeleteConfirm().catch(() => {});
                 }}
                 className={
                   isCollectionView

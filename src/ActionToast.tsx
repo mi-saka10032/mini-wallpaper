@@ -69,7 +69,7 @@ const ActionToast: React.FC = () => {
   // duration 到点后自动关闭（含退场动画），用户手动关闭时定时器随卸载清理
   useEffect(() => {
     const timer = setTimeout(() => {
-      void handleClose();
+      void handleClose().catch(() => {});
     }, duration);
     return () => clearTimeout(timer);
   }, [duration, handleClose]);

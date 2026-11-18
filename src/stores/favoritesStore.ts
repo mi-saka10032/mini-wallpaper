@@ -38,23 +38,19 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
   favoriteIds: new Set(),
 
   init: async () => {
-    try {
-      // App 的启动编排会先拉好收藏夹列表并填入 collectionStore，这里直接复用，
-      // 避免启动期同一个 getAll 被调用两次。单独调用本方法时兜底自行拉取。
-      let collections = useCollectionStore.getState().collections;
-      if (collections.length === 0) {
-        collections = await fetchAllCollections();
-      }
-      const builtin = collections.find((c) => c.is_builtin === 1);
-      if (!builtin) return;
-      const wallpapers = await getCollectionWallpapers(builtin.id);
-      set({
-        builtinCollectionId: builtin.id,
-        favoriteIds: new Set(wallpapers.map((w) => w.id)),
-      });
-    } catch (e) {
-      console.error("[favoritesStore.init]", e);
+    // App 的启动编排会先拉好收藏夹列表并填入 collectionStore，这里直接复用，
+    // 避免启动期同一个 getAll 被调用两次。单独调用本方法时兜底自行拉取。
+    let collections = useCollectionStore.getState().collections;
+    if (collections.length === 0) {
+      collections = await fetchAllCollections();
     }
+    const builtin = collections.find((c) => c.is_builtin === 1);
+    if (!builtin) return;
+    const wallpapers = await getCollectionWallpapers(builtin.id);
+    set({
+      builtinCollectionId: builtin.id,
+      favoriteIds: new Set(wallpapers.map((w) => w.id)),
+    });
   },
 
   refresh: async () => {
@@ -64,12 +60,8 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
       await get().init();
       return;
     }
-    try {
-      const wallpapers = await getCollectionWallpapers(collectionId);
-      set({ favoriteIds: new Set(wallpapers.map((w) => w.id)) });
-    } catch (e) {
-      console.error("[favoritesStore.refresh]", e);
-    }
+    const wallpapers = await getCollectionWallpapers(collectionId);
+    set({ favoriteIds: new Set(wallpapers.map((w) => w.id)) });
   },
 
   toggle: async (wallpaperId: number) => {

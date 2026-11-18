@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   memo,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -56,6 +57,8 @@ export interface VirtualGridProps<T> {
   forceDisable?: boolean;
   /** 容器 className */
   className?: string;
+  /** 重置 key */
+  resetKey?: string | number;
 }
 
 // ============ 虚拟行组件（memo 化避免滚动时不必要的重渲染） ============
@@ -132,9 +135,24 @@ function VirtualGrid<T>({
   renderItem,
   forceDisable = false,
   className,
+  resetKey,
 }: VirtualGridProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const prevResetKey = useRef(resetKey);
+  const itemsAtSwitch = useRef<typeof items | null>(null);
+
+  useLayoutEffect(() => {
+    if (prevResetKey.current !== resetKey) {
+      prevResetKey.current = resetKey;
+      itemsAtSwitch.current = items;
+      return;
+    }
+    if (itemsAtSwitch.current !== null && itemsAtSwitch.current !== items) {
+      containerRef.current?.scrollTo({ top: 0 });
+      itemsAtSwitch.current = null;
+    }
+  }, [resetKey, items]);
 
   // 监听容器宽度变化
   useEffect(() => {

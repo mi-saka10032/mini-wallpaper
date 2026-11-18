@@ -217,6 +217,7 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
       items={displayWallpapers}
       getKey={(wp) => wp.id}
       className="h-full p-4"
+      resetKey={activeId}
       forceDisable={false}
       renderItem={(wp, index) => (
         <WallpaperCard

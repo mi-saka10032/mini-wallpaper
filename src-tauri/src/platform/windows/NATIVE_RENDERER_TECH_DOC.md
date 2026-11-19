@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地）
+> **最后更新**: 2026-11-20（M5 跨屏拼接落地；图片 extend / mirror 已 Windows 实机验证）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -338,6 +338,22 @@ viewport_i        = fit_rect(Fill, src, union_w, union_h) − (offset_x_i, offse
 
 > **视觉一致的边界**：WebView 侧 `useExtendViewport` 会把物理坐标除以 `scaleFactor()` 转逻辑 px 给 CSS，Native 侧用物理像素。D2 保证同一组不会同时出现两种后端，所以「一致」指**语义一致**（同一张全图拉伸铺满虚拟桌面、每屏显示对应区域），不是跨 DPI 场景下的逐像素对齐；WebView 侧既有的 DPI 偏差另立条目处理。
 
+### 3.11 实机验证结论（2026-11-20）
+
+Windows 实机确认：**图片 extend 与 mirror 均可正常渲染**。这一条同时关闭了 M5 立项时最大的几个风险假设：
+
+| 风险项 | 实机结论 |
+|--------|----------|
+| 负 `D3D11_VIEWPORT.TopLeftX/Y` 在 flip model + DirectComposition 下不生效 | ✅ 生效：extend 画面正确裁到各屏 |
+| 共享 `ID3D11Device` / 跨屏绑定同一份 SRV 不成立 | ✅ 成立：整组共用一份纹理可用 |
+| union / offset 几何算错（尤其主屏在右的负坐标布局） | ✅ 接缝对齐 |
+| Q1「拉伸铺满 union 再裁剪」与 WebView 语义不符 | ✅ 视觉符合预期 |
+| M5 改动破坏 mirror（应保持 M4 行为） | ✅ 未回归 |
+
+**因此 shader 侧 UV 裁剪备选方案不需要实施**，`QUAD` / `ps_main` / 顶点缓冲维持 M4 原样。方案 A（共享 device + 共享帧时钟）在静态图路径上已被实机确认可行。
+
+尚未实测：GIF / 动态 WebP 的接缝同帧（共享帧时钟的实际效果）、不重启切换模式、热插拔后 union 重算、显存只占一份、WebView fallback 回归、D2 降级 toast。见第九节。
+
 ---
 
 ## 四、踩坑历程：方案演进全记录
@@ -449,6 +465,7 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **命令无 ack** | `ensure_monitor` / `set_wallpaper` 发送后立即返回，失败只落在 renderer thread 日志，不回传 `renderer-error` | 需要时改为 oneshot 回执 |
 | **无视频 / 无 HTML 网页壁纸** | 产品边界决策 | 见 1.3 |
 | **DWM 圆角 ~1px** | 继承自 `desktop_embedder`，选择接受 | 见关联文档 |
+| **动画帧同步仅在代码层保证** | `Arc<SharedFrames>` 让组内共用一个 `started_at`，但 GIF / 动态 WebP 的接缝同帧尚未实机确认 | 静态图 extend / mirror 已实测通过（3.11）；动画路径待补验 |
 | **旧版本 Windows 未实测** | DirectComposition 链路只在 24H2 / 25H2 实机验证 | legacy 嵌入路径沿用社区成熟方案，未实测 |
 
 ---
@@ -634,7 +651,7 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 - `PCSTR` 接收 `*const u8`；
 - stub `MonitorRect` 需 `Copy`。
 
-验证结果：`rustfmt --edition 2021` 通过、probe 模块树 Windows target `cargo check` 通过、宿主 `src-tauri cargo check --lib` 通过（`Finished dev profile`）。
+验证结果：`rustfmt --edition 2021` 通过、probe 模块树 Windows target `cargo check` 通过、宿主 `src-tauri cargo check --lib` 通过（`Finished dev profile`）。M5 阶段进一步跑了 `cargo test --lib` 42 passed、`tsc --noEmit` 与 `oxlint` 零告警，并在 Windows 实机确认图片 extend / mirror 正常（3.11）——交叉编译只能证明类型正确，画面正确性仍以实机为准。
 
 ### 8.5 历史收束
 
@@ -644,12 +661,12 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
 ## 九、后续优化方向（M6+）
 
-**M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。剩余项：
+**M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。**图片 extend / mirror 已 Windows 实机验证通过（3.11）**，负 viewport 与共享 SRV 两个核心风险已关闭。剩余项：
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
 | **P0** | Native 视频解码（M6） | 用 MediaFoundation 把 `.mp4` / `.m4v` 接进 `DecodedFrame`；`SharedFrames` 模型可直接扩展到视频帧。完成前要么实现解码、要么把这两类扩展名从 `NATIVE_VIDEO_EXTENSIONS` 移出并判为 `WebView`，消除「backend 说支持但解码必失败」的语义裂缝 |
-| **P0** | Windows 实机验收 M5 | 双屏不同分辨率 + 负坐标（主屏在右）、静态图 / GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份、WebView fallback 不回归 |
+| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次 |
 | P1 | 渲染命令 ack | mpsc + oneshot 回执，把解码 / surface 失败回传 `renderer-error`，不再只落 renderer thread 日志 |
 | P1 | WebView 侧 DPI 偏差 | `WebviewWindowBuilder` 直接接收物理像素，`useExtendViewport` 又除以 `scaleFactor()`；Q2 决定另立条目处理，不在 M5 扩散 |
 | P2 | 运行时动态 backend 切换 | `selection` 可运行时更新，配合设置项暴露（原计划 M8） |

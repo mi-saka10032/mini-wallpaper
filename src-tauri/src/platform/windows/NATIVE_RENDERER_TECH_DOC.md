@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地；图片 extend / mirror 已 Windows 实机验证）
+> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；新增解码缓存与 dev 构建优化 `d639b63`，见 3.12）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -354,6 +354,46 @@ Windows 实机确认：**图片 extend 与 mirror 均可正常渲染**。这一�
 
 尚未实测：GIF / 动态 WebP 的接缝同帧（共享帧时钟的实际效果）、不重启切换模式、热插拔后 union 重算、显存只占一份、WebView fallback 回归、D2 降级 toast。见第九节。
 
+### 3.12 切换延迟：解码缓存与 dev 构建优化（2026-11-20）
+
+**现象**：设置壁纸有接近 1s 的等待；dev 明显更慢，release 打包后变低；高分辨率大图即使 release 下仍有可感知延迟。
+
+**先划清 GPU 的边界**：D3D11 只覆盖 `Draw(4,0)` + `Present(1,0)`（≈16ms / 一个 vsync）。`CreateTexture2D` 是 CPU→显存的一次拷贝，不是 GPU 计算；磁盘读、解码、`to_rgba8`、`rgba_to_bgra`、纹理上传全是 CPU 串行，且 `SharedDevice::upload_frames` 在 renderer loop 的 `try_recv` 分支里**同步执行**，解码期间所有 surface 停帧、命令积压。所以「有 GPU 加速却要 1s」并不矛盾。
+
+**定量取证**（macOS 微基准：`rustc` 直编 + 链接项目 debug/release 已编译的 `image` rlib，4K 3840×2160，`black_box` + checksum 防 DCE）：
+
+| 环节 | O0（dev） | O3（release） | 倍率 |
+|------|----------:|--------------:|------:|
+| `image::open` 8MB JPEG | 1621 ms | 75.5 ms | 21× |
+| `image::open` 23MB PNG | 421 ms | 27.3 ms | 15× |
+| `to_rgba8()` | 153 ms | 2.0 ms | 76× |
+| `rgba_to_bgra()`（`decoder.rs`） | 103 ms | 1.2 ms | 86× |
+| `rgba_to_bgra()` 8K | 418 ms | 8.1 ms | 52× |
+
+> **文件体积不是自变量**：8MB 的 JPEG 比 23MB 的 PNG 慢 2.8 倍。真正决定延迟的是「像素数 × 编码复杂度」——W×H×4 的 RGBA 缓冲、JPEG 熵解码 / IDCT 的成本、以及 GIF / 动态 WebP 的帧数（`decode_animated` 一次性把全部帧解码并逐帧建纹理）。当前 `upload_frames` 按**原始尺寸**建纹理，8K 图在 1080p 屏上仍会上传 126MB 再交给 GPU 缩采样。
+
+**两条相互独立的修复**（用户确认 A + B）：
+
+| | 改动 | 解决什么 |
+|---|---|---|
+| **A** | `Cargo.toml` 加 `[profile.dev.package."*"] opt-level = 3` + `[profile.dev.package."mini-wallpaper"] opt-level = 1` | dev 下 15~85 倍退化。Cargo 的通配符**不覆盖 workspace 成员**，所以两条都要写；本项目只开 O1 以保留断点可调试。用 `cargo build -v` 抓 rustc 参数实测 `image = -C opt-level=3` / `mini_wallpaper_lib = -C opt-level=1`，O1 下 4K `rgba_to_bgra` 103ms → 5.4ms |
+| **B** | `wallpaper_renderer/frame_cache.rs` 的 `FrameCache<SharedFrames>` 接入 `renderer.rs::run()` | 重复解码，见下 |
+
+**为什么会有重复解码**：`SetWallpaper` 是 mpsc fire-and-forget，同一张图会在三种场景多次到达渲染线程——① 首次设置：`update_wallpaper` 与 `syncWallpaperWindows → ensure_target` 各下发一次；② mirror / extend：`upsertAll` 按 active 屏数并发 N 次命令，每次都整组下发；③ A → B → A 回切。每条都会触发全尺寸解码 + 逐帧纹理上传。
+
+**缓存设计**：
+
+- 只存在于渲染线程：`SharedFrames` 持有 D3D11 SRV，不能跨线程共享；渲染线程单线程访问，无需锁。
+- `CacheKey = path + len + mtime`：同名文件被覆盖 / 备份恢复时自动失效，不必读全文件算哈希；元数据不可读（`None`）时绕过缓存、照常解码。
+- 按**字节预算** LRU（默认 192MiB）而非条目数：一张 8K 就是 126MB，固定 8 条在 8K 素材下会吃到 1GB。单份超预算直接不入缓存。
+- `get_or_insert_with` 命中时复用同一个 `Arc<SharedFrames>`——**连 `started_at` 一起复用**，因此 M5 的组内共享帧时钟语义不变；动图 A→B→A 回切会接着播而不是从头开始。
+- 解码失败不污染缓存；淘汰只从预算里扣除，若 surface 仍持有该 Arc，GPU 纹理由引用计数自行收敛。
+- 纯逻辑与 GPU 解耦：`ByteSize` trait + 泛型 `FrameCache<T>` 放跨平台目录，macOS `cargo test --lib` 可跑 8 个单测（命中复用 / None 绕过 / 失败不污染 / 预算淘汰 / touch 保活 / 超预算单条 / 文件不存在 / 覆盖后 key 变化）。
+
+**没有改 `RenderCoordinator` 的下发语义**：命令仍会多次到达，只是解码/上传每个 key 至多一次。`ensure_target` 那次重发是 M5 用来保证「新建 surface 拿到首帧 + 组内最终覆盖同一个 Arc」的，删掉会让首帧丢失；缓存命中返回同一个 Arc，语义反而更稳。
+
+**边界**：A+B 不削减**单次**解码（release 下 4K JPEG 的 ~75ms 仍在，需按目标分辨率降采样解码才能解决）；单份 >192MiB 的素材不进缓存，在同步模式下仍会重复解码；首次 `tauri dev` 因 profile 变更会全量重编依赖（本机 683 个 crate / 约 2 分钟），之后增量恢复正常。
+
 ---
 
 ## 四、踩坑历程：方案演进全记录
@@ -419,12 +459,21 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 
 删除 debug shader、backbuffer readback、心跳、窗口状态 dump、桌面层级枚举、冗余日志；保留 `CULL_NONE` 与正常渲染链路。随后发现共享 `ModernStrategy` 的 `WS_POPUP` 改动会影响 WebView，引入 `EmbedPolicy` 收窄。
 
+### 阶段 10：切换延迟 ≈1s，不是渲染引擎的问题（`d639b63`）
+
+用户反馈 dev 下设置壁纸接近 1s、release 明显变低、高分辨率大图 release 下仍有延迟。最初按「有 GPU 加速不该这么慢」的直觉怀疑渲染引擎，取证后前提被推翻：GPU 只覆盖 `Draw + Present`（≈16ms），前面整条 CPU 链路都不受加速。用 `rustc` 微基准分别链接项目 debug / release 已编译的 `image` rlib，量化出 O0 下解码 + 像素转换慢 15~85 倍（4K JPEG 1.9s → 79ms）。
+
+**另一次自我修正**：排查中曾把「shader swizzle 去掉 `rgba_to_bgra`」列为 release 下每次换图的主要 CPU 开销，实测 O3 下它只占 1.2ms / 79ms，于是把它从主方案降级为可选清理；真正的主因是 `image::open` 解码。最终实施 A（dev profile）+ B（解码结果缓存），详见 3.12。
+
+> **教训**：先量再改。同一个「慢」在 dev 与 release 下根因不同；用宿主机上可跑的微基准把每一段耗时钉死，比在 Windows 实机上盲加计时日志更快，也避免了改错地方。
+
 ### 诊断方法沉淀
 
 1. **先证伪前提**：「看到清屏色」不等于「渲染链路在跑」，用无条件心跳把可见性做成可观测事实。
 2. **分层 A/B**：把「窗口可见 / Present / GPU 写入 / Draw 输出」拆成独立可证伪命题，逐层排除。
 3. **HRESULT 不等于画面**：`Present` 返回 `S_OK` 或 `DXGI_STATUS_OCCLUDED` 都不能推断桌面可见。
 4. 排查期日志与探针一次性引入、定位后一次性清除，不留在生产代码里。
+5. **性能问题先分段定量，别凭「GPU 加速」推断瓶颈**：把链路切成 IPC/DB → 嵌入 → 解码/通道转换/上传 → 循环 tick → Draw/Present，逐段测 O0 vs O3，才能把「dev 未优化」和「单次解码成本」拆成两个独立问题（3.12）。改 `Cargo.toml` 后还要用 `cargo build -v` 确认 `opt-level` 真的传给了 rustc。
 
 ---
 
@@ -451,6 +500,9 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 - extend 的 union 是**全组共享**的：几何 / backend / display_mode 任一变化都必须 `refresh_group_geometry()` 刷新整组视口，只改单屏会留下旧 offset。
 - 组内所有 surface 必须来自**同一个 `SharedDevice`** 并持有**同一个 `Arc<SharedFrames>`**，否则 SRV 无法跨屏绑定、动画帧会错开。
 - `DesktopRenderer` 的命令是 mpsc fire-and-forget，**同 channel FIFO 保证顺序**，但没有 ack：「`ensure_target` 返回 Ok」≠「renderer thread 已完成 surface 创建 / 纹理上传」。
+- `FrameCache` 只能活在渲染线程内（SRV 不可跨线程），且**命中必须返回同一个 `Arc<SharedFrames>`**：帧时钟、跨屏同帧都依赖这一份 Arc 不被复制重建。
+- `CacheKey` 必须包含 `len + mtime`，只用路径会在同名文件覆盖 / 备份恢复后显示旧纹理。
+- `SetWallpaper` 允许重复下发，但缓存预算内的同一 key **解码 / 纹理上传至多一次**；`RenderCoordinator` 不负责去重，也不得删掉 `ensure_target` 的组级重发。
 
 ### 5.3 已知限制（如实记录，非疏漏）
 
@@ -467,6 +519,9 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **DWM 圆角 ~1px** | 继承自 `desktop_embedder`，选择接受 | 见关联文档 |
 | **动画帧同步仅在代码层保证** | `Arc<SharedFrames>` 让组内共用一个 `started_at`，但 GIF / 动态 WebP 的接缝同帧尚未实机确认 | 静态图 extend / mirror 已实测通过（3.11）；动画路径待补验 |
 | **旧版本 Windows 未实测** | DirectComposition 链路只在 24H2 / 25H2 实机验证 | legacy 嵌入路径沿用社区成熟方案，未实测 |
+| **单次解码仍未削减** | A+B 只消除**重复**解码；release 下 4K JPEG 的 ~75ms `image::open`、8K 的成倍成本依然存在 | 唯一能真正削减它的路是按目标分辨率降采样解码（WIC / 换解码器），见第九节；当前 `upload_frames` 仍按原始尺寸建纹理 |
+| **超大素材不进缓存** | 单份 >192MiB（8K / 多帧 GIF）直接不入缓存，避免显存爆炸 | mirror/extend 下这类素材仍会重复解码；可用「连续同 key 命令合并」补，无需常驻缓存 |
+| **动图回切接着播** | 缓存命中连 `started_at` 一起复用，A→B→A 回切不会从头重播 | 这是省掉重复解码的必然结果，同时保证组内帧时钟一致；若产品要求每次从头，需显式重置帧时钟 |
 
 ---
 
@@ -484,6 +539,8 @@ src-tauri/src/
 │   │   ├── selection.rs                    default_backend_selection / resolve_backend
 │   │   ├── decoder.rs                      image 0.25：GIF / WebP / 静态图 → BGRA 帧
 │   │   ├── fit.rs                          fit_rect → D3D11_VIEWPORT，含单元测试
+│   │   ├── frame_cache.rs                  CacheKey / ByteSize / 泛型字节预算 LRU
+│   │   │                                   （解码结果缓存，跨平台纯逻辑 + 8 个单测）
 │   │   └── geometry.rs                     union_rect / extend_viewport / group_viewports
 │   │                                       （M5 跨屏几何，跨平台纯函数 + 6 个单测）
 │   │
@@ -497,9 +554,9 @@ src-tauri/src/
 │       ├── desktop_renderer/
 │       │   ├── mod.rs                      导出 DesktopRenderer / SharedDevice / SharedFrames
 │       │   ├── renderer.rs                 渲染线程：共享 device / 组级 SetWallpaper /
-│       │   │                              SetGroupGeometry / ComScope / 消息泵 / 16ms 循环
+│       │   │                              SetGroupGeometry / FrameCache / ComScope / 消息泵 / 16ms 循环
 │       │   ├── window.rs                   NativeWindow：窗口创建 / exstyle 归一 / bounds / Drop
-│       │   └── surface.rs                  SharedDevice（一次解码上传）/ SharedFrames（帧时钟）/
+│       │   └── surface.rs                  SharedDevice（一次解码上传）/ SharedFrames（帧时钟 + ByteSize）/
 │       │                                  RenderSurface（每屏 swapchain + offset viewport）
 │       └── DESKTOP_EMBEDDER_TECH_DOC.md
 │
@@ -517,6 +574,7 @@ src-tauri/src/
 ├── events.rs                               RendererErrorPayload
 └── Cargo.toml                              [target.'cfg(windows)'] 追加 windows 0.61
                                             （D3D11 / Dxgi / DirectComposition / COM / Fxc / Gdi）
+                                            + [profile.dev.package.*] 覆盖（见 3.12）
 ```
 
 前端：`src/api/event.ts` 增 `RENDERER_ERROR` + `RendererErrorPayload` + `EventMap`；`src/pages/main/App.tsx` 单点监听，`ExtendDegraded` 用 `toast.warning`、其余用 `toast.error`。
@@ -545,6 +603,8 @@ selection:     BackendSelection                     ← 进程启动时确定
 | `active_ids` | Native + WebView 合并去重 |
 
 `RenderNotification` 替代了 `WmNotification`，目的是把「查库 → 决策 → 路由」从 `WindowManager` 锁内搬出去，延续 P1 的锁范围治理。
+
+> `FrameCache<SharedFrames>` **不属于**协调器状态：它持有 D3D11 SRV，只能活在渲染线程 `run()` 的栈上（见 3.12）。协调器只负责下发命令，重复命令在渲染线程侧去重，两边不共享任何 GPU 对象。
 
 ### 6.3 EmbedPolicy：modern 改动要不要保留？对 WebView 有无影响？
 
@@ -609,12 +669,15 @@ b2a01a0  refactor: remove native renderer troubleshooting diagnostics
          ↓ M4 收束：EmbedPolicy 隔离 WebView / 悬垂方法重新定性 / 冗余日志清理
          ↓ 压缩为单个 commit `950229a` + force push
          ↓ M5：跨屏几何 / 共享 device 与帧时钟 / offset viewport / 全组刷新 / D2 降级
-         ↓ feat: add native cross-monitor extend rendering（当前版本 ⭐）
+         ↓ 87b616f feat: add native cross-monitor extend rendering
+         ↓ 0d9144b docs: record Windows validation of native extend and mirror
+         ↓ 性能收束：解码缓存（FrameCache）+ dev profile 优化
+         ↓ d639b63 perf: cache decoded frames and optimize dev build profile（当前版本 ⭐）
 ```
 
 merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
-> M0~M4 的 21 个中间 commit 已在 M4 收束时压缩；M5 是独立增量提交，未改写历史。
+> M0~M4 的 21 个中间 commit 已在 M4 收束时压缩；M5（`87b616f`）、实机验证结论（`0d9144b`）与性能收束（`d639b63`）都是独立增量提交，普通 push，未改写历史。
 
 ---
 
@@ -653,6 +716,8 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
 验证结果：`rustfmt --edition 2021` 通过、probe 模块树 Windows target `cargo check` 通过、宿主 `src-tauri cargo check --lib` 通过（`Finished dev profile`）。M5 阶段进一步跑了 `cargo test --lib` 42 passed、`tsc --noEmit` 与 `oxlint` 零告警，并在 Windows 实机确认图片 extend / mirror 正常（3.11）——交叉编译只能证明类型正确，画面正确性仍以实机为准。
 
+性能收束阶段（`d639b63`）另跑了完整回归：`cargo fmt --all -- --check`、`cargo test --lib` **50 passed**（新增 8 个 `FrameCache` 单测）、`pnpm exec tsc --noEmit`、`oxlint src` 0 warning / 0 error；并用 `cargo build -v` 抓 rustc 参数，确认 dev profile 覆盖**真的传到了编译器**（`image = -C opt-level=3` / `mini_wallpaper_lib = -C opt-level=1`）——只改 `Cargo.toml` 而不验参数，很容易出现「配了但没生效」。probe 工程改为镜像**项目真实模块层级**（`platform::wallpaper_renderer::frame_cache`）后再跑 Windows target `cargo check`，0 error / 8 个 stub dead_code 警告。项目本体交叉检查仍被 C 工具链挡住（这次是 `ring` 找不到 MSVC 的 `assert.h`，与早前 `lzma-sys` 的 `stdlib.h` 同源：macOS 缺 Windows SDK），与本次代码无关。
+
 ### 8.5 历史收束
 
 21 个中间 commit（含 8 个纯诊断 log）压缩为一个 commit，去除冗余 log 与排查脚手架，force push 到 `feature/native-wallpaper-renderer`。本技术文档与最终代码状态一并入提交。
@@ -661,12 +726,17 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
 ## 九、后续优化方向（M6+）
 
-**M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。**图片 extend / mirror 已 Windows 实机验证通过（3.11）**，负 viewport 与共享 SRV 两个核心风险已关闭。剩余项：
+**M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。**图片 extend / mirror 已 Windows 实机验证通过（3.11）**，负 viewport 与共享 SRV 两个核心风险已关闭。
+
+**性能收束已完成**（`d639b63`，见 3.12）：dev profile 优化把 O0 的 15~85 倍退化拉回正常量级，`FrameCache` 消除重复解码与纹理上传。注意它**没有削减单次解码**，release 下高分辨率大图的 `image::open` 成本仍在，因此下表新增两条 P1。剩余项：
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
 | **P0** | Native 视频解码（M6） | 用 MediaFoundation 把 `.mp4` / `.m4v` 接进 `DecodedFrame`；`SharedFrames` 模型可直接扩展到视频帧。完成前要么实现解码、要么把这两类扩展名从 `NATIVE_VIDEO_EXTENSIONS` 移出并判为 `WebView`，消除「backend 说支持但解码必失败」的语义裂缝 |
 | **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次 |
+| **P1** | 按目标分辨率降采样解码 | 当前 `upload_frames` 按原始尺寸建纹理，8K 图在 1080p 屏上仍上传 126MB。用 WIC / 更快的解码器在解码阶段就按目标尺寸取样，是**唯一能真正削减单次 ~75ms（4K JPEG）** 的路；改动最大，需 Windows 实机验证 |
+| **P1** | 解码移出渲染线程 + 保留旧帧 | `upload_frames` 现在同步跑在 `try_recv` 分支，解码期间所有 surface 停帧。改为专用解码线程、新帧就绪前保留上一张，可让切换不再顿；需处理连点取消与命令去重 |
+| P1 | 超大素材的连续命令合并 | 单份 >192MiB 不进缓存（见 5.3），同步模式下仍会重复解码；可在 renderer loop 内把一批连续同 key 的 `SetWallpaper` 合并成一次，无需常驻显存 |
 | P1 | 渲染命令 ack | mpsc + oneshot 回执，把解码 / surface 失败回传 `renderer-error`，不再只落 renderer thread 日志 |
 | P1 | WebView 侧 DPI 偏差 | `WebviewWindowBuilder` 直接接收物理像素，`useExtendViewport` 又除以 `scaleFactor()`；Q2 决定另立条目处理，不在 M5 扩散 |
 | P2 | 运行时动态 backend 切换 | `selection` 可运行时更新，配合设置项暴露（原计划 M8） |
@@ -674,4 +744,4 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 | P2 | 显示器热插拔事件化 | 用 Tauri 原生显示器事件替代 5s 轮询；`refresh_group_geometry()` 已具备全组刷新能力，只差事件源 |
 | P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |
 | P3 | 契约生成 | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
-| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs` / `geometry.rs` 有测试，renderer 编排与桌面嵌入仍零覆盖 |
+| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs` / `geometry.rs` / `frame_cache.rs`（8 个）有测试，renderer 编排与桌面嵌入仍零覆盖 |

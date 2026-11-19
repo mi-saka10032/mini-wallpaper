@@ -57,6 +57,9 @@ pub struct SetSettingRequest {
     /// setting value：非空，且格式需匹配 key 的要求
     #[garde(custom(validate_setting_value_by_key))]
     pub value: String,
+    /// 可选显示器 ID：display_mode 变更时指定基准显示器
+    #[garde(skip)]
+    pub monitor_id: Option<String>,
 }
 
 // ==================== 自定义校验函数 ====================

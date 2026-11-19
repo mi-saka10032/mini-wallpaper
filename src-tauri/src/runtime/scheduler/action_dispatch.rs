@@ -222,7 +222,8 @@ impl Scheduler {
         } else {
             ToastMessage::PauseResumed
         };
-        self.show_action_toast(&Action::TogglePause, msg.as_str()).await;
+        self.show_action_toast(&Action::TogglePause, msg.as_str())
+            .await;
     }
 
     /// 显示并聚焦主窗口
@@ -245,8 +246,11 @@ impl Scheduler {
             Some(t) if !t.is_empty() => t,
             _ => {
                 warn!("[ActionDispatch] 找不到合适的目标显示器，跳过 ToggleFavorite 动作");
-                self.show_action_toast(&Action::ToggleFavorite, ToastMessage::FavoriteNoMonitor.as_str())
-                    .await;
+                self.show_action_toast(
+                    &Action::ToggleFavorite,
+                    ToastMessage::FavoriteNoMonitor.as_str(),
+                )
+                .await;
                 return;
             }
         };
@@ -256,8 +260,11 @@ impl Scheduler {
             Some(wid) => wid,
             None => {
                 warn!("[ActionDispatch] 当前显示器无壁纸，跳过 ToggleFavorite");
-                self.show_action_toast(&Action::ToggleFavorite, ToastMessage::FavoriteNoWallpaper.as_str())
-                    .await;
+                self.show_action_toast(
+                    &Action::ToggleFavorite,
+                    ToastMessage::FavoriteNoWallpaper.as_str(),
+                )
+                .await;
                 return;
             }
         };
@@ -269,12 +276,16 @@ impl Scheduler {
                 } else {
                     ToastMessage::FavoriteRemoved
                 };
-                self.show_action_toast(&Action::ToggleFavorite, msg.as_str()).await;
+                self.show_action_toast(&Action::ToggleFavorite, msg.as_str())
+                    .await;
             }
             Err(e) => {
                 warn!("[ActionDispatch] ToggleFavorite 失败: {}", e);
-                self.show_action_toast(&Action::ToggleFavorite, ToastMessage::FavoriteFailed.as_str())
-                    .await;
+                self.show_action_toast(
+                    &Action::ToggleFavorite,
+                    ToastMessage::FavoriteFailed.as_str(),
+                )
+                .await;
             }
         }
     }

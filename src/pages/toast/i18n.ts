@@ -1,30 +1,28 @@
+import i18n from "i18next";
+import { initReactI18next } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import zhJson from "./toast-zh.json";
-import enJson from "./toast-en.json";
+import { COMMANDS, type CommandMap } from "@/api/config";
+import zh from "./toast-zh.json";
+import en from "./toast-en.json";
 
-type Dict = Record<string, string>;
+i18n.use(initReactI18next).init({
+  resources: {
+    zh: { translation: zh },
+    en: { translation: en },
+  },
+  lng: "zh",
+  fallbackLng: "zh",
+  interpolation: {
+    escapeValue: false,
+  },
+});
 
-const zh: Dict = zhJson;
-const en: Dict = enJson;
-const DICTS: Record<string, Dict> = { zh, en };
-
-/** language 存储值可能是 "zh-CN" / "zh" / "en"，取主语言标签回退到 zh */
-function resolveDict(lang: string | null): Dict {
-  const tag = (lang ?? "").split("-")[0].toLowerCase();
-  return DICTS[tag] ?? zh;
+export async function initToastI18n() {
+  const lang = await invoke<CommandMap[typeof COMMANDS.GET_SETTING]["result"]>(
+    COMMANDS.GET_SETTING,
+    { req: { key: "language" } },
+  ).catch(() => null);
+  if (lang) await i18n.changeLanguage(lang);
 }
 
-let dict: Dict = zh;
-
-export async function initToastI18n(): Promise<void> {
-  try {
-    const lang = await invoke<string | null>("get_setting", { req: { key: "language" } });
-    dict = resolveDict(lang);
-  } catch {
-    dict = zh;
-  }
-}
-
-export function t(key: string): string {
-  return dict[key] ?? zh[key] ?? key;
-}
+export default i18n;

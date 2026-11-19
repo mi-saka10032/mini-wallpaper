@@ -61,6 +61,7 @@ export const COMMANDS = {
   HIDE_WALLPAPER_WINDOWS: "hide_wallpaper_windows",
   SHOW_WALLPAPER_WINDOWS: "show_wallpaper_windows",
   GET_ACTIVE_WALLPAPER_WINDOWS: "get_active_wallpaper_windows",
+  CLOSE_TOAST_WINDOW: "close_toast_window",
 } as const;
 
 // ==================== 实体模型 ====================
@@ -309,11 +310,6 @@ export interface GetSettingReq {
 export interface SetSettingReq {
   key: string;
   value: string;
-}
-
-/** 设置键值对完整参数（含可选 monitorId） */
-export interface SetSettingParams {
-  req: SetSettingReq;
   monitorId?: string;
 }
 
@@ -464,7 +460,7 @@ export interface CommandMap {
     result: string | null;
   };
   [COMMANDS.SET_SETTING]: {
-    params: { req: SetSettingReq; monitorId?: string };
+    params: { req: SetSettingReq };
     result: void;
   };
   [COMMANDS.SWITCH_WALLPAPER]: {
@@ -510,6 +506,10 @@ export interface CommandMap {
   [COMMANDS.GET_ACTIVE_WALLPAPER_WINDOWS]: {
     params: Record<string, never>;
     result: string[];
+  };
+  [COMMANDS.CLOSE_TOAST_WINDOW]: {
+    params: { label: string };
+    result: void;
   };
   [COMMANDS.CREATE_SMART_COLLECTION]: {
     params: { req: CreateSmartCollectionReq };

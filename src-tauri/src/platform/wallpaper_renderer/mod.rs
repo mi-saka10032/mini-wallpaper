@@ -7,12 +7,14 @@ use anyhow::Result;
 mod contracts;
 pub mod decoder;
 pub mod fit;
+pub mod geometry;
 mod selection;
 
 pub use contracts::{
     BackendSelection, DisplayMode, ExtendViewport, FitMode, MonitorRect, RenderBackend,
     RenderDescriptor, RendererError, RendererErrorCode, WallpaperKind,
 };
+pub use geometry::{extend_viewport, group_viewports, union_rect};
 pub use selection::{default_backend_selection, resolve_backend};
 
 /// 跨平台渲染器门面：Windows 下是真实的 D3D11 渲染线程，其它平台为空实现。
@@ -38,12 +40,21 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    /// 一组显示器共享同一次解码与同一个帧时钟；independent 时组内只有一个 id。
     pub fn set_wallpaper(
         &self,
-        _monitor_id: String,
+        _monitor_ids: Vec<String>,
         _path: PathBuf,
         _kind: WallpaperKind,
         _fit_mode: FitMode,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// 全组更新 extend 裁剪参数；None 表示该屏退回各自渲染（Q1 / D2）。
+    pub fn set_group_geometry(
+        &self,
+        _viewports: Vec<(String, Option<ExtendViewport>)>,
     ) -> Result<()> {
         Ok(())
     }

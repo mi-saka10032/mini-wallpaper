@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-19
+> **最后更新**: 2026-11-20（M5 跨屏拼接落地）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -305,6 +305,39 @@ fn bind_current_backbuffer(&mut self) -> Result<()> {
 
 `Present` 的 HRESULT 需注意：`0x00000000` 是 `S_OK`，`DXGI_STATUS_OCCLUDED` / `DXGI_STATUS_CLIPPED` 属于成功状态，被 `.ok()` 吞掉属正常，不能据此判断画面可见。
 
+### 3.10 M5：mirror / extend 跨屏拼接
+
+M4 的 Q2=B 只是让同步模式下每屏用同一 `wid` 各自 fit，extend 并没有真正把一张图横跨所有屏。M5 的决策基线：
+
+| Q | 结论 |
+|---|------|
+| Q1 | **沿用 WebView 语义**：extend 忽略 fitMode，整张图拉伸铺满 union（`object-fit: fill`），每屏裁自己那块 |
+| Q2 | 坐标统一为**物理像素的虚拟桌面坐标**；WebView 侧逻辑像素 / DPI 偏差另立条目 |
+| Q3 | **方案 A**：共享 `ID3D11Device` + 共享帧序列，一次解码一次上传 |
+| Q4 | **D2**：组内 backend 不全是 Native 时降级为各自渲染并提示一次 |
+| Q5 | mirror 保持 M4 现状（每屏各自 fit 同一 wid） |
+| Q6 | M5 不含视频（Native 视频解码尚未实现） |
+
+几何纯函数在 `platform/wallpaper_renderer/geometry.rs`（跨平台、6 个单测）：
+
+```
+union_rect(rects) = [min_x, min_y] .. [max_x, max_y]     // 允许负坐标，主屏不一定在左上
+offset_i          = (rect_i.x − union.x, rect_i.y − union.y)
+viewport_i        = fit_rect(Fill, src, union_w, union_h) − (offset_x_i, offset_y_i)
+```
+
+`Fill` 的 `fit_rect` 返回 `{0, 0, union_w, union_h}`，所以每屏 `TopLeftX/Y = -offset`。D3D11 viewport 允许负值，超出 RT 的部分由光栅化裁掉，**quad、shader、顶点缓冲一律不用改**。这与 WebView 侧把 `<img>` 拉到 `totalWidth × totalHeight` 再套 `left/top: -offset` 是同一套几何。
+
+**为什么必须共享 device**：SRV 不能跨 `ID3D11Device` 使用，而 extend 组要求所有屏绑定同一份纹理。因此 `SharedDevice { device, context, pipeline }` 提到渲染线程层，每屏 `RenderSurface` 只持有 COM 引用 clone + 自己的 swapchain / DirectComposition target。所有 surface 都在同一线程绘制，即时上下文的非线程安全约束自动满足。
+
+**为什么必须共享帧时钟**：M4 时每屏各自 `ActiveWallpaper { started_at: Instant }`，`update_wallpaper` 逐屏下发时间有先后，多屏 GIF / 动态 WebP 会在接缝处显示不同帧。M5 把帧序列与 `started_at` 装进 `Arc<SharedFrames>`，组内每屏 clone 同一个 Arc，天然同帧——这正是 WebView 侧 `useVideoSync` 每 5s 广播校准想解决的问题，Native 侧不再需要事件同步。
+
+**全组刷新**：union 是全组共享的，因此任一屏几何变化、`backend` 变化、`display_mode` 变化、目标销毁都必须走 `refresh_group_geometry()` 重算并下发整组视口；只更新变化那一屏会让其它屏沿用旧 offset。`register_monitor()` 在判断「有没有壁纸」之前登记几何，保证无壁纸屏也进入 union。
+
+**D2 降级**：extend 只在整组 `backend == Native` 时启用；出现混合 backend 时所有 Native 屏的 `extend_viewport` 置 `None`（退回 M4 各自渲染），并通过 `renderer-error` 事件以 `code = "ExtendDegraded"` 发一次 `toast.warning`。理由是 Rust 侧几何与 WebView 侧 `useExtendViewport` 是两套坐标系，混用必然在接缝处错位。
+
+> **视觉一致的边界**：WebView 侧 `useExtendViewport` 会把物理坐标除以 `scaleFactor()` 转逻辑 px 给 CSS，Native 侧用物理像素。D2 保证同一组不会同时出现两种后端，所以「一致」指**语义一致**（同一张全图拉伸铺满虚拟桌面、每屏显示对应区域），不是跨 DPI 场景下的逐像素对齐；WebView 侧既有的 DPI 偏差另立条目处理。
+
 ---
 
 ## 四、踩坑历程：方案演进全记录
@@ -399,15 +432,19 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 - flip model 下**每帧重绑 backbuffer**；`ResizeBuffers` 前必须先释放所有 RTV 引用。
 - renderer thread 需要自己的 STA `CoInitializeEx` / `CoUninitialize` 配对。
 - WebView 与 Native 共用 `desktop_embedder`，但**样式前提不同**，任何策略改动必须带 `EmbedPolicy` 判别。
+- extend 的 union 是**全组共享**的：几何 / backend / display_mode 任一变化都必须 `refresh_group_geometry()` 刷新整组视口，只改单屏会留下旧 offset。
+- 组内所有 surface 必须来自**同一个 `SharedDevice`** 并持有**同一个 `Arc<SharedFrames>`**，否则 SRV 无法跨屏绑定、动画帧会错开。
 - `DesktopRenderer` 的命令是 mpsc fire-and-forget，**同 channel FIFO 保证顺序**，但没有 ack：「`ensure_target` 返回 Ok」≠「renderer thread 已完成 surface 创建 / 纹理上传」。
 
 ### 5.3 已知限制（如实记录，非疏漏）
 
 | 项 | 现状 | 影响 / 计划 |
 |----|------|-------------|
-| **Native 视频解码未实现** | `resolve_backend` 把 `.mp4` / `.m4v` 判为 `Native`，但 `decode_frames` 只有 `image` crate 路径，`Surface::set_wallpaper` 的 `kind` 参数当前为 `_kind` 未消费 | 这两类视频走 Native 会在解码阶段失败 → `log::error!` + `renderer-error` toast，不会回退 WebView。属契约先行，需 M5+ 接 MediaFoundation；在那之前如需可用，应把这两类扩展名临时判为 `WebView` |
-| **`RenderDescriptor` 未被生产消费** | `RenderCoordinator` 用内部精简 `Descriptor`；`RenderDescriptor` / `ExtendViewport` / `DisplayMode` 及 `DeviceLost` / `EmbedFailed` / `BackendSwitchFailed` 错误码仅定义并导出 | M0 契约为 mirror / extend 预留，M5 才会真正使用。模块顶部 `#![allow(dead_code, unused_imports)]` 即为此 |
-| **mirror / extend 未做跨屏视口** | 当前按 Q2 决策「暂时都用 wid 各自渲染」，`resolve_targets` 只做同步 / 独立的目标集合选择 | M5 实现真实跨屏视口与共享纹理 |
+| **Native 视频解码未实现** | `resolve_backend` 把 `.mp4` / `.m4v` 判为 `Native`，但 `decode_frames` 只有 `image` crate 路径，`SharedDevice::upload_frames` 的 `kind` 参数仍是 `_kind` | 这两类视频走 Native 会在解码阶段失败 → `log::error!` + `renderer-error` toast，不会回退 WebView。用户已决定后续再修；在那之前如需可用，应把这两类扩展名临时判为 `WebView` |
+| **`RenderDescriptor` 本体仍未消费** | M5 已消费 `ExtendViewport` / `DisplayMode` / `MonitorRect`；`RenderCoordinator` 仍用内部精简 `Descriptor`，`RenderDescriptor` 整体、`ExtendViewport.monitor_width/height`（仅用于自检）及 `DeviceLost` / `EmbedFailed` / `BackendSwitchFailed` 错误码仅定义导出 | 模块顶部 `#![allow(dead_code, unused_imports)]` 即为此；等真正需要跨模块传递完整描述时再收口 |
+| **extend 不含视频同步** | M5 的共享帧时钟只覆盖图片 / GIF / 动态 WebP；视频解码路径尚未实现 | M6 接 MediaFoundation 后，同一个 `Arc<SharedFrames>` 模型可直接扩展到视频帧 |
+| **WebView / Native 坐标系差异** | 物理像素（Native）vs 逻辑像素（WebView CSS，除以 `scaleFactor()`）；`WebviewWindowBuilder` 直接接收物理值存在既有 DPI 偏差 | Q2 决定 M5 只保证 Native 内部统一，WebView 侧 DPI 另立条目；D2 保证同一组不会混用两套坐标 |
+| **混合 backend 时 extend 降级** | D2：组内出现非 Native backend 时整组退回逐屏独立渲染 | 若未来要求混合组也拼接，需先统一两套几何与帧时钟；17:27 决策明确不重写 WebView 侧行为 |
 | **运行时动态 backend 切换** | `apply_backend` 已支持跨 backend 切换（先销毁旧目标再建新目标），但 `selection` 在 `RenderCoordinator::new` 时固定 | 运行时切换推到 M8 |
 | **命令无 ack** | `ensure_monitor` / `set_wallpaper` 发送后立即返回，失败只落在 renderer thread 日志，不回传 `renderer-error` | 需要时改为 oneshot 回执 |
 | **无视频 / 无 HTML 网页壁纸** | 产品边界决策 | 见 1.3 |
@@ -426,10 +463,12 @@ src-tauri/src/
 │   ├── wallpaper_renderer/                 跨平台契约（不依赖 windows crate）
 │   │   ├── mod.rs                          facade：Windows 导出真实 DesktopRenderer，
 │   │   │                                   其它平台同签名 no-op（macOS/CI 可编译）
-│   │   ├── contracts.rs                    RenderDescriptor / enums / RendererError
+│   │   ├── contracts.rs                    RenderDescriptor / ExtendViewport / enums / RendererError
 │   │   ├── selection.rs                    default_backend_selection / resolve_backend
 │   │   ├── decoder.rs                      image 0.25：GIF / WebP / 静态图 → BGRA 帧
-│   │   └── fit.rs                          fit_rect → D3D11_VIEWPORT，含单元测试
+│   │   ├── fit.rs                          fit_rect → D3D11_VIEWPORT，含单元测试
+│   │   └── geometry.rs                     union_rect / extend_viewport / group_viewports
+│   │                                       （M5 跨屏几何，跨平台纯函数 + 6 个单测）
 │   │
 │   └── windows/
 │       ├── desktop_embedder/               复用既有 WorkerW 嵌入层
@@ -439,20 +478,23 @@ src-tauri/src/
 │       │   └── legacy.rs                  旧版本：忽略 policy
 │       │
 │       ├── desktop_renderer/
-│       │   ├── mod.rs                      导出 DesktopRenderer
-│       │   ├── renderer.rs                 渲染线程：mpsc 命令 / ComScope / 消息泵 / 16ms 循环
+│       │   ├── mod.rs                      导出 DesktopRenderer / SharedDevice / SharedFrames
+│       │   ├── renderer.rs                 渲染线程：共享 device / 组级 SetWallpaper /
+│       │   │                              SetGroupGeometry / ComScope / 消息泵 / 16ms 循环
 │       │   ├── window.rs                   NativeWindow：窗口创建 / exstyle 归一 / bounds / Drop
-│       │   └── surface.rs                  D3D11 device / DirectComposition / pipeline /
-│       │                                  纹理上传 / render / update_rect / destroy
+│       │   └── surface.rs                  SharedDevice（一次解码上传）/ SharedFrames（帧时钟）/
+│       │                                  RenderSurface（每屏 swapchain + offset viewport）
 │       └── DESKTOP_EMBEDDER_TECH_DOC.md
 │
 ├── ctx/
-│   ├── render_coordinator.rs               渲染链路唯一入口（backend map / rect map / 路由 / 错误上报）
+│   ├── render_coordinator.rs               渲染链路唯一入口（backend / rect / display_mode /
+│   │                                      组几何 / D2 降级 / 路由 / 错误上报）
 │   ├── window_manager.rs                   WebView 窗口，embed 传 EmbedPolicy::WebView
 │   └── mod.rs                              AppContext 持有 Arc<Mutex<RenderCoordinator>>
 ├── commands/wallpaper_window.rs            create / destroy / hide / show / active_ids 全改走协调器
 ├── commands/monitor_config.rs              fitMode / 壁纸变更走协调器
 ├── runtime/scheduler/deletion_effects.rs   WmNotification → RenderNotification 批量派发
+├── runtime/scheduler/setting_effects.rs    display_mode 变更同步给 coordinator（M5）
 ├── runtime/tasks/carousel.rs               换图走 coordinator.update_wallpaper
 ├── runtime/tasks/fullscreen_detector.rs    暂停走 coordinator.set_paused
 ├── events.rs                               RendererErrorPayload
@@ -460,21 +502,26 @@ src-tauri/src/
                                             （D3D11 / Dxgi / DirectComposition / COM / Fxc / Gdi）
 ```
 
-前端：`src/api/event.ts` 增 `RENDERER_ERROR` + `RendererErrorPayload` + `EventMap`；`src/pages/main/App.tsx` 单点监听并 toast。
+前端：`src/api/event.ts` 增 `RENDERER_ERROR` + `RendererErrorPayload` + `EventMap`；`src/pages/main/App.tsx` 单点监听，`ExtendDegraded` 用 `toast.warning`、其余用 `toast.error`。
 
 ### 6.2 RenderCoordinator 的 backend 状态
 
 ```
-backends: HashMap<monitor_id, RenderBackend>   ← 当前 active backend
-rects:    HashMap<monitor_id, MonitorRect>     ← 跨 backend 切换时重建目标用
-selection: BackendSelection                    ← 进程启动时确定
+backends:      HashMap<monitor_id, RenderBackend>   ← 当前 active backend
+rects:         HashMap<monitor_id, MonitorRect>     ← 所有 active 屏；extend 的 union 由整张表算出
+display_mode:  DisplayMode                          ← 启动时从 app_setting 读，设置变更时同步
+degraded_logged: bool                              ← D2 降级提示只发一次
+selection:     BackendSelection                     ← 进程启动时确定
 ```
 
 | 入口 | 行为 |
 |------|------|
-| `ensure_target` | 查库 → `build_descriptor` → Native 建 surface + 首帧 / WebView 建窗口 |
-| `update_wallpaper` | 每张目标屏重新决策 backend，`apply_backend` 需要时销毁旧目标再建新目标，随后发 `thumbnail-changed` |
-| `destroy_target` | 按当前 backend 选择 renderer / WM 清理路径 |
+| `ensure_target` | 登记 rect → 查库 → `build_descriptor` → 建 surface / 窗口 → 组级下发首帧 → 刷新全组几何 |
+| `update_wallpaper` | **整组只查库一次**：`apply_backend` 逐屏切 backend → Native 屏一次 `set_wallpaper` 共享帧时钟 / WebView 屏逐屏 emit → `thumbnail-changed` → 刷新全组几何 |
+| `register_monitor` | 在判断「有没有壁纸」之前登记几何并重算 union |
+| `set_display_mode` / `refresh_display_mode` | 更新模式并触发 `refresh_group_geometry()` |
+| `refresh_group_geometry` | 算 union → extend 且全 Native 时下发各屏 `ExtendViewport`，否则全部置 `None`（D2 降级并提示一次） |
+| `destroy_target` | 按 backend 清理，并刷新全组几何 |
 | `clear_wallpaper` / `set_fit_mode` | 按 backend 分流 |
 | `set_paused` | Native 停帧 + WebView `hide_all` / `show_all` |
 | `dispatch_notifications` | `RenderNotification::Updated/Cleared` 批量派发，DB 阶段收集、短锁内一次性执行 |
@@ -543,10 +590,14 @@ ff799e3  fix: create swapchain after desktop embedding
 da22a50  fix: disable back-face culling on native wallpaper quad ⭐ 最终修复
 b2a01a0  refactor: remove native renderer troubleshooting diagnostics
          ↓ M4 收束：EmbedPolicy 隔离 WebView / 悬垂方法重新定性 / 冗余日志清理
-         ↓ 压缩为单个 commit + force push（当前版本 ⭐）
+         ↓ 压缩为单个 commit `950229a` + force push
+         ↓ M5：跨屏几何 / 共享 device 与帧时钟 / offset viewport / 全组刷新 / D2 降级
+         ↓ feat: add native cross-monitor extend rendering（当前版本 ⭐）
 ```
 
 merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
+
+> M0~M4 的 21 个中间 commit 已在 M4 收束时压缩；M5 是独立增量提交，未改写历史。
 
 ---
 
@@ -591,16 +642,19 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
 ---
 
-## 九、后续优化方向（M5+）
+## 九、后续优化方向（M6+）
+
+**M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。剩余项：
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
-| **P0** | Native 视频解码 | 用 MediaFoundation 把 `.mp4` / `.m4v` 接进 `DecodedFrame`；在完成前，要么实现解码、要么把这两类扩展名从 `NATIVE_VIDEO_EXTENSIONS` 移出并判为 `WebView`，消除「backend 说支持但解码必失败」的语义裂缝 |
-| P1 | mirror / extend 真实跨屏视口 | 消费 `RenderDescriptor` / `ExtendViewport` / `DisplayMode`，共享纹理 + 逐屏 viewport 偏移，替代「各 wid 各自渲染」 |
+| **P0** | Native 视频解码（M6） | 用 MediaFoundation 把 `.mp4` / `.m4v` 接进 `DecodedFrame`；`SharedFrames` 模型可直接扩展到视频帧。完成前要么实现解码、要么把这两类扩展名从 `NATIVE_VIDEO_EXTENSIONS` 移出并判为 `WebView`，消除「backend 说支持但解码必失败」的语义裂缝 |
+| **P0** | Windows 实机验收 M5 | 双屏不同分辨率 + 负坐标（主屏在右）、静态图 / GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份、WebView fallback 不回归 |
 | P1 | 渲染命令 ack | mpsc + oneshot 回执，把解码 / surface 失败回传 `renderer-error`，不再只落 renderer thread 日志 |
+| P1 | WebView 侧 DPI 偏差 | `WebviewWindowBuilder` 直接接收物理像素，`useExtendViewport` 又除以 `scaleFactor()`；Q2 决定另立条目处理，不在 M5 扩散 |
 | P2 | 运行时动态 backend 切换 | `selection` 可运行时更新，配合设置项暴露（原计划 M8） |
 | P2 | 设备丢失恢复 | 消费 `DeviceLost`，处理 `DXGI_ERROR_DEVICE_REMOVED` / `ResizeBuffers` 失败后的重建 |
-| P2 | 显示器热插拔 / DPI 变化 | 用 Tauri 原生显示器事件替代 5s 轮询，及时 `update_rect` |
+| P2 | 显示器热插拔事件化 | 用 Tauri 原生显示器事件替代 5s 轮询；`refresh_group_geometry()` 已具备全组刷新能力，只差事件源 |
 | P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |
 | P3 | 契约生成 | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
-| P3 | 单元测试覆盖 | 目前 `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs` 有测试，renderer 编排与桌面嵌入仍零覆盖 |
+| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs` / `geometry.rs` 有测试，renderer 编排与桌面嵌入仍零覆盖 |

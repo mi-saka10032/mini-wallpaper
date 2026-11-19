@@ -326,6 +326,22 @@ impl WallpaperWindowManager {
         Ok(())
     }
 
+    /// 广播 displayMode 变更，只发给**实际存在**的 WebView 窗口。
+    ///
+    /// 纯 Native 组没有任何 label，按 active_configs 逐个 emit 会全部
+    /// `resolve_window` 失败刷 warn；以已创建窗口为准即可。
+    pub fn broadcast_display_mode_changed(&self, display_mode: &str) {
+        for monitor_id in self.windows.keys() {
+            if let Err(e) = self.notify_display_mode_changed(monitor_id, display_mode) {
+                log::warn!(
+                    "[WallpaperWindowManager] display-mode-changed 发送失败 {}: {}",
+                    monitor_id,
+                    e
+                );
+            }
+        }
+    }
+
     /// 获取当前所有已创建壁纸窗口的 monitor_id 列表
     pub fn get_active_window_ids(&self) -> Vec<String> {
         self.windows.keys().cloned().collect()

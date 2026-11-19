@@ -69,6 +69,11 @@ impl AppContext {
             app_handle.clone(),
             window_manager.clone(),
         )?));
+        // 启动时同步一次全局 display_mode，避免 extend 组首屏仍按 independent 渲染
+        {
+            let mut coordinator = render_coordinator.lock().await;
+            coordinator.refresh_display_mode().await;
+        }
         let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
 
         Ok(Self {

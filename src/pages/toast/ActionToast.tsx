@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { COMMANDS } from "@/api/config";
 import { SkipForward, SkipBack, Pause, Play, X } from "lucide-react";
-import { initToastI18n, t } from "./i18n";
+import i18n, { initToastI18n } from "./i18n";
 
 const ACTION_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string }> = {
   next_switched: { icon: SkipForward, color: "text-blue-400", bg: "bg-blue-500/10" },
@@ -36,16 +37,16 @@ const ActionToast: React.FC = () => {
   const [exiting, setExiting] = useState(false);
   const [i18nReady, setI18nReady] = useState(false);
 
-  useEffect(() => {
-    void initToastI18n().finally(() => setI18nReady(true));
-  }, []);
-
   // Toast 窗口专属 body class：保证根容器完全透明，无灰色底
   useEffect(() => {
     document.body.classList.add("toast-body");
     return () => {
       document.body.classList.remove("toast-body");
     };
+  }, []);
+
+  useEffect(() => {
+    void initToastI18n().finally(() => setI18nReady(true));
   }, []);
 
   useEffect(() => {
@@ -60,7 +61,7 @@ const ActionToast: React.FC = () => {
     // 等待退场动画完成后通知后端销毁窗口
     setTimeout(async () => {
       try {
-        await invoke("close_toast_window", { label });
+        await invoke(COMMANDS.CLOSE_TOAST_WINDOW, { label });
       } catch {
         // 如果 command 失败，直接关闭当前窗口
         await getCurrentWindow().close();
@@ -78,7 +79,7 @@ const ActionToast: React.FC = () => {
 
   const config = ACTION_CONFIG[msgKey] || ACTION_CONFIG.next_switched;
   const Icon = config.icon;
-  const message = t(msgKey);
+  const message = i18n.t(msgKey);
 
   return (
     <div

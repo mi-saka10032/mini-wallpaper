@@ -130,9 +130,11 @@
 
 @layer base {
   html,
+  body,
   #root {
     background: transparent !important;
     border-radius: 0.75rem;
+    overflow: hidden;
   }
 
   * {

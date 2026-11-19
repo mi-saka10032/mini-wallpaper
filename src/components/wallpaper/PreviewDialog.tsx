@@ -68,7 +68,7 @@ const PreviewDialog: FC<PreviewDialogProps> = memo(({ wallpapers, initialIndex, 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xl"
+      className="fixed inset-0 z-50 flex items-center justify-center rounded-xl bg-black/70 backdrop-blur-xl"
       onClick={onClose}
     >
       {/* 关闭按钮 — 固定右上角 */}

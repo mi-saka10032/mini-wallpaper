@@ -47,7 +47,6 @@ pub async fn set_setting(
     ctx: State<'_, AppContext>,
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<SetSettingRequest>,
-    monitor_id: Option<String>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
 
@@ -62,7 +61,7 @@ pub async fn set_setting(
     let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
     let mut sched = scheduler_handle.lock().await;
     sched
-        .apply_setting_side_effect(&req.key, &req.value, monitor_id.as_deref())
+        .apply_setting_side_effect(&req.key, &req.value, req.monitor_id.as_deref())
         .await;
 
     Ok(())

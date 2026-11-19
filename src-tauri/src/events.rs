@@ -186,3 +186,16 @@ pub struct FavoritesChangedPayload {
 impl EventPayload for FavoritesChangedPayload {
     const EVENT_NAME: &'static str = "favorites-changed";
 }
+
+/// 壁纸渲染器错误事件（通知主窗口显示原生渲染链路的错误）
+#[derive(Clone, Serialize)]
+pub struct RendererErrorPayload {
+    pub monitor_id: Option<String>,
+    pub wallpaper_id: Option<i32>,
+    pub code: String,
+    pub message: String,
+}
+
+impl EventPayload for RendererErrorPayload {
+    const EVENT_NAME: &'static str = "renderer-error";
+}

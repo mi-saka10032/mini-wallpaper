@@ -33,6 +33,19 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use self::strategy::{select_strategy, MonitorRect};
 
+/// 调用方身份：WebView 与 Native 共用同一套嵌入策略，但窗口样式前提不同。
+///
+/// - `WebView`：tao 创建的 WS_POPUP 无边框窗口。存量方案依赖其原有混合样式，
+///   SetParent 的语义不能因为原生渲染器而改变，否则等于让一条已验证可用的路径
+///   静默换一种窗口模型。
+/// - `Native`：我们自己创建的 WS_POPUP 窗口。SetParent 前必须清掉 WS_POPUP，
+///   否则与 WS_CHILD 互斥、`GetParent` 返回 0，窗口不会真正挂进 WorkerW。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmbedPolicy {
+    WebView,
+    Native,
+}
+
 /// 辅助函数：将 &str 编码为以 null 结尾的 UTF-16 Vec
 pub(crate) fn encode_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
@@ -50,6 +63,7 @@ pub fn embed_in_desktop(
     monitor_y: i32,
     monitor_width: i32,
     monitor_height: i32,
+    policy: EmbedPolicy,
 ) -> Result<()> {
     let rect = MonitorRect {
         x: monitor_x,
@@ -88,7 +102,7 @@ pub fn embed_in_desktop(
 
         // 5. 执行嵌入
         strategy
-            .embed(hwnd as HWND, workerw, rect)
+            .embed(hwnd as HWND, workerw, rect, policy)
             .context("嵌入操作失败")?;
 
         // 注意：DWM 圆角裁剪（~1px）已确认无法通过任何窗口级 API 消除，

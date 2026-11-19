@@ -3,3 +3,4 @@ pub mod windows;
 
 pub mod global_shortcut;
 pub mod tray;
+pub mod wallpaper_renderer;

@@ -15,6 +15,7 @@
 //! - **职责分离**：`ctx` 管"是什么"（状态），`runtime` 管"做什么"（调度）
 
 mod db;
+pub mod render_coordinator;
 pub mod toast_manager;
 pub mod window_manager;
 
@@ -24,6 +25,7 @@ use anyhow::Result;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 
+use render_coordinator::RenderCoordinator;
 use toast_manager::ToastManager;
 use window_manager::WallpaperWindowManager;
 
@@ -43,6 +45,9 @@ pub struct AppContext {
     /// 壁纸窗口管理器（物理显示器 ↔ 壁纸窗口的映射管理）
     pub window_manager: Arc<Mutex<WallpaperWindowManager>>,
 
+    /// 渲染协调器（壁纸渲染链路唯一入口，决定 Native / WebView backend）
+    pub render_coordinator: Arc<Mutex<RenderCoordinator>>,
+
     /// Toast 通知窗口管理器（右下角独立通知窗口）
     pub toast_manager: Arc<Mutex<ToastManager>>,
 
@@ -59,10 +64,16 @@ impl AppContext {
     pub async fn new(app_handle: tauri::AppHandle) -> Result<Self> {
         let db = db::init_db(&app_handle).await?;
         let window_manager = Arc::new(Mutex::new(WallpaperWindowManager::new(app_handle.clone())));
+        let render_coordinator = Arc::new(Mutex::new(RenderCoordinator::new(
+            db.clone(),
+            app_handle.clone(),
+            window_manager.clone(),
+        )?));
         let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
 
         Ok(Self {
             window_manager,
+            render_coordinator,
             toast_manager,
             app_handle,
             db,

@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use log::{error, warn};
 
 use super::Scheduler;
-use crate::ctx::window_manager::WmNotification;
+use crate::ctx::render_coordinator::RenderNotification;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
@@ -61,7 +61,7 @@ impl Scheduler {
         // —— 阶段 1：DB 查询 + 定时器管理（无 wm 锁） ——
         let db = self.db();
         let is_sync = self.resolve_is_sync_mode().await;
-        let mut notifications: Vec<WmNotification> = Vec::new();
+        let mut notifications: Vec<RenderNotification> = Vec::new();
 
         for config in affected_configs {
             let mid = &config.monitor_id;
@@ -82,7 +82,7 @@ impl Scheduler {
                 }
                 None => {
                     self.stop(&key);
-                    notifications.push(WmNotification::Cleared(mid.clone(), is_sync));
+                    notifications.push(RenderNotification::Cleared(mid.clone(), is_sync));
                 }
             }
         }
@@ -93,10 +93,14 @@ impl Scheduler {
             .collect();
         Self::check_orphaned_timers_inner(&db, self, &affected_mids).await;
 
-        // —— 阶段 2：短锁批量通知 ——
+        // —— 阶段 2：批量路由通知 ——
+        {
+            let coordinator = self.render_coordinator();
+            let mut guard = coordinator.lock().await;
+            guard.dispatch_notifications(notifications).await;
+        }
         let wm = self.window_manager();
         let wm_guard = wm.lock().await;
-        wm_guard.dispatch_notifications(notifications);
         wm_guard.notify_config_refreshed();
     }
 
@@ -116,7 +120,7 @@ impl Scheduler {
 
         // —— 阶段 1：定时器管理 + 收集通知（无 wm 锁） ——
         let is_sync = self.resolve_is_sync_mode().await;
-        let mut notifications: Vec<WmNotification> = Vec::new();
+        let mut notifications: Vec<RenderNotification> = Vec::new();
 
         for config in affected_configs {
             let mid = &config.monitor_id;
@@ -124,14 +128,18 @@ impl Scheduler {
             self.stop(&key);
 
             if config.wallpaper_id.is_none() {
-                notifications.push(WmNotification::Cleared(mid.clone(), is_sync));
+                notifications.push(RenderNotification::Cleared(mid.clone(), is_sync));
             }
         }
 
-        // —— 阶段 2：短锁批量通知 ——
+        // —— 阶段 2：批量路由通知 ——
+        {
+            let coordinator = self.render_coordinator();
+            let mut guard = coordinator.lock().await;
+            guard.dispatch_notifications(notifications).await;
+        }
         let wm = self.window_manager();
         let wm_guard = wm.lock().await;
-        wm_guard.dispatch_notifications(notifications);
         wm_guard.notify_config_refreshed();
     }
 
@@ -161,7 +169,7 @@ impl Scheduler {
         // —— 阶段 1：DB 查询 + 定时器管理（无 wm 锁） ——
         let db = self.db();
         let is_sync = self.resolve_is_sync_mode().await;
-        let mut notifications: Vec<WmNotification> = Vec::new();
+        let mut notifications: Vec<RenderNotification> = Vec::new();
         let mut config_changed = false;
 
         for config in bound_configs {
@@ -193,12 +201,16 @@ impl Scheduler {
             }
         }
 
-        // —— 阶段 2：短锁批量通知 ——
+        // —— 阶段 2：批量路由通知 ——
         if config_changed || !notifications.is_empty() {
-            let wm = self.window_manager();
-            let wm_guard = wm.lock().await;
-            wm_guard.dispatch_notifications(notifications);
+            {
+                let coordinator = self.render_coordinator();
+                let mut guard = coordinator.lock().await;
+                guard.dispatch_notifications(notifications).await;
+            }
             if config_changed {
+                let wm = self.window_manager();
+                let wm_guard = wm.lock().await;
                 wm_guard.notify_config_refreshed();
             }
         }
@@ -221,7 +233,6 @@ impl Scheduler {
         direction: &Direction,
     ) -> bool {
         let db = self.db();
-        let wm = self.window_manager();
 
         let collection_id = match config.collection_id {
             Some(cid) => cid,
@@ -269,12 +280,14 @@ impl Scheduler {
             return false;
         }
 
-        // 通知壁纸窗口 + 主窗口缩略图
+        // 按 backend 路由通知（Native 渲染 / WebView 事件），is_sync 由 display_mode 决定
         {
-            let wm_guard = wm.lock().await;
-            if let Err(e) = wm_guard.update_wallpaper(&config.monitor_id, wid) {
-                warn!("[Scheduler] 壁纸更新通知失败 {}: {}", config.monitor_id, e);
-            }
+            let is_sync = self.resolve_is_sync_mode().await;
+            let coordinator = self.render_coordinator();
+            let mut guard = coordinator.lock().await;
+            guard
+                .update_wallpaper(&config.monitor_id, wid, is_sync)
+                .await;
         }
 
         // 如果有运行中的定时器，重置计时
@@ -305,7 +318,7 @@ impl Scheduler {
     async fn handle_current_wallpaper_removed_inner(
         db: &sea_orm::DatabaseConnection,
         sched: &mut Scheduler,
-        notifications: &mut Vec<WmNotification>,
+        notifications: &mut Vec<RenderNotification>,
         config: &monitor_config::Model,
         collection_id: i32,
         removed_ids: &HashSet<i32>,
@@ -316,13 +329,13 @@ impl Scheduler {
 
         match persist_current_wallpaper_removal(db, config, collection_id, removed_ids).await {
             Some(CurrentWallpaperOutcome::Advanced(next_wid)) => {
-                notifications.push(WmNotification::Updated(mid.clone(), next_wid, is_sync));
+                notifications.push(RenderNotification::Updated(mid.clone(), next_wid, is_sync));
                 Self::manage_timer_by_collection_inner(db, sched, mid, collection_id, true).await;
                 true
             }
             Some(CurrentWallpaperOutcome::Cleared) => {
                 sched.stop(&key);
-                notifications.push(WmNotification::Cleared(mid.clone(), is_sync));
+                notifications.push(RenderNotification::Cleared(mid.clone(), is_sync));
                 true
             }
             None => false,

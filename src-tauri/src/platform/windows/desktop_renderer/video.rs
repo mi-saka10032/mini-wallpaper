@@ -25,9 +25,9 @@ use super::audio::AudioPlayback;
 use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
     MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup,
-    MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
-    MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES, MF_MT_DEFAULT_STRIDE,
+    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 /// MF 平台只需启动一次；放在 renderer 线程内由 ComScope 保证 COM 已初始化。
@@ -108,6 +108,36 @@ fn ms_per(total: Duration, count: u64) -> f64 {
     total.as_secs_f64() * 1000.0 / count.max(1) as f64
 }
 
+/// 打开失败时用来确认 SourceReader 实际能提供哪些输出 subtype。
+fn log_native_video_subtypes(reader: &IMFSourceReader, label: &str) {
+    let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+    let mut index = 0u32;
+    loop {
+        match unsafe { reader.GetNativeMediaType(stream, index) } {
+            Ok(media_type) => {
+                if let Ok(subtype) = unsafe { media_type.GetGUID(&MF_MT_SUBTYPE) } {
+                    log::debug!(
+                        "[Video] 原生输出 subtype[{}]={:?} file={}",
+                        index,
+                        subtype,
+                        label
+                    );
+                }
+                index = index.saturating_add(1);
+            }
+            Err(err) if err.code() == MF_E_NO_MORE_TYPES => break,
+            Err(err) => {
+                log::debug!(
+                    "[Video] 枚举原生输出 subtype 失败 file={} err={:#}",
+                    label,
+                    err
+                );
+                break;
+            }
+        }
+    }
+}
+
 /// 一组显示器共享的视频播放状态。
 ///
 /// 所有字段只在 renderer 线程访问（source reader / D3D11 即时上下文都不是线程安全的），
@@ -174,19 +204,32 @@ impl VideoPlayback {
             reader.SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)?;
         }
 
+        log_native_video_subtypes(&reader, &label);
+
         let output_type: IMFMediaType = unsafe { MFCreateMediaType() }?;
         unsafe {
-            output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
-            reader.SetCurrentMediaType(
-                MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                None,
-                &output_type,
-            )?;
+            output_type
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+                .context("设置视频输出 major type 失败")?;
+            output_type
+                .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
+                .context("设置 RGB32 subtype 失败")?;
+            reader
+                .SetCurrentMediaType(
+                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                    None,
+                    &output_type,
+                )
+                .context(
+                    "协商 RGB32 视频输出失败；0xC00D36B4 通常表示该解码器/容器无法输出 RGB32",
+                )?;
         }
 
-        let negotiated =
-            unsafe { reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)? };
+        let negotiated = unsafe {
+            reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+                .context("读取协商后的视频媒体类型失败")?
+        };
         let subtype = unsafe { negotiated.GetGUID(&MF_MT_SUBTYPE)? };
         if subtype != MFVideoFormat_RGB32 {
             return Err(anyhow!(

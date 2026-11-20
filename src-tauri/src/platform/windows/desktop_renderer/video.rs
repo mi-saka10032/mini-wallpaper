@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use windows::core::{Interface, BOOL, GUID};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
     ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
@@ -426,10 +427,12 @@ fn create_worker_device(
             Some(&mut context),
         )?;
     }
-    Ok((
-        device.context("DXVA worker device 创建失败")?,
-        context.context("DXVA worker context 创建失败")?,
-    ))
+    let device = device.context("DXVA worker device 创建失败")?;
+    let context = context.context("DXVA worker context 创建失败")?;
+    // 微软文档明确建议给 MF/D3D11 共用 device 打开多线程保护，避免 VideoContext 死锁。
+    let multithread: ID3D10Multithread = device.cast()?;
+    let _ = unsafe { multithread.SetMultithreadProtected(true) };
+    Ok((device, context))
 }
 
 struct DecodedSample {
@@ -463,6 +466,7 @@ struct DxvaPipeline {
     height: u32,
     loop_duration: Duration,
     label: String,
+    first_frame_logged: bool,
 }
 
 impl DxvaPipeline {
@@ -530,6 +534,7 @@ impl DxvaPipeline {
             height: 0,
             loop_duration: Duration::ZERO,
             label: label.to_string(),
+            first_frame_logged: false,
         })
     }
 
@@ -667,24 +672,32 @@ impl DxvaPipeline {
         let decoder_texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
         let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
 
-        let mut locked: *mut c_void = ptr::null_mut();
-        if unsafe {
-            self.manager.LockDevice(
+        // 按微软 D3D11/MF 文档：通过 device manager 的 GetVideoService 取 VideoContext，
+        // 不用 LockDevice 把整个 device 锁住，避免与解码器内部锁形成互等。
+        let mut video_raw: *mut c_void = ptr::null_mut();
+        unsafe {
+            self.manager.GetVideoService(
                 self.manager_handle,
                 &ID3D11VideoContext::IID,
-                &mut locked,
-                true,
-            )
+                &mut video_raw,
+            )?
+        };
+        let video_raw = NonNull::new(video_raw).context("GetVideoService 返回空 VideoContext")?;
+        let video_context: ID3D11VideoContext =
+            unsafe { ID3D11VideoContext::from_raw(video_raw.as_ptr()) };
+        if !self.first_frame_logged {
+            log::info!(
+                "[VideoHw] GetVideoService 已返回 VideoContext file={}",
+                self.label
+            );
         }
-        .is_err()
-        {
-            return Ok(false);
-        }
-        let video_context: ID3D11VideoContext = unsafe { ID3D11VideoContext::from_raw(locked) };
 
         let shared_texture = self.shared_texture.clone().context("共享纹理缺失")?;
         let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;
         unsafe { keyed_mutex.AcquireSync(0, 250)? };
+        if !self.first_frame_logged {
+            log::info!("[VideoHw] 共享纹理 key0 已获取 file={}", self.label);
+        }
 
         let result = (|| -> Result<()> {
             let input_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
@@ -712,14 +725,19 @@ impl DxvaPipeline {
                 pInputSurface: ManuallyDrop::new(Some(input_view)),
                 ..Default::default()
             };
+            if !self.first_frame_logged {
+                log::info!("[VideoHw] 开始首帧 VideoProcessorBlt file={}", self.label);
+            }
             unsafe {
                 video_context.VideoProcessorBlt(&processor, &output_view, 0, &[stream])?;
             }
             Ok(())
         })();
         let _ = unsafe { keyed_mutex.ReleaseSync(1) };
-
-        unsafe { self.manager.UnlockDevice(self.manager_handle, false)? };
+        if result.is_ok() && !self.first_frame_logged {
+            self.first_frame_logged = true;
+            log::info!("[VideoHw] 首帧 VideoProcessorBlt 完成 file={}", self.label);
+        }
         result.map(|_| true)
     }
 

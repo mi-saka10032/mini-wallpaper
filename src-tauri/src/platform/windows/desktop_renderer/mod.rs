@@ -1,5 +1,6 @@
 mod renderer;
 mod surface;
+mod video;
 mod window;
 
 pub use renderer::DesktopRenderer;

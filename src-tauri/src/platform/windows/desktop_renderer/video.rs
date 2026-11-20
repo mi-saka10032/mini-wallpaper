@@ -12,40 +12,23 @@
 //! 送到系统输出，视频帧与时钟仍由本模块独占控制。无音轨时静音降级。
 //! 暂停：冻结播放时钟，不 flush / 不销毁 SourceReader，恢复后从原时间点继续。
 
-use std::ffi::c_void;
-use std::mem::ManuallyDrop;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use std::ptr::{self, NonNull};
+use std::ptr;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use windows::core::{Interface, BOOL, GUID};
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
-    ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
-    ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-    D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
-    D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
-    D3D11_VPOV_DIMENSION_TEXTURE2D,
-};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
-};
+use windows::core::GUID;
+use windows::Win32::Graphics::Direct3D11::{ID3D11ShaderResourceView, ID3D11Texture2D};
 
 use super::audio::AudioPlayback;
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, IMFSample,
-    IMFSourceReader, MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType,
-    MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup, MFVideoFormat_NV12,
-    MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES, MF_MT_DEFAULT_STRIDE,
-    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
-    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
+    MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup,
+    MFVideoFormat_NV12, MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 /// MF 平台只需启动一次；放在 renderer 线程内由 ComScope 保证 COM 已初始化。
@@ -77,20 +60,6 @@ pub struct VideoFrameSnapshot {
 enum VideoPixelFormat {
     Bgra8,
     Nv12,
-}
-
-/// DXVA 解码纹理不能直接当普通 SRV 用，统一经 VideoProcessor 转到 BGRA8。
-struct VideoProcessorState {
-    device: ID3D11Device,
-    video_device: ID3D11VideoDevice,
-    manager: IMFDXGIDeviceManager,
-    device_handle: HANDLE,
-    enumerator: Option<ID3D11VideoProcessorEnumerator>,
-    processor: Option<ID3D11VideoProcessor>,
-    output_texture: Option<ID3D11Texture2D>,
-    output_view: Option<ID3D11VideoProcessorOutputView>,
-    width: u32,
-    height: u32,
 }
 
 /// 视频链路计时样本：每 2s 聚合输出一次，避免每帧刷日志。
@@ -155,230 +124,6 @@ impl VideoTimingStats {
 
 fn ms_per(total: Duration, count: u64) -> f64 {
     total.as_secs_f64() * 1000.0 / count.max(1) as f64
-}
-
-/// 按微软推荐配置 SourceReader 的 DXVA 属性。
-fn create_dxgi_device_manager(
-    attributes: &IMFAttributes,
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    label: &str,
-) -> Option<IMFDXGIDeviceManager> {
-    let mut reset_token = 0u32;
-    let mut manager: Option<IMFDXGIDeviceManager> = None;
-    let result = (|| -> windows::core::Result<()> {
-        unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)? };
-        let manager = manager
-            .as_ref()
-            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
-        unsafe {
-            manager.ResetDevice(device, reset_token)?;
-            attributes.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, manager)?;
-            attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
-            attributes.SetUINT32(&MF_SOURCE_READER_DISABLE_DXVA, 0)?;
-            // 不设置 MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING：微软文档明确说它太慢。
-        }
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => {
-            log::info!("[Video] DXVA SourceReader 已配置 file={}", label);
-            manager
-        }
-        Err(err) => {
-            log::warn!(
-                "[Video] DXVA SourceReader 配置失败，回退软件解码 file={} err={:#}",
-                label,
-                err
-            );
-            None
-        }
-    }
-}
-
-impl VideoProcessorState {
-    fn new(device: &ID3D11Device, manager: &IMFDXGIDeviceManager) -> Result<Self> {
-        Ok(Self {
-            device: device.clone(),
-            video_device: device.cast()?,
-            manager: manager.clone(),
-            device_handle: unsafe { manager.OpenDeviceHandle() }?,
-            enumerator: None,
-            processor: None,
-            output_texture: None,
-            output_view: None,
-            width: 0,
-            height: 0,
-        })
-    }
-
-    fn ensure_resources(&mut self, width: u32, height: u32) -> Result<()> {
-        use windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC;
-
-        if self.width == width
-            && self.height == height
-            && self.processor.is_some()
-            && self.output_view.is_some()
-        {
-            return Ok(());
-        }
-
-        let rate = DXGI_RATIONAL {
-            Numerator: 30,
-            Denominator: 1,
-        };
-        let content = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
-            InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-            InputFrameRate: rate,
-            InputWidth: width,
-            InputHeight: height,
-            OutputFrameRate: rate,
-            OutputWidth: width,
-            OutputHeight: height,
-            Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-        };
-        let enumerator = unsafe { self.video_device.CreateVideoProcessorEnumerator(&content) }
-            .context("创建 VideoProcessor enumerator 失败")?;
-        let processor = unsafe { self.video_device.CreateVideoProcessor(&enumerator, 0) }
-            .context("创建 VideoProcessor 失败")?;
-
-        let output = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let mut texture: Option<ID3D11Texture2D> = None;
-        unsafe {
-            self.device
-                .CreateTexture2D(&output, None, Some(&mut texture))?;
-        }
-        let texture = texture.context("DXVA 输出纹理创建失败")?;
-
-        let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
-            ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
-            Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
-                Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
-            },
-        };
-        let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
-        unsafe {
-            self.video_device.CreateVideoProcessorOutputView(
-                &texture,
-                &enumerator,
-                &view_desc,
-                Some(&mut output_view),
-            )?
-        };
-        let output_view = output_view.context("创建 VideoProcessor output view 失败")?;
-
-        self.enumerator = Some(enumerator);
-        self.processor = Some(processor);
-        self.output_texture = Some(texture);
-        self.output_view = Some(output_view);
-        self.width = width;
-        self.height = height;
-        Ok(())
-    }
-
-    /// None 表示设备被 MF 占用，调用方应跳过本帧，绝不能阻塞 renderer。
-    fn process(
-        &mut self,
-        dxgi_buffer: &IMFDXGIBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<Option<ID3D11ShaderResourceView>> {
-        self.ensure_resources(width, height)?;
-
-        let mut locked: *mut c_void = ptr::null_mut();
-        if let Err(err) = unsafe {
-            self.manager.LockDevice(
-                self.device_handle,
-                &ID3D11VideoContext::IID,
-                &mut locked,
-                false,
-            )
-        } {
-            log::debug!("[Video] DXVA device busy，跳过本帧 err={:#}", err);
-            return Ok(None);
-        }
-        let video_context: ID3D11VideoContext = unsafe { ID3D11VideoContext::from_raw(locked) };
-
-        let result = (|| -> Result<ID3D11ShaderResourceView> {
-            let enumerator = self
-                .enumerator
-                .as_ref()
-                .context("VideoProcessor enumerator 缺失")?;
-            let processor = self.processor.as_ref().context("VideoProcessor 缺失")?;
-            let output_view = self
-                .output_view
-                .as_ref()
-                .context("VideoProcessor output view 缺失")?;
-
-            let mut raw: *mut c_void = ptr::null_mut();
-            unsafe { dxgi_buffer.GetResource(&ID3D11Texture2D::IID, &mut raw)? };
-            let raw = NonNull::new(raw).context("DXVA sample 返回空 texture")?;
-            let decoder_texture: ID3D11Texture2D =
-                unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
-            let subresource = unsafe { dxgi_buffer.GetSubresourceIndex()? };
-
-            let input_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
-                FourCC: 0,
-                ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
-                Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
-                    Texture2D: D3D11_TEX2D_VPIV {
-                        MipSlice: 0,
-                        ArraySlice: subresource,
-                    },
-                },
-            };
-            let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
-            unsafe {
-                self.video_device.CreateVideoProcessorInputView(
-                    &decoder_texture,
-                    enumerator,
-                    &input_desc,
-                    Some(&mut input_view),
-                )?
-            };
-            let input_view = input_view.context("创建 VideoProcessor input view 失败")?;
-
-            let stream = D3D11_VIDEO_PROCESSOR_STREAM {
-                Enable: BOOL(1),
-                pInputSurface: ManuallyDrop::new(Some(input_view)),
-                ..Default::default()
-            };
-            unsafe {
-                video_context
-                    .VideoProcessorBlt(processor, output_view, 0, &[stream])
-                    .context("VideoProcessorBlt 失败")?;
-            }
-
-            let output_texture = self.output_texture.as_ref().context("DXVA 输出纹理缺失")?;
-            let mut view: Option<ID3D11ShaderResourceView> = None;
-            unsafe {
-                self.device
-                    .CreateShaderResourceView(output_texture, None, Some(&mut view))?
-            };
-            view.context("DXVA 输出 SRV 创建失败")
-        })();
-
-        unsafe {
-            self.manager
-                .UnlockDevice(self.device_handle, false)
-                .context("解锁 DXVA device 失败")?;
-        }
-        result.map(Some)
-    }
 }
 
 /// 先尝试 RGB32（无需转换），失败后退 NV12（CPU 转 BGRA）。
@@ -482,12 +227,6 @@ pub struct VideoPlayback {
     loop_duration: Duration,
     /// 实际协商成功的解码输出格式；决定 upload_buffer 的像素路径。
     pixel_format: VideoPixelFormat,
-    /// SourceReader 通过它使用 DXVA；必须比 reader 活得更久。
-    _device_manager: Option<IMFDXGIDeviceManager>,
-    /// DXVA sample 的 GPU 转换状态。
-    video_processor: Option<VideoProcessorState>,
-    /// DXVA buffer 是否出现过，只打印一次日志。
-    hardware_sample_logged: bool,
     /// 日志只显示文件名，避免把绝对路径写进日志。
     label: String,
     timing: VideoTimingStats,
@@ -522,7 +261,6 @@ impl VideoPlayback {
             MFCreateAttributes(&mut value, 0)?;
             value.context("MF 属性对象创建失败")?
         };
-        let device_manager = create_dxgi_device_manager(&attributes, device, &label);
         let reader = unsafe { MFCreateSourceReaderFromURL(url, &attributes) }
             .with_context(|| format!("Media Foundation 无法打开视频 {:?}", path))?;
 
@@ -538,9 +276,6 @@ impl VideoPlayback {
         // 音频默认暂停在 0；由 renderer 根据当前是否 active / fade / 全屏决定何时开始。
         // 打开失败只记日志，视频继续静音播放。
         let audio = AudioPlayback::open(path, volume);
-        let video_processor = device_manager
-            .as_ref()
-            .and_then(|manager| VideoProcessorState::new(device, manager).ok());
 
         let mut playback = Self {
             reader,
@@ -556,9 +291,6 @@ impl VideoPlayback {
             cycle_base: Duration::ZERO,
             loop_duration: Duration::ZERO,
             pixel_format,
-            _device_manager: device_manager,
-            video_processor,
-            hardware_sample_logged: false,
             label: label.clone(),
             timing: VideoTimingStats::default(),
         };
@@ -716,7 +448,6 @@ impl VideoPlayback {
             return Ok(false);
         }
         let sample = sample.context("SourceReader 返回空 sample")?;
-
         log::debug!(
             "[Video] 首帧 sample 已读取 file={} flags={} timestamp={}",
             self.label,
@@ -733,64 +464,6 @@ impl VideoPlayback {
         // 只在首轮估算循环时长；后续轮次 cycle_base 已承接，不需要重算。
         if self.cycle_base.is_zero() {
             self.loop_duration = frame_time.saturating_add(frame_duration);
-        }
-
-        // DXVA sample 走 VideoProcessor：GPU 解码纹理 → shader 可采样的 BGRA8 纹理。
-        let dxgi_buffer = unsafe { sample.GetBufferByIndex(0) }
-            .ok()
-            .and_then(|buffer| buffer.cast::<IMFDXGIBuffer>().ok());
-        if let Some(dxgi_buffer) = dxgi_buffer {
-            if !self.hardware_sample_logged {
-                self.hardware_sample_logged = true;
-                log::info!("[Video] 使用 DXVA GPU sample file={}", self.label);
-            }
-
-            let media_type = unsafe {
-                self.reader
-                    .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
-            };
-            let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE)? };
-            let width = (frame_size >> 32) as u32;
-            let height = frame_size as u32;
-            if width == 0 || height == 0 {
-                return Err(anyhow!("DXVA sample 帧尺寸无效: {}x{}", width, height));
-            }
-
-            let state = self
-                .video_processor
-                .as_mut()
-                .context("检测到 DXVA sample，但 VideoProcessor 不可用")?;
-            let Some(view) = state
-                .process(&dxgi_buffer, width, height)
-                .context("DXVA VideoProcessor 处理失败")?
-            else {
-                // device 正被解码线程占用；保留上一帧，renderer 不阻塞。
-                return Ok(true);
-            };
-            let output_texture = state
-                .output_texture
-                .as_ref()
-                .context("DXVA 输出纹理缺失")?
-                .clone();
-
-            self.texture = Some(FrameTexture {
-                view,
-                texture: output_texture,
-                uv_view: None,
-                uv_texture: None,
-                pixel_format: VideoPixelFormat::Bgra8,
-                width,
-                height,
-            });
-            self.frame_time = frame_time;
-            self.frame_duration = if frame_duration.is_zero() {
-                Duration::from_millis(40)
-            } else {
-                frame_duration
-            };
-            self.timing
-                .record_frame(read_started.elapsed(), Duration::ZERO);
-            return Ok(true);
         }
 
         let buffer = unsafe { sample.ConvertToContiguousBuffer() }

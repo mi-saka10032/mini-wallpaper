@@ -53,13 +53,13 @@ pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("Media Foundation 初始化失败")
 }
 
-/// renderer 绘制一帧视频所需的资源。keyed_mutex 在绘制后必须 release。
+/// renderer 实际绘制的帧。视频帧始终来自 renderer 自己的本地纹理，
+/// 不再让每块 surface 直接持有 shared keyed mutex。
 pub struct VideoFrameSnapshot {
     pub view: ID3D11ShaderResourceView,
     pub uv_view: Option<ID3D11ShaderResourceView>,
     pub width: u32,
     pub height: u32,
-    keyed_mutex: Option<IDXGIKeyedMutex>,
 }
 
 impl VideoFrameSnapshot {
@@ -69,15 +69,18 @@ impl VideoFrameSnapshot {
             uv_view: None,
             width,
             height,
-            keyed_mutex: None,
         }
     }
+}
 
-    pub fn release(&self) {
-        if let Some(keyed_mutex) = &self.keyed_mutex {
-            let _ = unsafe { keyed_mutex.ReleaseSync(0) };
-        }
-    }
+/// DXVA worker 写入的 shared texture，以及 renderer 私有的本地副本。
+struct VideoFrameSource {
+    shared_texture: ID3D11Texture2D,
+    keyed_mutex: IDXGIKeyedMutex,
+    local_texture: ID3D11Texture2D,
+    local_view: ID3D11ShaderResourceView,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Clone, Default)]
@@ -116,7 +119,9 @@ pub struct VideoPlayback {
     worker: Option<JoinHandle<()>>,
     commands: Sender<WorkerCommand>,
     state: Arc<Mutex<SharedState>>,
-    frame: Option<VideoFrameSnapshot>,
+    context: ID3D11DeviceContext,
+    frame: Option<VideoFrameSource>,
+    frame_ready: bool,
     audio: Option<AudioPlayback>,
     started_at: Instant,
     paused_total: Duration,
@@ -128,7 +133,7 @@ pub struct VideoPlayback {
 impl VideoPlayback {
     pub fn open(
         renderer_device: &ID3D11Device,
-        _renderer_context: &ID3D11DeviceContext,
+        renderer_context: &ID3D11DeviceContext,
         path: &Path,
         volume: u32,
     ) -> Result<Self> {
@@ -179,7 +184,9 @@ impl VideoPlayback {
             worker: Some(worker),
             commands: command_tx,
             state,
+            context: renderer_context.clone(),
             frame: Some(frame),
+            frame_ready: false,
             audio,
             started_at: Instant::now(),
             paused_total: Duration::ZERO,
@@ -247,24 +254,37 @@ impl VideoPlayback {
         }
     }
 
+    /// renderer 每帧开始时调用一次：尝试把 worker 产出的共享帧复制到本地纹理。
+    /// 没有新帧时保留本地上一帧，所有 surface 继续显示同一画面，避免双屏闪烁。
+    pub fn begin_frame(&mut self) {
+        let Some(frame) = self.frame.as_ref() else {
+            return;
+        };
+        if unsafe { frame.keyed_mutex.AcquireSync(1, 0) }.is_err() {
+            return;
+        }
+        unsafe {
+            self.context
+                .CopyResource(&frame.local_texture, &frame.shared_texture);
+            // 必须让 CopyResource 进入命令队列后再把 key 还给 worker。
+            self.context.Flush();
+            let _ = frame.keyed_mutex.ReleaseSync(0);
+        }
+        self.frame_ready = true;
+    }
+
     pub fn frame_snapshot(&self) -> Option<VideoFrameSnapshot> {
-        let frame = self.frame.as_ref()?;
-        let keyed_mutex = frame.keyed_mutex.as_ref()?;
-        if unsafe { keyed_mutex.AcquireSync(1, 0) }.is_err() {
+        if !self.frame_ready {
             return None;
         }
+        let frame = self.frame.as_ref()?;
         Some(VideoFrameSnapshot {
-            view: frame.view.clone(),
+            view: frame.local_view.clone(),
             uv_view: None,
             width: frame.width,
             height: frame.height,
-            keyed_mutex: Some(keyed_mutex.clone()),
         })
     }
-
-    // 仅用于让 advance 里的时间字段有初值，音频 tick 依赖它。
-    #[allow(dead_code)]
-    fn frame_time_placeholder(&self) {}
 }
 
 impl Drop for VideoPlayback {
@@ -276,21 +296,43 @@ impl Drop for VideoPlayback {
     }
 }
 
-fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<VideoFrameSnapshot> {
-    let mut texture: Option<ID3D11Texture2D> = None;
+fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<VideoFrameSource> {
+    let mut shared_texture: Option<ID3D11Texture2D> = None;
     let handle = HANDLE(info.handle as *mut c_void);
-    unsafe { device.OpenSharedResource(handle, &mut texture)? };
-    let texture = texture.context("打开 DXVA 共享纹理失败")?;
-    let keyed_mutex: IDXGIKeyedMutex = texture.cast()?;
-    let mut view: Option<ID3D11ShaderResourceView> = None;
-    unsafe { device.CreateShaderResourceView(&texture, None, Some(&mut view))? };
-    let view = view.context("DXVA 共享纹理 SRV 创建失败")?;
-    Ok(VideoFrameSnapshot {
-        view,
-        uv_view: None,
+    unsafe { device.OpenSharedResource(handle, &mut shared_texture)? };
+    let shared_texture = shared_texture.context("打开 DXVA 共享纹理失败")?;
+    let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;
+
+    // renderer 私有副本：所有 surface 都从这张本地纹理取样，worker 只写共享纹理。
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: info.width,
+        Height: info.height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut local_texture: Option<ID3D11Texture2D> = None;
+    unsafe { device.CreateTexture2D(&desc, None, Some(&mut local_texture))? };
+    let local_texture = local_texture.context("DXVA 本地副本纹理创建失败")?;
+    let mut local_view: Option<ID3D11ShaderResourceView> = None;
+    unsafe { device.CreateShaderResourceView(&local_texture, None, Some(&mut local_view))? };
+    let local_view = local_view.context("DXVA 本地副本 SRV 创建失败")?;
+
+    Ok(VideoFrameSource {
+        shared_texture,
+        keyed_mutex,
+        local_texture,
+        local_view,
         width: info.width,
         height: info.height,
-        keyed_mutex: Some(keyed_mutex),
     })
 }
 
@@ -459,6 +501,7 @@ struct DxvaPipeline {
     manager: IMFDXGIDeviceManager,
     manager_handle: HANDLE,
     device: ID3D11Device,
+    context: ID3D11DeviceContext,
     video_device: ID3D11VideoDevice,
     video_context: ID3D11VideoContext,
     enumerator: Option<ID3D11VideoProcessorEnumerator>,
@@ -471,6 +514,8 @@ struct DxvaPipeline {
     loop_duration: Duration,
     label: String,
     first_frame_logged: bool,
+    stage_logged: bool,
+    blt_error_logged: bool,
 }
 
 impl DxvaPipeline {
@@ -551,6 +596,7 @@ impl DxvaPipeline {
             manager_handle,
             reader,
             device: device.clone(),
+            context: context.clone(),
             video_device: device.cast()?,
             video_context,
             enumerator: None,
@@ -563,6 +609,8 @@ impl DxvaPipeline {
             loop_duration: Duration::ZERO,
             label: label.to_string(),
             first_frame_logged: false,
+            stage_logged: false,
+            blt_error_logged: false,
         })
     }
 
@@ -661,8 +709,9 @@ impl DxvaPipeline {
         let output_view = output_view.context("VideoProcessor output view 创建失败")?;
 
         let keyed_mutex: IDXGIKeyedMutex = texture.cast()?;
+        // 初始状态交给 worker 写 key0；不能先释放 key1，否则 renderer 会拷贝未初始化的纹理。
         unsafe { keyed_mutex.AcquireSync(0, 0)? };
-        let _ = unsafe { keyed_mutex.ReleaseSync(1) };
+        let _ = unsafe { keyed_mutex.ReleaseSync(0) };
 
         self.width = width;
         self.height = height;
@@ -707,8 +756,13 @@ impl DxvaPipeline {
 
         let shared_texture = self.shared_texture.clone().context("共享纹理缺失")?;
         let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;
-        unsafe { keyed_mutex.AcquireSync(0, 250)? };
-        if !self.first_frame_logged {
+        // key0 代表 worker 可写。renderer 尚未归还 key0 时保留 sample 等下一轮，
+        // 不能把 AcquireSync 失败当 worker 错误直接退出。
+        if unsafe { keyed_mutex.AcquireSync(0, 0) }.is_err() {
+            return Ok(false);
+        }
+        if !self.stage_logged {
+            self.stage_logged = true;
             log::info!("[VideoHw] 共享纹理 key0 已获取 file={}", self.label);
         }
 
@@ -743,15 +797,33 @@ impl DxvaPipeline {
             }
             unsafe {
                 video_context.VideoProcessorBlt(&processor, &output_view, 0, &[stream])?;
+                // 必须把 VP 命令刷入 GPU 队列后再释放 key1，否则 renderer 可能拷到旧帧。
+                self.context.Flush();
             }
             Ok(())
         })();
-        let _ = unsafe { keyed_mutex.ReleaseSync(1) };
-        if result.is_ok() && !self.first_frame_logged {
-            self.first_frame_logged = true;
-            log::info!("[VideoHw] 首帧 VideoProcessorBlt 完成 file={}", self.label);
+        let release_key = if result.is_ok() { 1 } else { 0 };
+        let _ = unsafe { keyed_mutex.ReleaseSync(release_key) };
+        match result {
+            Ok(()) => {
+                if !self.first_frame_logged {
+                    self.first_frame_logged = true;
+                    log::info!("[VideoHw] 首帧 VideoProcessorBlt 完成 file={}", self.label);
+                }
+                Ok(true)
+            }
+            Err(err) => {
+                if !self.blt_error_logged {
+                    self.blt_error_logged = true;
+                    log::warn!(
+                        "[VideoHw] VideoProcessorBlt 失败，保留 sample 重试 file={} err={:#}",
+                        self.label,
+                        err
+                    );
+                }
+                Ok(false)
+            }
         }
-        result.map(|_| true)
     }
 
     fn shared_frame_info(&self) -> &SharedFrameInfo {

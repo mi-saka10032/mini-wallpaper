@@ -407,6 +407,9 @@ fn run(receiver: Receiver<RendererCommand>) {
             let now = Instant::now();
             // 组级视频时钟推进：同一 Arc 只 advance 一次，避免每屏各推进一次导致快进。
             advance_videos(&mut surfaces, now);
+            // 帧级共享纹理同步：同一 VideoPlayback 每帧只 AcquireSync/CopyResource 一次，
+            // 所有 surface 随后只读 renderer 本地副本，避免双屏抢 keyed mutex 闪烁。
+            begin_video_frames(&surfaces);
             let mut reset_seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
             for (monitor_id, surface) in surfaces.iter_mut() {
                 surface.render(monitor_id, now);
@@ -435,6 +438,25 @@ fn run(receiver: Receiver<RendererCommand>) {
 
     for (_, mut surface) in surfaces {
         surface.destroy();
+    }
+}
+
+/// 每帧对所有唯一 VideoPlayback 做一次共享帧刷新。
+///
+/// Mirror/Extend 多屏共享同一个 Arc<Mutex<VideoPlayback>>；必须按指针去重，
+/// 否则每个 surface 各抢一次 keyed mutex，会出现一块屏拿到帧、另一块屏拿到 key0 的黑屏。
+fn begin_video_frames(surfaces: &HashMap<String, RenderSurface>) {
+    let mut seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    for surface in surfaces.values() {
+        for playback in surface.video_arcs() {
+            let ptr = Arc::as_ptr(playback);
+            if !seen.insert(ptr) {
+                continue;
+            }
+            if let Ok(mut guard) = playback.lock() {
+                guard.begin_frame();
+            }
+        }
     }
 }
 

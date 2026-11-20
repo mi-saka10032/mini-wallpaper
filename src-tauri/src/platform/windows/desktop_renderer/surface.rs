@@ -757,8 +757,7 @@ impl RenderSurface {
             self.context.RSSetState(&pipeline.rasterizer_state);
             self.context.RSSetViewports(Some(&[viewport]));
             self.context.Draw(4, 0);
-            // DXVA worker 等待 key 0 才能覆盖共享纹理；绘制提交后立即归还。
-            current.release();
+            // 视频帧来自 renderer 本地副本；keyed mutex 已在帧开始时统一释放。
         }
     }
 

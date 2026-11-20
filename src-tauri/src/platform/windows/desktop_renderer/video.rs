@@ -18,17 +18,18 @@ use std::ptr;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use windows::core::GUID;
+use windows::core::{Interface, GUID};
 use windows::Win32::Graphics::Direct3D11::{ID3D11ShaderResourceView, ID3D11Texture2D};
 
 use super::audio::AudioPlayback;
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
-    MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup,
-    MFVideoFormat_NV12, MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES,
-    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, IMFSample,
+    IMFSourceReader, MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType,
+    MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup, MFVideoFormat_NV12,
+    MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES, MF_MT_DEFAULT_STRIDE,
+    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
+    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 /// MF 平台只需启动一次；放在 renderer 线程内由 ComScope 保证 COM 已初始化。
@@ -124,6 +125,45 @@ impl VideoTimingStats {
 
 fn ms_per(total: Duration, count: u64) -> f64 {
     total.as_secs_f64() * 1000.0 / count.max(1) as f64
+}
+
+/// 按微软推荐配置 SourceReader 的 DXVA 属性。
+fn create_dxgi_device_manager(
+    attributes: &IMFAttributes,
+    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    label: &str,
+) -> Option<IMFDXGIDeviceManager> {
+    let mut reset_token = 0u32;
+    let mut manager: Option<IMFDXGIDeviceManager> = None;
+    let result = (|| -> windows::core::Result<()> {
+        unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)? };
+        let manager = manager
+            .as_ref()
+            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+        unsafe {
+            manager.ResetDevice(device, reset_token)?;
+            attributes.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, manager)?;
+            attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+            attributes.SetUINT32(&MF_SOURCE_READER_DISABLE_DXVA, 0)?;
+            // 不设置 MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING：微软文档明确说它太慢。
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            log::info!("[Video] DXVA SourceReader 已配置 file={}", label);
+            manager
+        }
+        Err(err) => {
+            log::warn!(
+                "[Video] DXVA SourceReader 配置失败，回退软件解码 file={} err={:#}",
+                label,
+                err
+            );
+            None
+        }
+    }
 }
 
 /// 先尝试 RGB32（无需转换），失败后退 NV12（CPU 转 BGRA）。
@@ -227,6 +267,10 @@ pub struct VideoPlayback {
     loop_duration: Duration,
     /// 实际协商成功的解码输出格式；决定 upload_buffer 的像素路径。
     pixel_format: VideoPixelFormat,
+    /// SourceReader 通过它使用 DXVA；必须比 reader 活得更久。
+    _device_manager: Option<IMFDXGIDeviceManager>,
+    /// DXVA buffer 是否出现过，只打印一次日志。
+    hardware_sample_logged: bool,
     /// 日志只显示文件名，避免把绝对路径写进日志。
     label: String,
     timing: VideoTimingStats,
@@ -261,6 +305,7 @@ impl VideoPlayback {
             MFCreateAttributes(&mut value, 0)?;
             value.context("MF 属性对象创建失败")?
         };
+        let device_manager = create_dxgi_device_manager(&attributes, device, &label);
         let reader = unsafe { MFCreateSourceReaderFromURL(url, &attributes) }
             .with_context(|| format!("Media Foundation 无法打开视频 {:?}", path))?;
 
@@ -291,6 +336,8 @@ impl VideoPlayback {
             cycle_base: Duration::ZERO,
             loop_duration: Duration::ZERO,
             pixel_format,
+            _device_manager: device_manager,
+            hardware_sample_logged: false,
             label: label.clone(),
             timing: VideoTimingStats::default(),
         };
@@ -448,6 +495,22 @@ impl VideoPlayback {
             return Ok(false);
         }
         let sample = sample.context("SourceReader 返回空 sample")?;
+
+        // M11a 只做硬件 sample 探测：从 IMFMediaBuffer 查询 IMFDXGIBuffer，
+        // 命中后绝不调用 ConvertToContiguousBuffer，避免再次触发 GPU device removed。
+        if !self.hardware_sample_logged {
+            if let Ok(buffer0) = unsafe { sample.GetBufferByIndex(0) } {
+                if buffer0.cast::<IMFDXGIBuffer>().is_ok() {
+                    self.hardware_sample_logged = true;
+                    log::info!(
+                        "[Video] 检测到 DXVA GPU sample file={}，M11a 跳过消费该帧",
+                        self.label
+                    );
+                    return Ok(true);
+                }
+            }
+        }
+
         log::debug!(
             "[Video] 首帧 sample 已读取 file={} flags={} timestamp={}",
             self.label,

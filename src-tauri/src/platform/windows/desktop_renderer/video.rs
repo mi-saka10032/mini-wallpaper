@@ -45,7 +45,7 @@ struct FrameTexture {
     height: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VideoPixelFormat {
     Bgra8,
     Nv12,
@@ -443,6 +443,12 @@ impl VideoPlayback {
             return Ok(false);
         }
         let sample = sample.context("SourceReader 返回空 sample")?;
+        log::debug!(
+            "[Video] 首帧 sample 已读取 file={} flags={} timestamp={}",
+            self.label,
+            flags,
+            timestamp
+        );
 
         let duration = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
         let frame_duration = hns_to_duration(duration.max(0) as u64);
@@ -458,9 +464,12 @@ impl VideoPlayback {
         let buffer = unsafe { sample.ConvertToContiguousBuffer() }
             .context("IMFSample 转为连续缓冲区失败")?;
         let read_elapsed = read_started.elapsed();
+        log::debug!("[Video] sample 已转连续缓冲区 file={}", self.label);
 
         let upload_started = Instant::now();
+        log::debug!("[Video] 开始上传视频帧 file={}", self.label);
         self.upload_buffer(&buffer)?;
+        log::debug!("[Video] 视频帧上传完成 file={}", self.label);
         self.timing
             .record_frame(read_elapsed, upload_started.elapsed());
 
@@ -490,6 +499,12 @@ impl VideoPlayback {
                 return Err(anyhow!("Video sample 缓冲区指针为空"));
             }
             let buffer_len = max_len.max(current_len) as usize;
+            log::debug!(
+                "[Video] 缓冲区已锁定 file={} max={} current={}",
+                self.label,
+                max_len,
+                current_len
+            );
             let media_type = unsafe {
                 self.reader
                     .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
@@ -526,6 +541,15 @@ impl VideoPlayback {
             if self.pixel_format == VideoPixelFormat::Nv12 && bottom_up {
                 return Err(anyhow!("NV12 bottom-up 布局暂不支持"));
             }
+            log::debug!(
+                "[Video] 帧参数 file={} format={:?} {}x{} stride={} buffer={}",
+                self.label,
+                self.pixel_format,
+                width,
+                height,
+                stride,
+                buffer_len
+            );
 
             self.ensure_texture(width, height)?;
             let texture: ID3D11Texture2D =
@@ -569,6 +593,7 @@ impl VideoPlayback {
                         self.bgra_scratch.resize(needed, 0);
                     }
                     let source = unsafe { std::slice::from_raw_parts(ptr, buffer_len) };
+                    log::debug!("[Video] 开始 NV12→BGRA file={}", self.label);
                     nv12_to_bgra(
                         source,
                         stride,
@@ -576,6 +601,7 @@ impl VideoPlayback {
                         height as usize,
                         &mut self.bgra_scratch[..needed],
                     )?;
+                    log::debug!("[Video] NV12→BGRA 完成 file={}", self.label);
                     for row in 0..height as usize {
                         let start = row * expected;
                         unsafe {
@@ -589,6 +615,7 @@ impl VideoPlayback {
                             );
                         }
                     }
+                    log::debug!("[Video] 纹理行上传完成 file={}", self.label);
                 }
             }
             Ok(())

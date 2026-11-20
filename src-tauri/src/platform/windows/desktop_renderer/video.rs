@@ -25,9 +25,10 @@ use super::audio::AudioPlayback;
 use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
     MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup,
-    MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES, MF_MT_DEFAULT_STRIDE,
-    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM,
-    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MFVideoFormat_NV12, MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 /// MF 平台只需启动一次；放在 renderer 线程内由 ComScope 保证 COM 已初始化。
@@ -42,6 +43,12 @@ struct FrameTexture {
     texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
     width: u32,
     height: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VideoPixelFormat {
+    Bgra8,
+    Nv12,
 }
 
 /// 视频链路计时样本：每 2s 聚合输出一次，避免每帧刷日志。
@@ -108,6 +115,52 @@ fn ms_per(total: Duration, count: u64) -> f64 {
     total.as_secs_f64() * 1000.0 / count.max(1) as f64
 }
 
+/// 先尝试 RGB32（无需转换），失败后退 NV12（CPU 转 BGRA）。
+fn negotiate_video_output(reader: &IMFSourceReader, label: &str) -> Result<VideoPixelFormat> {
+    let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+    let candidates = [
+        (MFVideoFormat_RGB32, VideoPixelFormat::Bgra8, "RGB32"),
+        (MFVideoFormat_NV12, VideoPixelFormat::Nv12, "NV12"),
+    ];
+
+    for (subtype, pixel_format, name) in candidates {
+        let output_type: IMFMediaType = unsafe { MFCreateMediaType() }?;
+        unsafe {
+            output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            output_type.SetGUID(&MF_MT_SUBTYPE, &subtype)?;
+        }
+
+        match unsafe { reader.SetCurrentMediaType(stream, None, &output_type) } {
+            Ok(()) => {
+                let negotiated = unsafe { reader.GetCurrentMediaType(stream)? };
+                let actual = unsafe { negotiated.GetGUID(&MF_MT_SUBTYPE)? };
+                if actual == subtype {
+                    log::info!("[Video] 输出格式协商成功 file={} format={}", label, name);
+                    return Ok(pixel_format);
+                }
+                log::debug!(
+                    "[Video] 输出格式不符 file={} want={} got={:?}",
+                    label,
+                    name,
+                    actual
+                );
+            }
+            Err(err) => {
+                log::debug!(
+                    "[Video] 输出格式协商失败 file={} format={} err={:#}",
+                    label,
+                    name,
+                    err
+                );
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "视频解码器无法协商 RGB32 或 NV12 输出；当前仅支持这两种像素格式"
+    ))
+}
+
 /// 打开失败时用来确认 SourceReader 实际能提供哪些输出 subtype。
 fn log_native_video_subtypes(reader: &IMFSourceReader, label: &str) {
     let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
@@ -161,6 +214,10 @@ pub struct VideoPlayback {
     cycle_base: Duration,
     /// 播放列表总时长（最后一帧时间 + 时长），用于循环；未知时为 0
     loop_duration: Duration,
+    /// 实际协商成功的解码输出格式；决定 upload_buffer 的像素路径。
+    pixel_format: VideoPixelFormat,
+    /// NV12 → BGRA 复用缓冲，避免每帧重新分配。
+    bgra_scratch: Vec<u8>,
     /// 日志只显示文件名，避免把绝对路径写进日志。
     label: String,
     timing: VideoTimingStats,
@@ -205,38 +262,7 @@ impl VideoPlayback {
         }
 
         log_native_video_subtypes(&reader, &label);
-
-        let output_type: IMFMediaType = unsafe { MFCreateMediaType() }?;
-        unsafe {
-            output_type
-                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
-                .context("设置视频输出 major type 失败")?;
-            output_type
-                .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
-                .context("设置 RGB32 subtype 失败")?;
-            reader
-                .SetCurrentMediaType(
-                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                    None,
-                    &output_type,
-                )
-                .context(
-                    "协商 RGB32 视频输出失败；0xC00D36B4 通常表示该解码器/容器无法输出 RGB32",
-                )?;
-        }
-
-        let negotiated = unsafe {
-            reader
-                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
-                .context("读取协商后的视频媒体类型失败")?
-        };
-        let subtype = unsafe { negotiated.GetGUID(&MF_MT_SUBTYPE)? };
-        if subtype != MFVideoFormat_RGB32 {
-            return Err(anyhow!(
-                "视频解码器不支持 RGB32 输出（实际 subtype={:?}），M6 不做 NV12/CPU 转换",
-                subtype
-            ));
-        }
+        let pixel_format = negotiate_video_output(&reader, &label)?;
 
         // 音频默认暂停在 0；由 renderer 根据当前是否 active / fade / 全屏决定何时开始。
         // 打开失败只记日志，视频继续静音播放。
@@ -255,6 +281,8 @@ impl VideoPlayback {
             frame_duration: Duration::from_millis(40),
             cycle_base: Duration::ZERO,
             loop_duration: Duration::ZERO,
+            pixel_format,
+            bgra_scratch: Vec::new(),
             label: label.clone(),
             timing: VideoTimingStats::default(),
         };
@@ -442,15 +470,9 @@ impl VideoPlayback {
         Ok(true)
     }
 
-    /// 把 RGB32 缓冲区上传到一张复用的 D3D11 纹理。
+    /// 把 RGB32 / NV12 缓冲区上传到一张复用的 BGRA8 D3D11 纹理。
     fn upload_buffer(&mut self, buffer: &IMFMediaBuffer) -> Result<()> {
-        use windows::Win32::Graphics::Direct3D11::{
-            ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE,
-            D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-        };
-        use windows::Win32::Graphics::Dxgi::Common::{
-            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
-        };
+        use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
         let mut ptr: *mut u8 = ptr::null_mut();
         let mut max_len = 0u32;
@@ -460,26 +482,7 @@ impl VideoPlayback {
             if ptr.is_null() {
                 return Err(anyhow!("Video sample 缓冲区指针为空"));
             }
-
-            // 上界用 max_len：MF 的 cbCurrentLength 可能只算有效像素（不含 stride padding），
-            // 若按它逐行校验会把带 padding 的最后一行误判越界。
             let buffer_len = max_len.max(current_len) as usize;
-            // stride 可能是负数（自底向上）或带对齐；统一按 |stride| 读取每行。
-            let raw_stride = unsafe {
-                self.reader
-                    .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
-                    .GetUINT64(&MF_MT_DEFAULT_STRIDE)?
-            } as i64;
-            let stride = if raw_stride == 0 {
-                // 无 stride 时按 width 推，但此处还没读 frame_size，先用当前像素数上界；
-                // 后续拿到 width 后会用 expected 覆盖。
-                buffer_len.max(1)
-            } else {
-                raw_stride.unsigned_abs() as usize
-            };
-            let bottom_up = raw_stride < 0;
-
-            // 帧尺寸以媒体类型为准，不能沿用上一帧（分辨率可能中途变化）。
             let media_type = unsafe {
                 self.reader
                     .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
@@ -490,86 +493,91 @@ impl VideoPlayback {
             if width == 0 || height == 0 {
                 return Err(anyhow!("视频帧尺寸无效: {}x{}", width, height));
             }
-            let expected = width as usize * 4;
-            // MF 通常给出 stride；缺失时按无 padding 的行字节数处理。
-            let stride = if raw_stride == 0 { expected } else { stride };
-            if stride < expected {
+
+            let row_bytes = match self.pixel_format {
+                VideoPixelFormat::Bgra8 => width as usize * 4,
+                VideoPixelFormat::Nv12 => width as usize,
+            };
+            let raw_stride = unsafe { media_type.GetUINT64(&MF_MT_DEFAULT_STRIDE)? } as i64;
+            let stride = if raw_stride == 0 {
+                row_bytes
+            } else {
+                raw_stride.unsigned_abs() as usize
+            };
+            let bottom_up = raw_stride < 0;
+            if stride < row_bytes {
                 return Err(anyhow!(
                     "视频 stride({}) 小于行字节数({})，拒绝上传避免越界读取",
                     stride,
-                    expected
+                    row_bytes
                 ));
             }
-
-            let need_rebuild = self
-                .texture
-                .as_ref()
-                .map(|t| t.width != width || t.height != height)
-                .unwrap_or(true);
-            if need_rebuild {
-                let desc = D3D11_TEXTURE2D_DESC {
-                    Width: width,
-                    Height: height,
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                    CPUAccessFlags: 0,
-                    MiscFlags: 0,
-                };
-                let mut texture: Option<ID3D11Texture2D> = None;
-                unsafe {
-                    self.device
-                        .CreateTexture2D(&desc, None, Some(&mut texture))?
-                };
-                let texture = texture.context("视频帧纹理创建失败")?;
-                let mut view: Option<ID3D11ShaderResourceView> = None;
-                unsafe {
-                    self.device
-                        .CreateShaderResourceView(&texture, None, Some(&mut view))?
-                };
-                let view = view.context("视频帧 SRV 创建失败")?;
-                self.texture = Some(FrameTexture {
-                    view,
-                    texture,
-                    width,
-                    height,
-                });
+            if self.pixel_format == VideoPixelFormat::Nv12 && bottom_up {
+                return Err(anyhow!("NV12 bottom-up 布局暂不支持"));
             }
 
-            // 只上传有效像素区；stride 的 padding 不进 GPU。
-            let texture = &self.texture.as_ref().expect("纹理已就绪").texture;
-            for row in 0..height as usize {
-                let src_row = if bottom_up {
-                    height as usize - 1 - row
-                } else {
-                    row
-                };
-                let start = src_row * stride;
-                let end = start + expected;
-                if end > buffer_len {
-                    return Err(anyhow!(
-                        "视频 sample 数据不足: 行 {} 需要 {}..{}，实际 {}",
-                        row,
-                        start,
-                        end,
-                        buffer_len
-                    ));
+            self.ensure_texture(width, height)?;
+            let texture: ID3D11Texture2D =
+                self.texture.as_ref().expect("纹理已就绪").texture.clone();
+            let expected = width as usize * 4;
+
+            match self.pixel_format {
+                VideoPixelFormat::Bgra8 => {
+                    for row in 0..height as usize {
+                        let src_row = if bottom_up {
+                            height as usize - 1 - row
+                        } else {
+                            row
+                        };
+                        let start = src_row * stride;
+                        let end = start + expected;
+                        if end > buffer_len {
+                            return Err(anyhow!(
+                                "视频 sample 数据不足: 行 {} 需要 {}..{}，实际 {}",
+                                row,
+                                start,
+                                end,
+                                buffer_len
+                            ));
+                        }
+                        unsafe {
+                            self.context.UpdateSubresource(
+                                &texture,
+                                0,
+                                None,
+                                ptr.add(start) as *const c_void,
+                                expected as u32,
+                                0,
+                            );
+                        }
+                    }
                 }
-                unsafe {
-                    self.context.UpdateSubresource(
-                        texture,
-                        0,
-                        None,
-                        ptr.add(start) as *const c_void,
-                        expected as u32,
-                        0,
-                    );
+                VideoPixelFormat::Nv12 => {
+                    let needed = expected * height as usize;
+                    if self.bgra_scratch.len() < needed {
+                        self.bgra_scratch.resize(needed, 0);
+                    }
+                    let source = unsafe { std::slice::from_raw_parts(ptr, buffer_len) };
+                    nv12_to_bgra(
+                        source,
+                        stride,
+                        width as usize,
+                        height as usize,
+                        &mut self.bgra_scratch[..needed],
+                    )?;
+                    for row in 0..height as usize {
+                        let start = row * expected;
+                        unsafe {
+                            self.context.UpdateSubresource(
+                                &texture,
+                                0,
+                                None,
+                                self.bgra_scratch.as_ptr().add(start) as *const c_void,
+                                expected as u32,
+                                0,
+                            );
+                        }
+                    }
                 }
             }
             Ok(())
@@ -577,6 +585,115 @@ impl VideoPlayback {
         unsafe { buffer.Unlock()? };
         result
     }
+
+    fn ensure_texture(&mut self, width: u32, height: u32) -> Result<()> {
+        use windows::Win32::Graphics::Direct3D11::{
+            ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE,
+            D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+        };
+
+        let need_rebuild = self
+            .texture
+            .as_ref()
+            .map(|t| t.width != width || t.height != height)
+            .unwrap_or(true);
+        if !need_rebuild {
+            return Ok(());
+        }
+
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut texture: Option<ID3D11Texture2D> = None;
+        unsafe {
+            self.device
+                .CreateTexture2D(&desc, None, Some(&mut texture))?
+        };
+        let texture = texture.context("视频帧纹理创建失败")?;
+        let mut view: Option<ID3D11ShaderResourceView> = None;
+        unsafe {
+            self.device
+                .CreateShaderResourceView(&texture, None, Some(&mut view))?
+        };
+        let view = view.context("视频帧 SRV 创建失败")?;
+        self.texture = Some(FrameTexture {
+            view,
+            texture,
+            width,
+            height,
+        });
+        Ok(())
+    }
+}
+
+/// NV12 → BGRA8。Y 平面在前，UV 交错平面在后；两平面使用同一个 stride。
+fn nv12_to_bgra(
+    source: &[u8],
+    stride: usize,
+    width: usize,
+    height: usize,
+    out: &mut [u8],
+) -> Result<()> {
+    if width % 2 != 0 || height % 2 != 0 {
+        return Err(anyhow!("NV12 宽高必须为偶数: {}x{}", width, height));
+    }
+    let uv_offset = stride
+        .checked_mul(height)
+        .ok_or_else(|| anyhow!("NV12 Y 平面偏移溢出"))?;
+    let uv_bytes = stride
+        .checked_mul(height / 2)
+        .ok_or_else(|| anyhow!("NV12 UV 平面字节数溢出"))?;
+    let needed = uv_offset
+        .checked_add(uv_bytes)
+        .ok_or_else(|| anyhow!("NV12 平面总字节数溢出"))?;
+    if source.len() < needed {
+        return Err(anyhow!(
+            "NV12 sample 数据不足: 需要 {} 字节，实际 {}",
+            needed,
+            source.len()
+        ));
+    }
+
+    for row in 0..height {
+        let y_row = row * stride;
+        let uv_row = uv_offset + (row / 2) * stride;
+        for col in 0..width {
+            let y = source[y_row + col] as i32 - 16;
+            let uv_index = uv_row + (col / 2) * 2;
+            let u = source[uv_index] as i32 - 128;
+            let v = source[uv_index + 1] as i32 - 128;
+
+            let r = clamp_byte((298 * y + 409 * v + 128) >> 8);
+            let g = clamp_byte((298 * y - 100 * u - 208 * v + 128) >> 8);
+            let b = clamp_byte((298 * y + 516 * u + 128) >> 8);
+
+            let dst = (row * width + col) * 4;
+            out[dst] = b;
+            out[dst + 1] = g;
+            out[dst + 2] = r;
+            out[dst + 3] = 255;
+        }
+    }
+    Ok(())
+}
+
+fn clamp_byte(value: i32) -> u8 {
+    value.clamp(0, 255) as u8
 }
 
 /// hns（100ns）转 Duration；溢出时钳到最大值，避免 panic。

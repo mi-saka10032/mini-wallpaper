@@ -527,13 +527,17 @@ impl VideoPlayback {
                 VideoPixelFormat::Bgra8 => width as usize * 4,
                 VideoPixelFormat::Nv12 => width as usize,
             };
-            // NV12 的 MF_MT_DEFAULT_STRIDE 并非所有解码器都会提供；缺失时按无 padding 处理。
+            // NV12 的 MF_MT_DEFAULT_STRIDE 不一定存在；缺失时按 NV12 平面总字节数反推，
+            // 比直接取 width 更稳：解码器常把 stride 对齐到 64/128 字节。
             let raw_stride =
                 unsafe { media_type.GetUINT64(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(0) as i64;
-            let stride = if raw_stride == 0 {
-                row_bytes
-            } else {
+            let stride = if raw_stride != 0 {
                 raw_stride.unsigned_abs() as usize
+            } else if self.pixel_format == VideoPixelFormat::Nv12 {
+                let planes = height as usize + height as usize / 2;
+                (buffer_len / planes.max(1)).max(row_bytes)
+            } else {
+                row_bytes
             };
             let bottom_up = raw_stride < 0;
             if stride < row_bytes {
@@ -669,9 +673,9 @@ impl VideoPlayback {
             view.context("视频帧 SRV 创建失败")
         };
 
-        let desc = |format| D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
+        let desc = |tex_width: u32, tex_height: u32, format| D3D11_TEXTURE2D_DESC {
+            Width: tex_width,
+            Height: tex_height,
             MipLevels: 1,
             ArraySize: 1,
             Format: format,
@@ -692,13 +696,14 @@ impl VideoPlayback {
 
         let (view, texture, uv_view, uv_texture) = match self.pixel_format {
             VideoPixelFormat::Bgra8 => {
-                let texture = create(&desc(DXGI_FORMAT_B8G8R8A8_UNORM))?;
+                let texture = create(&desc(width, height, DXGI_FORMAT_B8G8R8A8_UNORM))?;
                 let view = make_view(&texture)?;
                 (view, texture, None, None)
             }
             VideoPixelFormat::Nv12 => {
-                let y_texture = create(&desc(DXGI_FORMAT_R8_UNORM))?;
-                let uv_texture = create(&desc(DXGI_FORMAT_R8G8_UNORM))?;
+                // NV12 的 UV 是 width/2 × height/2 个 R8G8 texel，不是 width × height/2。
+                let y_texture = create(&desc(width, height, DXGI_FORMAT_R8_UNORM))?;
+                let uv_texture = create(&desc(width / 2, height / 2, DXGI_FORMAT_R8G8_UNORM))?;
                 let y_view = make_view(&y_texture)?;
                 let uv_view = make_view(&uv_texture)?;
                 (y_view, y_texture, Some(uv_view), Some(uv_texture))

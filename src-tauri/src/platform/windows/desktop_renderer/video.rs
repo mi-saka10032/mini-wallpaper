@@ -14,21 +14,28 @@
 
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use windows::core::GUID;
-use windows::Win32::Graphics::Direct3D11::{ID3D11ShaderResourceView, ID3D11Texture2D};
+use windows::core::{Interface, GUID};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_STAGING,
+};
 
 use super::audio::AudioPlayback;
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
-    MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup,
-    MFVideoFormat_NV12, MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES,
-    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, IMFSample,
+    IMFSourceReader, MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType,
+    MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup, MFVideoFormat_NV12,
+    MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES, MF_MT_DEFAULT_STRIDE,
+    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
+    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 /// MF 平台只需启动一次；放在 renderer 线程内由 ComScope 保证 COM 已初始化。
@@ -124,6 +131,45 @@ impl VideoTimingStats {
 
 fn ms_per(total: Duration, count: u64) -> f64 {
     total.as_secs_f64() * 1000.0 / count.max(1) as f64
+}
+
+/// 按微软推荐配置 SourceReader 的 DXVA 属性。
+fn create_dxgi_device_manager(
+    attributes: &IMFAttributes,
+    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    label: &str,
+) -> Option<IMFDXGIDeviceManager> {
+    let mut reset_token = 0u32;
+    let mut manager: Option<IMFDXGIDeviceManager> = None;
+    let result = (|| -> windows::core::Result<()> {
+        unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)? };
+        let manager = manager
+            .as_ref()
+            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+        unsafe {
+            manager.ResetDevice(device, reset_token)?;
+            attributes.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, manager)?;
+            attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+            attributes.SetUINT32(&MF_SOURCE_READER_DISABLE_DXVA, 0)?;
+            // 不设置 MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING：微软文档明确说它太慢。
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            log::info!("[Video] DXVA SourceReader 已配置 file={}", label);
+            manager
+        }
+        Err(err) => {
+            log::warn!(
+                "[Video] DXVA SourceReader 配置失败，回退软件解码 file={} err={:#}",
+                label,
+                err
+            );
+            None
+        }
+    }
 }
 
 /// 先尝试 RGB32（无需转换），失败后退 NV12（CPU 转 BGRA）。
@@ -227,6 +273,12 @@ pub struct VideoPlayback {
     loop_duration: Duration,
     /// 实际协商成功的解码输出格式；决定 upload_buffer 的像素路径。
     pixel_format: VideoPixelFormat,
+    /// SourceReader 通过它使用 DXVA；必须比 reader 活得更久。
+    device_manager: Option<IMFDXGIDeviceManager>,
+    /// DXVA device handle，供 readback 时非阻塞 LockDevice 使用。
+    device_handle: Option<HANDLE>,
+    /// DXVA buffer 是否出现过，只打印一次日志。
+    hardware_sample_logged: bool,
     /// 日志只显示文件名，避免把绝对路径写进日志。
     label: String,
     timing: VideoTimingStats,
@@ -261,6 +313,10 @@ impl VideoPlayback {
             MFCreateAttributes(&mut value, 0)?;
             value.context("MF 属性对象创建失败")?
         };
+        let device_manager = create_dxgi_device_manager(&attributes, device, &label);
+        let device_handle = device_manager
+            .as_ref()
+            .and_then(|manager| unsafe { manager.OpenDeviceHandle().ok() });
         let reader = unsafe { MFCreateSourceReaderFromURL(url, &attributes) }
             .with_context(|| format!("Media Foundation 无法打开视频 {:?}", path))?;
 
@@ -291,6 +347,9 @@ impl VideoPlayback {
             cycle_base: Duration::ZERO,
             loop_duration: Duration::ZERO,
             pixel_format,
+            device_manager,
+            device_handle,
+            hardware_sample_logged: false,
             label: label.clone(),
             timing: VideoTimingStats::default(),
         };
@@ -448,6 +507,7 @@ impl VideoPlayback {
             return Ok(false);
         }
         let sample = sample.context("SourceReader 返回空 sample")?;
+
         log::debug!(
             "[Video] 首帧 sample 已读取 file={} flags={} timestamp={}",
             self.label,
@@ -465,10 +525,35 @@ impl VideoPlayback {
         if self.cycle_base.is_zero() {
             self.loop_duration = frame_time.saturating_add(frame_duration);
         }
+        let read_elapsed = read_started.elapsed();
+
+        // DXVA GPU sample：只做一次 staging readback，随后复用已验证的 NV12 上传路径。
+        let dxgi_buffer = unsafe { sample.GetBufferByIndex(0) }
+            .ok()
+            .and_then(|buffer| buffer.cast::<IMFDXGIBuffer>().ok());
+        if let Some(dxgi_buffer) = dxgi_buffer {
+            if !self.hardware_sample_logged {
+                self.hardware_sample_logged = true;
+                log::info!(
+                    "[Video] 使用 DXVA GPU sample（staging readback）file={}",
+                    self.label
+                );
+            }
+            if self.readback_gpu_sample(&dxgi_buffer)? {
+                self.frame_time = frame_time;
+                self.frame_duration = if frame_duration.is_zero() {
+                    Duration::from_millis(40)
+                } else {
+                    frame_duration
+                };
+                self.timing
+                    .record_frame(read_elapsed, Duration::from_millis(1));
+            }
+            return Ok(true);
+        }
 
         let buffer = unsafe { sample.ConvertToContiguousBuffer() }
             .context("IMFSample 转为连续缓冲区失败")?;
-        let read_elapsed = read_started.elapsed();
         log::debug!("[Video] sample 已转连续缓冲区 file={}", self.label);
 
         let upload_started = Instant::now();
@@ -485,6 +570,159 @@ impl VideoPlayback {
             frame_duration
         };
         Ok(true)
+    }
+
+    /// 从 DXVA GPU texture 回读到 NV12 CPU 视图，再走稳定的 NV12 上传路径。
+    /// 返回 false 表示 device busy，调用方应跳帧，不能阻塞。
+    fn readback_gpu_sample(&mut self, dxgi_buffer: &IMFDXGIBuffer) -> Result<bool> {
+        let (manager, handle) = match (self.device_manager.as_ref(), self.device_handle) {
+            (Some(manager), Some(handle)) => (manager.clone(), handle),
+            _ => return Ok(false),
+        };
+
+        let mut locked: *mut std::ffi::c_void = ptr::null_mut();
+        if unsafe { manager.LockDevice(handle, &ID3D11DeviceContext::IID, &mut locked, false) }
+            .is_err()
+        {
+            return Ok(false);
+        }
+        let video_context: ID3D11DeviceContext = unsafe { ID3D11DeviceContext::from_raw(locked) };
+
+        let result = (|| -> Result<bool> {
+            let mut raw: *mut std::ffi::c_void = ptr::null_mut();
+            unsafe { dxgi_buffer.GetResource(&ID3D11Texture2D::IID, &mut raw)? };
+            let raw = NonNull::new(raw).context("DXVA sample 返回空 texture")?;
+            let decoder_texture: ID3D11Texture2D =
+                unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
+
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            unsafe { decoder_texture.GetDesc(&mut desc) };
+            if desc.Format != DXGI_FORMAT_NV12 {
+                return Err(anyhow!("DXVA 输出格式不是 NV12: {:?}", desc.Format));
+            }
+
+            let staging_desc = D3D11_TEXTURE2D_DESC {
+                Width: desc.Width,
+                Height: desc.Height,
+                MipLevels: desc.MipLevels,
+                ArraySize: desc.ArraySize,
+                Format: desc.Format,
+                SampleDesc: desc.SampleDesc,
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging: Option<ID3D11Texture2D> = None;
+            unsafe {
+                self.device
+                    .CreateTexture2D(&staging_desc, None, Some(&mut staging))?
+            };
+            let staging = staging.context("DXVA staging texture 创建失败")?;
+
+            unsafe { video_context.CopyResource(&staging, &decoder_texture) };
+
+            let subresource = unsafe { dxgi_buffer.GetSubresourceIndex()? };
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            if unsafe {
+                video_context.Map(
+                    &staging,
+                    subresource,
+                    D3D11_MAP_READ,
+                    D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                    Some(&mut mapped),
+                )
+            }
+            .is_err()
+            {
+                return Ok(false);
+            }
+            let map_result = (|| -> Result<()> {
+                if mapped.pData.is_null() {
+                    return Err(anyhow!("DXVA staging Map 返回空指针"));
+                }
+                let buffer_len =
+                    mapped.RowPitch as usize * (desc.Height as usize + desc.Height as usize / 2);
+                self.upload_nv12_bytes(
+                    mapped.pData as *const u8,
+                    buffer_len,
+                    mapped.RowPitch as usize,
+                    desc.Width,
+                    desc.Height,
+                )
+            })();
+            unsafe { video_context.Unmap(&staging, subresource) };
+            map_result?;
+            Ok(true)
+        })();
+
+        unsafe {
+            manager
+                .UnlockDevice(handle, false)
+                .context("解锁 DXVA device 失败")?;
+        }
+        result
+    }
+
+    /// 上传一段 NV12 平面数据到 Y / UV 两张动态纹理。
+    fn upload_nv12_bytes(
+        &mut self,
+        source: *const u8,
+        buffer_len: usize,
+        stride: usize,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if width % 2 != 0 || height % 2 != 0 {
+            return Err(anyhow!("NV12 宽高必须为偶数: {}x{}", width, height));
+        }
+        let uv_offset = stride
+            .checked_mul(height as usize)
+            .ok_or_else(|| anyhow!("NV12 Y 平面偏移溢出"))?;
+        let uv_bytes = stride
+            .checked_mul(height as usize / 2)
+            .ok_or_else(|| anyhow!("NV12 UV 平面字节数溢出"))?;
+        let needed = uv_offset
+            .checked_add(uv_bytes)
+            .ok_or_else(|| anyhow!("NV12 平面总字节数溢出"))?;
+        if buffer_len < needed {
+            return Err(anyhow!(
+                "NV12 数据不足: 需要 {} 字节，实际 {}",
+                needed,
+                buffer_len
+            ));
+        }
+
+        self.ensure_texture(width, height)?;
+        let y_texture = self
+            .texture
+            .as_ref()
+            .context("NV12 Y 纹理不存在")?
+            .texture
+            .clone();
+        let uv_texture = self
+            .texture
+            .as_ref()
+            .and_then(|t| t.uv_texture.clone())
+            .context("NV12 UV 纹理不存在")?;
+
+        self.copy_rows(
+            &y_texture,
+            source,
+            stride,
+            height as usize,
+            width as usize,
+            false,
+        )?;
+        self.copy_rows(
+            &uv_texture,
+            unsafe { source.add(uv_offset) },
+            stride,
+            height as usize / 2,
+            width as usize,
+            false,
+        )?;
+        Ok(())
     }
 
     /// 把 RGB32 / NV12 缓冲区上传到一张复用的 BGRA8 D3D11 纹理。
@@ -595,47 +833,7 @@ impl VideoPlayback {
                     )?;
                 }
                 VideoPixelFormat::Nv12 => {
-                    if width % 2 != 0 || height % 2 != 0 {
-                        return Err(anyhow!("NV12 宽高必须为偶数: {}x{}", width, height));
-                    }
-                    let uv_offset = stride
-                        .checked_mul(height as usize)
-                        .ok_or_else(|| anyhow!("NV12 Y 平面偏移溢出"))?;
-                    let uv_bytes = stride
-                        .checked_mul(height as usize / 2)
-                        .ok_or_else(|| anyhow!("NV12 UV 平面字节数溢出"))?;
-                    let needed = uv_offset
-                        .checked_add(uv_bytes)
-                        .ok_or_else(|| anyhow!("NV12 平面总字节数溢出"))?;
-                    if buffer_len < needed {
-                        return Err(anyhow!(
-                            "NV12 sample 数据不足: 需要 {} 字节，实际 {}",
-                            needed,
-                            buffer_len
-                        ));
-                    }
-
-                    let uv_texture = self
-                        .texture
-                        .as_ref()
-                        .and_then(|t| t.uv_texture.clone())
-                        .context("NV12 UV 纹理不存在")?;
-                    self.copy_rows(
-                        &texture,
-                        ptr as *const u8,
-                        stride,
-                        height as usize,
-                        width as usize,
-                        false,
-                    )?;
-                    self.copy_rows(
-                        &uv_texture,
-                        unsafe { ptr.add(uv_offset) } as *const u8,
-                        stride,
-                        height as usize / 2,
-                        width as usize,
-                        false,
-                    )?;
+                    self.upload_nv12_bytes(ptr as *const u8, buffer_len, stride, width, height)?;
                 }
             }
             log::debug!("[Video] 纹理行上传完成 file={}", self.label);

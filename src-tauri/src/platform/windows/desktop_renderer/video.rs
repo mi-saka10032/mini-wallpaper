@@ -370,6 +370,17 @@ fn worker_main(
             },
         };
 
+        // 共享纹理在 read_sample() 中已创建；立刻通知 renderer，避免首帧 VideoProcessor
+        // 尚未完成时 open() 卡在等待事件上。renderer 在 state.ready 之前不会拿到帧。
+        if let Some(sender) = events.take() {
+            if sender
+                .send(WorkerEvent::Frame(pipeline.shared_frame_info().clone()))
+                .is_err()
+            {
+                return Ok(());
+            }
+        }
+
         match pipeline.process_sample(&sample) {
             Ok(true) => {
                 let frame_time = cycle_base.saturating_add(sample.timestamp);
@@ -380,14 +391,11 @@ fn worker_main(
                 shared.loop_duration = pipeline.loop_duration();
                 shared.ready = true;
                 drop(shared);
-                if let Some(sender) = events.take() {
-                    if sender
-                        .send(WorkerEvent::Frame(pipeline.shared_frame_info().clone()))
-                        .is_err()
-                    {
-                        return Ok(());
-                    }
-                }
+                log::debug!(
+                    "[VideoHw] 首帧已提交 file={} frame_ms={:.1}",
+                    label,
+                    frame_time.as_secs_f64() * 1000.0
+                );
             }
             Ok(false) => {
                 pending = Some(sample);
@@ -665,7 +673,7 @@ impl DxvaPipeline {
                 self.manager_handle,
                 &ID3D11VideoContext::IID,
                 &mut locked,
-                false,
+                true,
             )
         }
         .is_err()

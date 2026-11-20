@@ -430,8 +430,11 @@ fn create_worker_device(
     let device = device.context("DXVA worker device 创建失败")?;
     let context = context.context("DXVA worker context 创建失败")?;
     // 微软文档明确建议给 MF/D3D11 共用 device 打开多线程保护，避免 VideoContext 死锁。
-    let multithread: ID3D10Multithread = device.cast()?;
-    let _ = unsafe { multithread.SetMultithreadProtected(true) };
+    if let Ok(multithread) = device.cast::<ID3D10Multithread>() {
+        let _ = unsafe { multithread.SetMultithreadProtected(true) };
+    } else {
+        log::warn!("[VideoHw] ID3D10Multithread 不可用，跳过多线程保护");
+    }
     Ok((device, context))
 }
 
@@ -457,6 +460,7 @@ struct DxvaPipeline {
     manager_handle: HANDLE,
     device: ID3D11Device,
     video_device: ID3D11VideoDevice,
+    video_context: ID3D11VideoContext,
     enumerator: Option<ID3D11VideoProcessorEnumerator>,
     processor: Option<ID3D11VideoProcessor>,
     shared_texture: Option<ID3D11Texture2D>,
@@ -472,7 +476,7 @@ struct DxvaPipeline {
 impl DxvaPipeline {
     fn new(
         device: &ID3D11Device,
-        _context: &ID3D11DeviceContext,
+        context: &ID3D11DeviceContext,
         path: &Path,
         label: &str,
     ) -> Result<Self> {
@@ -519,12 +523,36 @@ impl DxvaPipeline {
             )?;
         }
         let manager_handle = unsafe { manager.OpenDeviceHandle() }?;
+        // 微软文档：GetVideoService 只用于取 ID3D11Device / ID3D11VideoDevice，
+        // ID3D11VideoContext 必须从 ID3D11DeviceContext QueryInterface。
+        let video_context = match (|| -> Result<ID3D11VideoContext> {
+            let mut device_raw: *mut c_void = ptr::null_mut();
+            unsafe {
+                manager.GetVideoService(manager_handle, &ID3D11Device::IID, &mut device_raw)?;
+            }
+            let device_raw = NonNull::new(device_raw).context("GetVideoService 返回空 device")?;
+            let manager_device: ID3D11Device =
+                unsafe { ID3D11Device::from_raw(device_raw.as_ptr()) };
+            let manager_context = unsafe { manager_device.GetImmediateContext()? };
+            Ok(manager_context.cast()?)
+        })() {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!(
+                    "[VideoHw] device manager 取 VideoContext 失败，改用 worker context: {:#}",
+                    err
+                );
+                context.cast()?
+            }
+        };
+        log::info!("[VideoHw] VideoContext 就绪 file={}", label);
         Ok(Self {
             manager,
             manager_handle,
             reader,
             device: device.clone(),
             video_device: device.cast()?,
+            video_context,
             enumerator: None,
             processor: None,
             shared_texture: None,
@@ -672,25 +700,10 @@ impl DxvaPipeline {
         let decoder_texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
         let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
 
-        // 按微软 D3D11/MF 文档：通过 device manager 的 GetVideoService 取 VideoContext，
-        // 不用 LockDevice 把整个 device 锁住，避免与解码器内部锁形成互等。
-        let mut video_raw: *mut c_void = ptr::null_mut();
-        unsafe {
-            self.manager.GetVideoService(
-                self.manager_handle,
-                &ID3D11VideoContext::IID,
-                &mut video_raw,
-            )?
-        };
-        let video_raw = NonNull::new(video_raw).context("GetVideoService 返回空 VideoContext")?;
-        let video_context: ID3D11VideoContext =
-            unsafe { ID3D11VideoContext::from_raw(video_raw.as_ptr()) };
-        if !self.first_frame_logged {
-            log::info!(
-                "[VideoHw] GetVideoService 已返回 VideoContext file={}",
-                self.label
-            );
-        }
+        // VideoContext 在 pipeline 初始化时通过 immediate context QueryInterface 得到。
+        // 不能逐帧调用 GetVideoService(IID_ID3D11VideoContext)，该 IID 不受支持。
+        let video_context = self.video_context.clone();
+        let _ = unsafe { self.manager.TestDevice(self.manager_handle) };
 
         let shared_texture = self.shared_texture.clone().context("共享纹理缺失")?;
         let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;

@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13）
+> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -432,6 +432,36 @@ renderer loop 每帧
 
 **边界与后续**：当前只接受 RGB32 输出，HEVC/AV1 依赖系统可选 codec 包，缺失时明确报错；音频不渲染（静音），音量设置对 Native 视频不生效；`.webm` / `.mkv` 的 WebView fallback 留到后续里程碑。NV12 硬解、DXVA device manager、音视频同步是下一步方向，不进 M6。
 
+### 3.14 M7：Native↔Native 换图 crossfade（2026-11-20）
+
+**语义先钉死**：这里的 crossfade 是「换图淡入淡出」，**不是 backend 切换的过渡动画**。启用条件只有一条——`old_backend == Native && new_backend == Native && old_wid != new_wid`。首帧、同一 id 重复下发、跨 backend（Native↔WebView）一律硬切。判定放在 `RenderCoordinator`，`apply_backend` 改写状态之前先快照 `previous`，否则 Native→WebView→Native 回切会被误判成 Native→Native。
+
+**为什么是两 pass 而不是两路一起混**：swapchain 的 AlphaMode 是 `DXGI_ALPHA_MODE_PREMULTIPLIED`。若 from / to 都用 `progress` 参与混合，RT 会退化成 `to*t + from*(1-t)^2 + bg*t*(1-t)`，中段发暗且 alpha 掉到 1 以下，桌面合成阶段整屏变暗。正确顺序是：
+
+```
+pass1: from, alpha = 1   → RT = from, alpha = 1
+pass2: to,   alpha = t   → RT = to*t + from*(1-t), alpha = t + (1-t) = 1
+```
+
+shader 因此改成输出预乘色（`color.rgb *= fade_alpha; color.a = fade_alpha`），pipeline 增加 `ONE / INV_SRC_ALPHA` 的 `ID3D11BlendState` 和存放 alpha 的 cbuffer。单 pass 路径传 `alpha = 1.0`，行为与 M6 完全一致，没有第二套绘制代码；`draw_media(media, fit_mode, alpha, now)` 把帧来源、fit / extend viewport 推导在两条媒体链路间彻底共用。
+
+**四种组合全覆盖**：
+
+| from → to | fade 期间 | fade 结束 |
+|-----------|-----------|-----------|
+| 图 → 图 | 图按各自 `started_at` 继续取帧 | to 成为 wallpaper |
+| 图 → 视 | to 停在 open 时预读的首帧 | `reset_clock(now)`，从 0 开始播放 |
+| 视 → 图 | from 停在最后一帧 | to 成为 wallpaper |
+| 视 → 视 | 两侧都冻结 | to `reset_clock(now)`，从 0 开始播放 |
+
+**视频冻结的理由**：视切视若双路同时推进 SourceReader，会同时出现两路 RGB32 解码的 CPU 峰值。用户方案是「无论视是 from 还是 to，fade 结束前都保持帧暂停」。renderer loop 在 `advance_videos` 前先扫一遍，把处于 fade / 排队状态的 surface 的 from 视频 Arc 收进 `frozen` 集合，再按 Arc 指针去重推进；组内共享同一个 Arc，只要有一屏在 fade 就不推进整个播放状态。
+
+**时钟语义**：to 是视频时，fade 耗时**完全不计入**播放时间。`transition` 只保存 `to / to_fit_mode / started_at`，不碰 to 的 `VideoPlayback`；`finish_transition` 在 fade 结束那一帧才调用 `reset_clock(now)`——Flush + `SetCurrentPosition(0)` + 预读首帧，不销毁 SourceReader，与暂停恢复保持同一生命周期。多屏共享同一个播放状态，reset 由 renderer loop 按 Arc 指针去重，**只做一次**，不能在每个 surface 上各做一次。
+
+**连续切换用 FIFO 队列，不覆盖**：`RenderSurface` 持有 `pending: VecDeque<PendingWallpaper>`。A→B 还没结束时又来 C，C 入队；A→B 跑满 350ms 后 `finish_transition` 用同一个 `now` 立即启动 B→C，每段 fade 都完整播放。硬切（跨 backend / 首帧）会清空队列和当前 transition。代价是队列里的视频会提前 `open` 并占用一个 SourceReader，不做过度设计。
+
+**跨屏同步**：`SetWallpaper` 命令在 renderer 线程取**一个** `Instant::now()` 发给组内所有 surface，fade 起跑线一致，extend 接缝不会一侧亮一侧暗。`crossfade_progress` 是跨平台纯函数并带单测（0 / 半程 / 超界 / 零时长），Windows 专有代码只消费它。
+
 ---
 
 ## 四、踩坑历程：方案演进全记录
@@ -541,6 +571,10 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 - `FrameCache` 只能活在渲染线程内（SRV 不可跨线程），且**命中必须返回同一个 `Arc<SharedFrames>`**：帧时钟、跨屏同帧都依赖这一份 Arc 不被复制重建。
 - `CacheKey` 必须包含 `len + mtime`，只用路径会在同名文件覆盖 / 备份恢复后显示旧纹理。
 - `SetWallpaper` 允许重复下发，但缓存预算内的同一 key **解码 / 纹理上传至多一次**；`RenderCoordinator` 不负责去重，也不得删掉 `ensure_target` 的组级重发。
+- crossfade 的判定快照必须取在 `apply_backend` **之前**；跨 backend 与首帧一律硬切，不能用「后端名」在切换后反推。
+- 两 pass 混合要求 shader 输出**预乘色**且 blend 为 `ONE / INV_SRC_ALPHA`；from 必须 alpha=1 先铺满 RT，两路都带 progress 会让中段发暗。
+- fade / 排队期间**不推进任何视频时钟**；to 是视频时只在 fade 结束那一帧 `reset_clock(now)`，组内按 Arc 指针去重，一次 fade 只 reset 一次。
+- 连续换图走 FIFO 队列；硬切必须清空 `transition` 与 `pending`，不能让旧 fade 在新 backend 上继续跑。
 
 ### 5.3 已知限制（如实记录，非疏漏）
 
@@ -560,6 +594,9 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **单次解码仍未削减** | A+B 只消除**重复**解码；release 下 4K JPEG 的 ~75ms `image::open`、8K 的成倍成本依然存在 | 唯一能真正削减它的路是按目标分辨率降采样解码（WIC / 换解码器），见第九节；当前 `upload_frames` 仍按原始尺寸建纹理 |
 | **超大素材不进缓存** | 单份 >192MiB（8K / 多帧 GIF）直接不入缓存，避免显存爆炸 | mirror/extend 下这类素材仍会重复解码；可用「连续同 key 命令合并」补，无需常驻缓存 |
 | **动图回切接着播** | 缓存命中连 `started_at` 一起复用，A→B→A 回切不会从头重播 | 这是省掉重复解码的必然结果，同时保证组内帧时钟一致；若产品要求每次从头，需显式重置帧时钟 |
+| **crossfade 只在 Native↔Native** | 跨 backend 与首帧硬切，不存在过渡 | 原任务清单 M7 明确；WebView 侧无对应 blend 路径，不追求两侧视觉一致 |
+| **连续切换会提前 open 队列里的视频** | FIFO 队列在 `SetWallpaper` 到达时就解码 / open，不等轮到它 | 快速连点多个视频会同时持有多个 SourceReader；按用户要求不做覆盖式过度设计，见 3.14 |
+| **crossfade 尚未实机验证** | 编译 / 单测 / Windows 交叉检查通过，画面效果待 Windows 确认 | 与 M6 视频一并留到最终统一验收；重点看四种组合与 extend 接缝明暗 |
 
 ---
 
@@ -573,7 +610,8 @@ src-tauri/src/
 │   ├── wallpaper_renderer/                 跨平台契约（不依赖 windows crate）
 │   │   ├── mod.rs                          facade：Windows 导出真实 DesktopRenderer，
 │   │   │                                   其它平台同签名 no-op（macOS/CI 可编译）
-│   │   ├── contracts.rs                    RenderDescriptor / ExtendViewport / enums / RendererError
+│   │   ├── contracts.rs                    RenderDescriptor / ExtendViewport / enums / RendererError /
+│   │   │                                   crossfade_progress + CROSSFADE_DURATION（350ms，含单测）
 │   │   ├── selection.rs                    default_backend_selection / resolve_backend
 │   │   ├── decoder.rs                      image 0.25：GIF / WebP / 静态图 → BGRA 帧
 │   │   ├── fit.rs                          fit_rect → D3D11_VIEWPORT，含单元测试
@@ -591,19 +629,23 @@ src-tauri/src/
 │       │
 │       ├── desktop_renderer/
 │       │   ├── mod.rs                      导出 DesktopRenderer / SharedDevice / SharedFrames
-│       │   ├── renderer.rs                 渲染线程：共享 device / 组级 SetWallpaper /
+│       │   ├── renderer.rs                 渲染线程：共享 device / 组级 SetWallpaper(crossfade) /
 │       │   │                              SetGroupGeometry / FrameCache / ComScope / 消息泵 /
-│       │   │                              oneshot ack / advance_videos / 16ms 循环
+│       │   │                              oneshot ack / advance_videos（fade 冻结 + 去重）/
+│       │   │                              finish_transition（视频 reset 按 Arc 去重）/ 16ms 循环
 │       │   ├── video.rs                    M6：MF SourceReader 流式解码 / RGB32 → 复用纹理 /
-│       │   │                              100ns 帧时钟 / 循环 seek / 暂停冻结
+│       │   │                              100ns 帧时钟 / 循环 seek / 暂停冻结 /
+│       │   │                              M7：reset_clock（fade 结束后从 0 开始）
 │       │   ├── window.rs                   NativeWindow：窗口创建 / exstyle 归一 / bounds / Drop
 │       │   └── surface.rs                  SharedDevice / SharedFrames（图片帧时钟 + ByteSize）/
-│       │                                  WallpaperMedia（Frames | Video）/ RenderSurface
+│       │                                  WallpaperMedia（Frames | Video）/ Transition /
+│       │                                  VecDeque fade 队列 / blend + cbuffer 两 pass / RenderSurface
 │       └── DESKTOP_EMBEDDER_TECH_DOC.md
 │
 ├── ctx/
-│   ├── render_coordinator.rs               渲染链路唯一入口（backend / rect / display_mode /
-│   │                                      组几何 / D2 降级 / 路由 / 错误上报）
+│   ├── render_coordinator.rs               渲染链路唯一入口（backend / wallpaper_ids / rect /
+│   │                                      display_mode / 组几何 / D2 降级 / 路由 / 错误上报 /
+│   │                                      M7：跨 Native 换图才下发 crossfade）
 │   ├── window_manager.rs                   WebView 窗口，embed 传 EmbedPolicy::WebView
 │   └── mod.rs                              AppContext 持有 Arc<Mutex<RenderCoordinator>>
 ├── commands/wallpaper_window.rs            create / destroy / hide / show / active_ids 全改走协调器
@@ -624,6 +666,7 @@ src-tauri/src/
 
 ```
 backends:      HashMap<monitor_id, RenderBackend>   ← 当前 active backend
+wallpaper_ids: HashMap<monitor_id, i32>             ← 当前显示的壁纸；crossfade 判定用
 rects:         HashMap<monitor_id, MonitorRect>     ← 所有 active 屏；extend 的 union 由整张表算出
 display_mode:  DisplayMode                          ← 启动时从 app_setting 读，设置变更时同步
 degraded_logged: bool                              ← D2 降级提示只发一次
@@ -632,13 +675,13 @@ selection:     BackendSelection                     ← 进程启动时确定
 
 | 入口 | 行为 |
 |------|------|
-| `ensure_target` | 登记 rect → 查库 → `build_descriptor` → 建 surface / 窗口 → 组级下发首帧 → 刷新全组几何 |
-| `update_wallpaper` | **整组只查库一次**：`apply_backend` 逐屏切 backend → Native 屏一次 `set_wallpaper` 共享帧时钟 / WebView 屏逐屏 emit → `thumbnail-changed` → 刷新全组几何 |
+| `ensure_target` | 登记 rect → 查库 → `build_descriptor` → 建 surface / 窗口 → 组级下发首帧（`crossfade=false`）→ 记录 `wallpaper_ids` → 刷新全组几何 |
+| `update_wallpaper` | **整组只查库一次**：先快照 `previous(backend, wid)` → `apply_backend` 逐屏切 backend → Native 屏一次 `set_wallpaper(crossfade)` 共享帧时钟 / WebView 屏逐屏 emit → 写回 `wallpaper_ids` → `thumbnail-changed` → 刷新全组几何 |
 | `register_monitor` | 在判断「有没有壁纸」之前登记几何并重算 union |
 | `set_display_mode` / `refresh_display_mode` | 更新模式并触发 `refresh_group_geometry()` |
 | `refresh_group_geometry` | 算 union → extend 且全 Native 时下发各屏 `ExtendViewport`，否则全部置 `None`（D2 降级并提示一次） |
-| `destroy_target` | 按 backend 清理，并刷新全组几何 |
-| `clear_wallpaper` / `set_fit_mode` | 按 backend 分流 |
+| `destroy_target` | 清 `wallpaper_ids` + 按 backend 清理，并刷新全组几何 |
+| `clear_wallpaper` / `set_fit_mode` | 清 `wallpaper_ids`（仅 clear）/ 按 backend 分流 |
 | `set_paused` | Native 停帧 + WebView `hide_all` / `show_all` |
 | `dispatch_notifications` | `RenderNotification::Updated/Cleared` 批量派发，DB 阶段收集、短锁内一次性执行 |
 | `active_ids` | Native + WebView 合并去重 |
@@ -717,12 +760,15 @@ b2a01a0  refactor: remove native renderer troubleshooting diagnostics
          ↓ eab5316 docs: document decode cache and dev profile optimization
          ↓ M6：MediaFoundation 流式视频解码 / 10 个容器 / RGB32 复用纹理 /
            组级共享播放状态 / oneshot ack 错误回传 / 静音 / 暂停冻结
-         ↓ f9d37ed feat: add native video decoding via Media Foundation（当前版本 ⭐）
+         ↓ 63067b3 feat: add native video decoding via Media Foundation
+         ↓ M7：Native↔Native 换图 crossfade / 两 pass 预乘 alpha blend /
+           FIFO fade 队列 / 视频冻结与时钟重置 / 跨屏统一起跑线
+         ↓ HEAD    feat: add native crossfade between wallpapers（当前版本 ⭐）
 ```
 
 merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
-> M0~M4 的 21 个中间 commit 已在 M4 收束时压缩；M5（`87b616f`）、实机验证结论（`0d9144b`）、性能收束（`d639b63` / `eab5316`）与 M6 都是独立增量提交，普通 push，未改写历史。
+> M0~M4 的 21 个中间 commit 已在 M4 收束时压缩；M5（`87b616f`）、实机验证结论（`0d9144b`）、性能收束（`d639b63` / `eab5316`）、M6（`63067b3`）与 M7 都是独立增量提交，普通 push，未改写历史。
 
 ---
 
@@ -763,22 +809,28 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
 性能收束阶段（`d639b63`）另跑了完整回归：`cargo fmt --all -- --check`、`cargo test --lib` **50 passed**（新增 8 个 `FrameCache` 单测）、`pnpm exec tsc --noEmit`、`oxlint src` 0 warning / 0 error；并用 `cargo build -v` 抓 rustc 参数，确认 dev profile 覆盖**真的传到了编译器**（`image = -C opt-level=3` / `mini_wallpaper_lib = -C opt-level=1`）——只改 `Cargo.toml` 而不验参数，很容易出现「配了但没生效」。probe 工程改为镜像**项目真实模块层级**（`platform::wallpaper_renderer::frame_cache`）后再跑 Windows target `cargo check`，0 error / 8 个 stub dead_code 警告。项目本体交叉检查仍被 C 工具链挡住（这次是 `ring` 找不到 MSVC 的 `assert.h`，与早前 `lzma-sys` 的 `stdlib.h` 同源：macOS 缺 Windows SDK），与本次代码无关。
 
+M7 阶段回归：`cargo fmt --all --check`、`cargo test --lib` **51 passed**（`crossfade_progress` 边界单测）、`tsc --noEmit`、`oxlint`（118 文件）0 warning / 0 error。probe 同步 blend state / cbuffer / transition 队列后跑 Windows target `cargo check`，0 error / 0 warning；期间抓到一个类型陷阱：`D3D11_COLOR_WRITE_ENABLE_ALL` 是 windows crate 的 newtype，不能直接 `as u8`，必须 `.0 as u8`。
+
 ### 8.5 历史收束
 
 21 个中间 commit（含 8 个纯诊断 log）压缩为一个 commit，去除冗余 log 与排查脚手架，force push 到 `feature/native-wallpaper-renderer`。本技术文档与最终代码状态一并入提交。
 
 ---
 
-## 九、后续优化方向（M6+）
+## 九、后续优化方向（M7+）
 
 **M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。**图片 extend / mirror 已 Windows 实机验证通过（3.11）**，负 viewport 与共享 SRV 两个核心风险已关闭。
+
+**M7 已完成**（见 3.14）：Native↔Native 换图 350ms crossfade，两 pass 预乘 alpha blend，四种媒体组合全覆盖；视频在 fade 期间冻结，to 为视频时 fade 结束才从 0 计时；连续切换走 FIFO 队列，跨 backend / 首帧硬切。画面效果与 M6 视频一并留到 Windows 最终统一验收，**本阶段只完成编译、单测与交叉检查**。
+
+**M8 尚未评审**：按用户要求不在 M7 一起展开，到 M8 时结合已有实现适度调整适用范围（明确 WebView 为 fallback backend、保留 wallpaper page 与事件链、清理 NativeOnly 下的无效 WebView 创建路径）。
 
 **性能收束已完成**（`d639b63`，见 3.12）：dev profile 优化把 O0 的 15~85 倍退化拉回正常量级，`FrameCache` 消除重复解码与纹理上传。注意它**没有削减单次解码**，release 下高分辨率大图的 `image::open` 成本仍在，因此下表新增两条 P1。剩余项：
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
 | ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态，`.webm` / `.mkv` 明确报错 |
-| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast |
+| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast；**M7 新增**：四种 crossfade 组合、extend 接缝明暗一致、连续切换队列每段跑满 350ms |
 | **P1** | 按目标分辨率降采样解码 | 当前 `upload_frames` 按原始尺寸建纹理，8K 图在 1080p 屏上仍上传 126MB。用 WIC / 更快的解码器在解码阶段就按目标尺寸取样，是**唯一能真正削减单次 ~75ms（4K JPEG）** 的路；改动最大，需 Windows 实机验证 |
 | **P1** | 解码移出渲染线程 + 保留旧帧 | `upload_frames` 现在同步跑在 `try_recv` 分支，解码期间所有 surface 停帧。改为专用解码线程、新帧就绪前保留上一张，可让切换不再顿；需处理连点取消与命令去重 |
 | P1 | 超大素材的连续命令合并 | 单份 >192MiB 不进缓存（见 5.3），同步模式下仍会重复解码；可在 renderer loop 内把一批连续同 key 的 `SetWallpaper` 合并成一次，无需常驻显存 |
@@ -790,4 +842,4 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 | P2 | 显示器热插拔事件化 | 用 Tauri 原生显示器事件替代 5s 轮询；`refresh_group_geometry()` 已具备全组刷新能力，只差事件源 |
 | P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |
 | P3 | 契约生成 | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
-| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs` / `geometry.rs` / `frame_cache.rs`（8 个）有测试，renderer 编排与桌面嵌入仍零覆盖 |
+| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 51 passed），renderer 编排与桌面嵌入仍零覆盖 |

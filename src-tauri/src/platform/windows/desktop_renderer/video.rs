@@ -171,6 +171,32 @@ impl VideoPlayback {
         Ok(())
     }
 
+    /// crossfade 结束时调用：视频时间从 `now` 重新由 0 开始。
+    ///
+    /// fade 期间调用方不 advance，SourceReader 停在 open 时预读的首帧之后；
+    /// 这里 flush + seek(0) 并重新预读，丢掉的只是那张预读帧，不会打断正在播放的内容。
+    /// 不销毁 SourceReader，和暂停恢复保持同一套生命周期。
+    pub fn reset_clock(&mut self, now: Instant) -> Result<()> {
+        self.started_at = now;
+        self.paused_total = Duration::ZERO;
+        self.paused_at = None;
+        self.frame_time = Duration::ZERO;
+        self.frame_duration = Duration::from_millis(40);
+        self.cycle_base = Duration::ZERO;
+        self.loop_duration = Duration::ZERO;
+        unsafe {
+            self.reader
+                .Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?;
+            let position = seek_zero_position();
+            self.reader
+                .SetCurrentPosition(&GUID::default(), &position)?;
+        }
+        if !self.read_next_frame()? {
+            return Err(anyhow!("视频重置时钟后无法读取首帧"));
+        }
+        Ok(())
+    }
+
     pub fn set_paused(&mut self, paused: bool, now: Instant) {
         match (paused, self.paused_at) {
             (true, None) => self.paused_at = Some(now),

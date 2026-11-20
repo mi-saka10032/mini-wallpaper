@@ -12,7 +12,6 @@
 //! 送到系统输出，视频帧与时钟仍由本模块独占控制。无音轨时静音降级。
 //! 暂停：冻结播放时钟，不 flush / 不销毁 SourceReader，恢复后从原时间点继续。
 
-use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr;
@@ -484,7 +483,9 @@ impl VideoPlayback {
 
     /// 把 RGB32 / NV12 缓冲区上传到一张复用的 BGRA8 D3D11 纹理。
     fn upload_buffer(&mut self, buffer: &IMFMediaBuffer) -> Result<()> {
-        use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+        use windows::Win32::Graphics::Direct3D11::{
+            ID3D11Texture2D, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_WRITE_DISCARD,
+        };
 
         let mut ptr: *mut u8 = ptr::null_mut();
         let mut max_len = 0u32;
@@ -556,7 +557,7 @@ impl VideoPlayback {
                 self.texture.as_ref().expect("纹理已就绪").texture.clone();
             let expected = width as usize * 4;
 
-            match self.pixel_format {
+            let source_ptr = match self.pixel_format {
                 VideoPixelFormat::Bgra8 => {
                     for row in 0..height as usize {
                         let src_row = if bottom_up {
@@ -575,17 +576,8 @@ impl VideoPlayback {
                                 buffer_len
                             ));
                         }
-                        unsafe {
-                            self.context.UpdateSubresource(
-                                &texture,
-                                0,
-                                None,
-                                ptr.add(start) as *const c_void,
-                                expected as u32,
-                                0,
-                            );
-                        }
                     }
+                    ptr as *const u8
                 }
                 VideoPixelFormat::Nv12 => {
                     let needed = expected * height as usize;
@@ -602,22 +594,53 @@ impl VideoPlayback {
                         &mut self.bgra_scratch[..needed],
                     )?;
                     log::debug!("[Video] NV12→BGRA 完成 file={}", self.label);
-                    for row in 0..height as usize {
-                        let start = row * expected;
-                        unsafe {
-                            self.context.UpdateSubresource(
-                                &texture,
-                                0,
-                                None,
-                                self.bgra_scratch.as_ptr().add(start) as *const c_void,
-                                expected as u32,
-                                0,
-                            );
-                        }
-                    }
-                    log::debug!("[Video] 纹理行上传完成 file={}", self.label);
+                    self.bgra_scratch.as_ptr()
                 }
+            };
+
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            unsafe {
+                self.context
+                    .Map(&texture, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                    .context("映射视频纹理失败")?;
             }
+            let copy_result = (|| -> Result<()> {
+                if mapped.pData.is_null() {
+                    return Err(anyhow!("视频纹理 Map 返回空指针"));
+                }
+                let dst_stride = mapped.RowPitch as usize;
+                if dst_stride < expected {
+                    return Err(anyhow!(
+                        "视频纹理 RowPitch({}) 小于行字节数({})",
+                        dst_stride,
+                        expected
+                    ));
+                }
+                let dst_base = mapped.pData as *mut u8;
+                let src_stride = if self.pixel_format == VideoPixelFormat::Bgra8 {
+                    stride
+                } else {
+                    expected
+                };
+                for row in 0..height as usize {
+                    let src_row = if bottom_up && self.pixel_format == VideoPixelFormat::Bgra8 {
+                        height as usize - 1 - row
+                    } else {
+                        row
+                    };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            source_ptr.add(src_row * src_stride),
+                            dst_base.add(row * dst_stride),
+                            expected,
+                        );
+                    }
+                }
+                Ok(())
+            })();
+            unsafe { self.context.Unmap(&texture, 0) };
+            copy_result?;
+            log::debug!("[Video] 纹理行上传完成 file={}", self.label);
             Ok(())
         })();
         unsafe { buffer.Unlock()? };
@@ -627,7 +650,7 @@ impl VideoPlayback {
     fn ensure_texture(&mut self, width: u32, height: u32) -> Result<()> {
         use windows::Win32::Graphics::Direct3D11::{
             ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE,
-            D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            D3D11_CPU_ACCESS_WRITE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DYNAMIC,
         };
         use windows::Win32::Graphics::Dxgi::Common::{
             DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -652,9 +675,9 @@ impl VideoPlayback {
                 Count: 1,
                 Quality: 0,
             },
-            Usage: D3D11_USAGE_DEFAULT,
+            Usage: D3D11_USAGE_DYNAMIC,
             BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-            CPUAccessFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
             MiscFlags: 0,
         };
         let mut texture: Option<ID3D11Texture2D> = None;

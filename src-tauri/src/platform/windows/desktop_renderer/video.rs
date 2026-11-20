@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::GUID;
+use windows::Win32::Graphics::Direct3D11::{ID3D11ShaderResourceView, ID3D11Texture2D};
 
 use super::audio::AudioPlayback;
 use windows::Win32::Media::MediaFoundation::{
@@ -36,12 +37,23 @@ pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("Media Foundation 初始化失败")
 }
 
-/// 当前视频帧：一张复用的纹理 + SRV，尺寸随媒体类型变化而重建。
+/// 当前视频帧的 GPU 资源。RGB32 只有主纹理；NV12 拆成 Y / UV 两张平面纹理。
 struct FrameTexture {
-    view: windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
-    texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    view: ID3D11ShaderResourceView,
+    texture: ID3D11Texture2D,
+    uv_view: Option<ID3D11ShaderResourceView>,
+    uv_texture: Option<ID3D11Texture2D>,
+    pixel_format: VideoPixelFormat,
     width: u32,
     height: u32,
+}
+
+/// renderer 绘制一帧视频所需的全部 SRV；NV12 时 uv_view 为 Some。
+pub struct VideoFrameSnapshot {
+    pub view: ID3D11ShaderResourceView,
+    pub uv_view: Option<ID3D11ShaderResourceView>,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,8 +227,6 @@ pub struct VideoPlayback {
     loop_duration: Duration,
     /// 实际协商成功的解码输出格式；决定 upload_buffer 的像素路径。
     pixel_format: VideoPixelFormat,
-    /// NV12 → BGRA 复用缓冲，避免每帧重新分配。
-    bgra_scratch: Vec<u8>,
     /// 日志只显示文件名，避免把绝对路径写进日志。
     label: String,
     timing: VideoTimingStats,
@@ -281,7 +291,6 @@ impl VideoPlayback {
             cycle_base: Duration::ZERO,
             loop_duration: Duration::ZERO,
             pixel_format,
-            bgra_scratch: Vec::new(),
             label: label.clone(),
             timing: VideoTimingStats::default(),
         };
@@ -407,16 +416,13 @@ impl VideoPlayback {
 
     /// 当前帧的 SRV 与尺寸（SRV 是 COM 引用计数，clone 很便宜）。
     /// 返回 owned 值，避免跨 MutexGuard 暴露借用。
-    pub fn frame_snapshot(
-        &self,
-    ) -> Option<(
-        windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
-        u32,
-        u32,
-    )> {
-        self.texture
-            .as_ref()
-            .map(|t| (t.view.clone(), t.width, t.height))
+    pub fn frame_snapshot(&self) -> Option<VideoFrameSnapshot> {
+        self.texture.as_ref().map(|t| VideoFrameSnapshot {
+            view: t.view.clone(),
+            uv_view: t.uv_view.clone(),
+            width: t.width,
+            height: t.height,
+        })
     }
 
     /// 读取下一帧并上传到复用纹理；返回 false 表示 EOF。
@@ -483,9 +489,7 @@ impl VideoPlayback {
 
     /// 把 RGB32 / NV12 缓冲区上传到一张复用的 BGRA8 D3D11 纹理。
     fn upload_buffer(&mut self, buffer: &IMFMediaBuffer) -> Result<()> {
-        use windows::Win32::Graphics::Direct3D11::{
-            ID3D11Texture2D, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_WRITE_DISCARD,
-        };
+        use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
         let mut ptr: *mut u8 = ptr::null_mut();
         let mut max_len = 0u32;
@@ -557,7 +561,7 @@ impl VideoPlayback {
                 self.texture.as_ref().expect("纹理已就绪").texture.clone();
             let expected = width as usize * 4;
 
-            let source_ptr = match self.pixel_format {
+            match self.pixel_format {
                 VideoPixelFormat::Bgra8 => {
                     for row in 0..height as usize {
                         let src_row = if bottom_up {
@@ -577,69 +581,59 @@ impl VideoPlayback {
                             ));
                         }
                     }
-                    ptr as *const u8
+                    self.copy_rows(
+                        &texture,
+                        ptr as *const u8,
+                        stride,
+                        height as usize,
+                        expected,
+                        bottom_up,
+                    )?;
                 }
                 VideoPixelFormat::Nv12 => {
-                    let needed = expected * height as usize;
-                    if self.bgra_scratch.len() < needed {
-                        self.bgra_scratch.resize(needed, 0);
+                    if width % 2 != 0 || height % 2 != 0 {
+                        return Err(anyhow!("NV12 宽高必须为偶数: {}x{}", width, height));
                     }
-                    let source = unsafe { std::slice::from_raw_parts(ptr, buffer_len) };
-                    log::debug!("[Video] 开始 NV12→BGRA file={}", self.label);
-                    nv12_to_bgra(
-                        source,
-                        stride,
-                        width as usize,
-                        height as usize,
-                        &mut self.bgra_scratch[..needed],
-                    )?;
-                    log::debug!("[Video] NV12→BGRA 完成 file={}", self.label);
-                    self.bgra_scratch.as_ptr()
-                }
-            };
+                    let uv_offset = stride
+                        .checked_mul(height as usize)
+                        .ok_or_else(|| anyhow!("NV12 Y 平面偏移溢出"))?;
+                    let uv_bytes = stride
+                        .checked_mul(height as usize / 2)
+                        .ok_or_else(|| anyhow!("NV12 UV 平面字节数溢出"))?;
+                    let needed = uv_offset
+                        .checked_add(uv_bytes)
+                        .ok_or_else(|| anyhow!("NV12 平面总字节数溢出"))?;
+                    if buffer_len < needed {
+                        return Err(anyhow!(
+                            "NV12 sample 数据不足: 需要 {} 字节，实际 {}",
+                            needed,
+                            buffer_len
+                        ));
+                    }
 
-            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            unsafe {
-                self.context
-                    .Map(&texture, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
-                    .context("映射视频纹理失败")?;
+                    let uv_texture = self
+                        .texture
+                        .as_ref()
+                        .and_then(|t| t.uv_texture.clone())
+                        .context("NV12 UV 纹理不存在")?;
+                    self.copy_rows(
+                        &texture,
+                        ptr as *const u8,
+                        stride,
+                        height as usize,
+                        width as usize,
+                        false,
+                    )?;
+                    self.copy_rows(
+                        &uv_texture,
+                        unsafe { ptr.add(uv_offset) } as *const u8,
+                        stride,
+                        height as usize / 2,
+                        width as usize,
+                        false,
+                    )?;
+                }
             }
-            let copy_result = (|| -> Result<()> {
-                if mapped.pData.is_null() {
-                    return Err(anyhow!("视频纹理 Map 返回空指针"));
-                }
-                let dst_stride = mapped.RowPitch as usize;
-                if dst_stride < expected {
-                    return Err(anyhow!(
-                        "视频纹理 RowPitch({}) 小于行字节数({})",
-                        dst_stride,
-                        expected
-                    ));
-                }
-                let dst_base = mapped.pData as *mut u8;
-                let src_stride = if self.pixel_format == VideoPixelFormat::Bgra8 {
-                    stride
-                } else {
-                    expected
-                };
-                for row in 0..height as usize {
-                    let src_row = if bottom_up && self.pixel_format == VideoPixelFormat::Bgra8 {
-                        height as usize - 1 - row
-                    } else {
-                        row
-                    };
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            source_ptr.add(src_row * src_stride),
-                            dst_base.add(row * dst_stride),
-                            expected,
-                        );
-                    }
-                }
-                Ok(())
-            })();
-            unsafe { self.context.Unmap(&texture, 0) };
-            copy_result?;
             log::debug!("[Video] 纹理行上传完成 file={}", self.label);
             Ok(())
         })();
@@ -649,28 +643,38 @@ impl VideoPlayback {
 
     fn ensure_texture(&mut self, width: u32, height: u32) -> Result<()> {
         use windows::Win32::Graphics::Direct3D11::{
-            ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE,
-            D3D11_CPU_ACCESS_WRITE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DYNAMIC,
+            D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_WRITE, D3D11_TEXTURE2D_DESC,
+            D3D11_USAGE_DYNAMIC,
         };
         use windows::Win32::Graphics::Dxgi::Common::{
-            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
+            DXGI_SAMPLE_DESC,
         };
 
         let need_rebuild = self
             .texture
             .as_ref()
-            .map(|t| t.width != width || t.height != height)
+            .map(|t| t.width != width || t.height != height || t.pixel_format != self.pixel_format)
             .unwrap_or(true);
         if !need_rebuild {
             return Ok(());
         }
 
-        let desc = D3D11_TEXTURE2D_DESC {
+        let make_view = |texture: &ID3D11Texture2D| -> Result<ID3D11ShaderResourceView> {
+            let mut view: Option<ID3D11ShaderResourceView> = None;
+            unsafe {
+                self.device
+                    .CreateShaderResourceView(texture, None, Some(&mut view))?
+            };
+            view.context("视频帧 SRV 创建失败")
+        };
+
+        let desc = |format| D3D11_TEXTURE2D_DESC {
             Width: width,
             Height: height,
             MipLevels: 1,
             ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Format: format,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
@@ -680,81 +684,86 @@ impl VideoPlayback {
             CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
             MiscFlags: 0,
         };
-        let mut texture: Option<ID3D11Texture2D> = None;
-        unsafe {
-            self.device
-                .CreateTexture2D(&desc, None, Some(&mut texture))?
+        let create = |d: &D3D11_TEXTURE2D_DESC| -> Result<ID3D11Texture2D> {
+            let mut texture: Option<ID3D11Texture2D> = None;
+            unsafe { self.device.CreateTexture2D(d, None, Some(&mut texture))? };
+            texture.context("视频帧纹理创建失败")
         };
-        let texture = texture.context("视频帧纹理创建失败")?;
-        let mut view: Option<ID3D11ShaderResourceView> = None;
-        unsafe {
-            self.device
-                .CreateShaderResourceView(&texture, None, Some(&mut view))?
+
+        let (view, texture, uv_view, uv_texture) = match self.pixel_format {
+            VideoPixelFormat::Bgra8 => {
+                let texture = create(&desc(DXGI_FORMAT_B8G8R8A8_UNORM))?;
+                let view = make_view(&texture)?;
+                (view, texture, None, None)
+            }
+            VideoPixelFormat::Nv12 => {
+                let y_texture = create(&desc(DXGI_FORMAT_R8_UNORM))?;
+                let uv_texture = create(&desc(DXGI_FORMAT_R8G8_UNORM))?;
+                let y_view = make_view(&y_texture)?;
+                let uv_view = make_view(&uv_texture)?;
+                (y_view, y_texture, Some(uv_view), Some(uv_texture))
+            }
         };
-        let view = view.context("视频帧 SRV 创建失败")?;
+
         self.texture = Some(FrameTexture {
             view,
             texture,
+            uv_view,
+            uv_texture,
+            pixel_format: self.pixel_format,
             width,
             height,
         });
         Ok(())
     }
-}
 
-/// NV12 → BGRA8。Y 平面在前，UV 交错平面在后；两平面使用同一个 stride。
-fn nv12_to_bgra(
-    source: &[u8],
-    stride: usize,
-    width: usize,
-    height: usize,
-    out: &mut [u8],
-) -> Result<()> {
-    if width % 2 != 0 || height % 2 != 0 {
-        return Err(anyhow!("NV12 宽高必须为偶数: {}x{}", width, height));
-    }
-    let uv_offset = stride
-        .checked_mul(height)
-        .ok_or_else(|| anyhow!("NV12 Y 平面偏移溢出"))?;
-    let uv_bytes = stride
-        .checked_mul(height / 2)
-        .ok_or_else(|| anyhow!("NV12 UV 平面字节数溢出"))?;
-    let needed = uv_offset
-        .checked_add(uv_bytes)
-        .ok_or_else(|| anyhow!("NV12 平面总字节数溢出"))?;
-    if source.len() < needed {
-        return Err(anyhow!(
-            "NV12 sample 数据不足: 需要 {} 字节，实际 {}",
-            needed,
-            source.len()
-        ));
-    }
+    fn copy_rows(
+        &self,
+        texture: &ID3D11Texture2D,
+        source: *const u8,
+        source_stride: usize,
+        rows: usize,
+        row_bytes: usize,
+        reverse: bool,
+    ) -> Result<()> {
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_WRITE_DISCARD,
+        };
 
-    for row in 0..height {
-        let y_row = row * stride;
-        let uv_row = uv_offset + (row / 2) * stride;
-        for col in 0..width {
-            let y = source[y_row + col] as i32 - 16;
-            let uv_index = uv_row + (col / 2) * 2;
-            let u = source[uv_index] as i32 - 128;
-            let v = source[uv_index + 1] as i32 - 128;
-
-            let r = clamp_byte((298 * y + 409 * v + 128) >> 8);
-            let g = clamp_byte((298 * y - 100 * u - 208 * v + 128) >> 8);
-            let b = clamp_byte((298 * y + 516 * u + 128) >> 8);
-
-            let dst = (row * width + col) * 4;
-            out[dst] = b;
-            out[dst + 1] = g;
-            out[dst + 2] = r;
-            out[dst + 3] = 255;
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.context
+                .Map(texture, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                .context("映射视频纹理失败")?;
         }
+        let copy_result = (|| -> Result<()> {
+            if mapped.pData.is_null() {
+                return Err(anyhow!("视频纹理 Map 返回空指针"));
+            }
+            let dst_stride = mapped.RowPitch as usize;
+            if dst_stride < row_bytes {
+                return Err(anyhow!(
+                    "视频纹理 RowPitch({}) 小于行字节数({})",
+                    dst_stride,
+                    row_bytes
+                ));
+            }
+            let dst_base = mapped.pData as *mut u8;
+            for row in 0..rows {
+                let src_row = if reverse { rows - 1 - row } else { row };
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        source.add(src_row * source_stride),
+                        dst_base.add(row * dst_stride),
+                        row_bytes,
+                    );
+                }
+            }
+            Ok(())
+        })();
+        unsafe { self.context.Unmap(texture, 0) };
+        copy_result
     }
-    Ok(())
-}
-
-fn clamp_byte(value: i32) -> u8 {
-    value.clamp(0, 255) as u8
 }
 
 /// hns（100ns）转 Duration；溢出时钳到最大值，避免 panic。

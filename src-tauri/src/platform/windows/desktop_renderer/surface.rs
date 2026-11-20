@@ -81,6 +81,19 @@ float4 ps_main(VS_OUT input) : SV_TARGET {
     color.a = fade_alpha;
     return color;
 }
+
+Texture2D y_plane : register(t0);
+Texture2D uv_plane : register(t1);
+
+float4 ps_nv12(VS_OUT input) : SV_TARGET {
+    // BT.601 limited-range NV12 → RGB，全部在 GPU 侧完成，避免 CPU 逐像素转换。
+    float y = saturate((y_plane.Sample(linear_sampler, input.uv).r - 16.0 / 255.0) * 1.164383);
+    float2 uv = uv_plane.Sample(linear_sampler, input.uv).rg - 0.5;
+    float r = saturate(y + 1.596027 * uv.y);
+    float g = saturate(y - 0.391762 * uv.x - 0.812968 * uv.y);
+    float b = saturate(y + 2.017232 * uv.x);
+    return float4(float3(r, g, b) * fade_alpha, fade_alpha);
+}
 "#;
 
 #[repr(C)]
@@ -119,6 +132,7 @@ const QUAD: [Vertex; 4] = [
 struct QuadPipeline {
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
+    nv12_pixel_shader: ID3D11PixelShader,
     rasterizer_state: ID3D11RasterizerState,
     input_layout: ID3D11InputLayout,
     vertex_buffer: ID3D11Buffer,
@@ -640,17 +654,30 @@ impl RenderSurface {
     fn draw_media(&self, media: &WallpaperMedia, fit_mode: FitMode, alpha: f32, now: Instant) {
         // 先取出 (SRV, 宽, 高)，两条媒体链路在这一步之后完全共用同一套 quad / viewport。
         // VideoPlayback 的时钟由 renderer loop 在绘制整组前统一推进，这里只读当前帧。
-        let current: Option<(ID3D11ShaderResourceView, u32, u32)> = match media {
+        let current: Option<(
+            ID3D11ShaderResourceView,
+            Option<ID3D11ShaderResourceView>,
+            u32,
+            u32,
+        )> = match media {
             WallpaperMedia::Frames(frames) => {
                 let frame = frames.current_frame(now);
-                Some((frame.view.clone(), frame.width, frame.height))
+                Some((frame.view.clone(), None, frame.width, frame.height))
             }
             WallpaperMedia::Video(playback) => playback
                 .lock()
                 .ok()
-                .and_then(|guard| guard.frame_snapshot()),
+                .and_then(|guard| guard.frame_snapshot())
+                .map(|snapshot| {
+                    (
+                        snapshot.view,
+                        snapshot.uv_view,
+                        snapshot.width,
+                        snapshot.height,
+                    )
+                }),
         };
-        let Some((view, frame_width, frame_height)) = current else {
+        let Some((view, uv_view, frame_width, frame_height)) = current else {
             return;
         };
 
@@ -659,7 +686,12 @@ impl RenderSurface {
         let strides = [std::mem::size_of::<Vertex>() as u32];
         let offsets = [0u32];
         let samplers = [Some(pipeline.sampler.clone())];
-        let views = [Some(view.clone())];
+        let views = [Some(view), uv_view];
+        let pixel_shader = if views[1].is_some() {
+            &pipeline.nv12_pixel_shader
+        } else {
+            &pipeline.pixel_shader
+        };
         let constant_buffers = [Some(pipeline.fade_buffer.clone())];
         // Q1：extend 与 WebView 的 object-fit:fill 语义一致——忽略 fitMode，
         // 整张图拉伸铺满所有显示器的并集，再用负 TopLeftX/Y 把本屏那块裁进 RT。
@@ -723,7 +755,7 @@ impl RenderSurface {
             self.context
                 .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             self.context.VSSetShader(&pipeline.vertex_shader, None);
-            self.context.PSSetShader(&pipeline.pixel_shader, None);
+            self.context.PSSetShader(pixel_shader, None);
             self.context.PSSetSamplers(0, Some(&samplers));
             self.context.PSSetShaderResources(0, Some(&views));
             // QUAD 顶点顺序与 D3D 默认正面绕序相反，不显式关背面剔除会丢掉全部三角形
@@ -814,6 +846,11 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
         c"ps_main".as_ptr() as *const u8,
         c"ps_5_0".as_ptr() as *const u8,
     )?;
+    let ps_nv12_bytecode = compile_shader(
+        SHADER_SOURCE,
+        c"ps_nv12".as_ptr() as *const u8,
+        c"ps_5_0".as_ptr() as *const u8,
+    )?;
 
     let elements = [
         D3D11_INPUT_ELEMENT_DESC {
@@ -853,6 +890,12 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
         device.CreatePixelShader(&ps_bytecode, None, Some(&mut pixel_shader))?;
     }
     let pixel_shader = pixel_shader.context("D3D11 pixel shader 创建失败")?;
+
+    let mut nv12_pixel_shader: Option<ID3D11PixelShader> = None;
+    unsafe {
+        device.CreatePixelShader(&ps_nv12_bytecode, None, Some(&mut nv12_pixel_shader))?;
+    }
+    let nv12_pixel_shader = nv12_pixel_shader.context("D3D11 NV12 pixel shader 创建失败")?;
 
     // QUAD 的 TRIANGLESTRIP 绕序与 D3D 默认正面相反，显式关掉背面剔除；
     // 不依赖 RSSetState(NULL) 的隐式默认值，以后换拓扑或改顶点顺序都不会再踩。
@@ -950,6 +993,7 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
     Ok(QuadPipeline {
         vertex_shader,
         pixel_shader,
+        nv12_pixel_shader,
         rasterizer_state,
         input_layout,
         vertex_buffer,

@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14；M8 WebView capability fallback 接线，见 3.15；控制链路收尾与副屏跟随修复，见 3.16）
+> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14；M8 WebView capability fallback 接线，见 3.15；控制链路收尾与副屏跟随修复，见 3.16；Native 视频音频方案 A2（audio SourceReader + WASAPI），见 3.17；M9 前置计时埋点，见 3.18）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -490,7 +490,7 @@ shader 因此改成输出预乘色（`color.rgb *= fade_alpha; color.a = fade_al
 | FitMode | 设置页 | `upsert_monitor_config` → `coordinator.set_fit_mode` | ✅ 正常；模式切换同步配置时从屏漏更新 |
 | 播放/暂停（全屏） | 全屏检测 | `FullscreenDetectionTask` → `coordinator.set_paused` + `fullscreen-changed` → 前端暂停 video | ✅ 完整 |
 | 播放/暂停（轮播） | 快捷键 / 托盘 | `Action::TogglePause` → 翻转 `is_enabled` + 启停定时器 | ✅ 语义是「暂停轮播」，不停渲染 |
-| 音量 | 设置页 | `GLOBAL_VOLUME` → `wm.broadcast` → WebView 页面 | Native 视频静音，已知限制 |
+| 音量 | 设置页 | `GLOBAL_VOLUME` → `coordinator.set_volume` → Native renderer + `wm.broadcast` → WebView 页面 | ✅ 两边同时生效（见 3.17） |
 
 **根因**：WebView 页面收到 `display-mode-changed` 后会 `loadConfig()` **重读 DB**（`useWallpaperLoader.ts`），Native renderer 收到 `set_display_mode` 却只重算 viewport、不重读 config。`sync_config_from` 把主屏 `wallpaper_id` 写进从屏 DB，surface 仍挂着旧壁纸；前端 `syncWallpaperWindows` 只为新建窗口调 `ensure_target`，已有 surface 不刷新。「不总是」的四种表现：从屏本来就是同一张图（看不出差异）、从屏还没 surface（新建时读新 DB，跟随）、轮播定时器重启后整组下发（延迟跟随）、从屏已有 surface 且壁纸不同且定时器未立即触发（不跟随）。
 
@@ -502,6 +502,69 @@ shader 因此改成输出预乘色（`color.rgb *= fade_alpha; color.a = fade_al
 **语义确认**：`Action::TogglePause`（快捷键 / 托盘菜单）只停轮播定时器，**不调 `coordinator.set_paused`**；只有全屏检测才停 Native 帧 / 隐藏 WebView 窗口。菜单文案是「暂停/恢复轮播」，两种暂停语义保持分离，本次不改。
 
 **边界**：修复走 `update_wallpaper`，因此从屏换图会按 M7 规则触发 350ms crossfade（Native↔Native 且 wid 变化）——是平滑跟随而非零延迟硬切；跨 backend 仍硬切。若实机验收要求零延迟，需单独给这条路径加 `crossfade=false`。
+
+### 3.17 Native 视频音频：方案 A2 —— audio `SourceReader` + WASAPI
+
+**决策收口**：先否决 WinRT `MediaPlayer` frame server 接管视频帧的方案（等价“更底层一点的 WebView 视频方案”），随后又否决“仅音频借用 WinRT `MediaPlayer`”的折中——它仍然引入独立播放器状态机与时钟，和视频链路的 `SourceReader` 拉取模型不一致。`IMFMediaSession` 虽属 MF 生态，但要建 topology、绑定 audio sink、维护 session 状态机与 Presentation Clock，本质上仍是高层黑盒，也不采用。
+
+最终方案 A2：**视频和音频都走 `IMFSourceReader`**；视频帧仍 RGB32 → D3D11，音频流解码为 PCM → ring buffer → WASAPI shared-mode 输出。解码器由系统提供，缓冲、seek、暂停、音量、循环、时钟基准全部由我们控制。
+
+**共享模型按 display mode 对齐**：
+
+| 模式 | 视频播放状态 | 音频播放状态 | 结果 |
+|---|---|---|---|
+| Independent | 每屏一个 `VideoPlayback` | 每个 `VideoPlayback` 内一个 `AudioPlayback` | 每屏独立音频，和 WebView 类似 |
+| Mirror / Extend | 整组共享一个 `VideoPlayback` | 同一个 `VideoPlayback` 内一个 `AudioPlayback` | 全组一份音频，不再多屏叠加 |
+
+`is_sync` 在主要路径上由 `display_mode` 推导，视频共享语义无需改动；把音频挂到 `VideoPlayback` 上即自然继承同一模型。
+
+**链路**：
+
+```text
+视频：SourceReader(video) → RGB32 → D3D11 → shader / crossfade → DirectComposition
+音频：SourceReader(audio) → PCM → ring buffer → WASAPI shared-mode → ISimpleAudioVolume
+```
+
+音频链路在独立 MTA 线程内运行，避免 `ReadSample` 阻塞 renderer 线程。renderer 只通过 `AudioCommand::{Pause, Play, Seek, SetVolume, Shutdown}` 控制它，并通过 `AtomicU64` 读取 100ns 音频位置做低频校准。
+
+**关键不变量**：
+
+- 无音轨 / 音频打开失败 / PCM 协商失败一律静默降级为无声视频，只记日志，不 toast、不阻断 `set_wallpaper`。
+- 音频 PCM 参数由 WASAPI 当前 mix format 反推，避免采样率 / 声道数不匹配导致 `IAudioClient::Initialize` 失败。
+- 音频默认暂停在 0；只有「当前正在显示、不在 fade / pending、且未全屏暂停」的 `VideoPlayback` 才播放音频，由 `renderer.rs::sync_audio_state` 每帧裁决。
+- crossfade 期间 from / to / pending 音频全部冻结；`finish_transition` 后 `reset_clock(now)` 同时把视频与音频重置到 0。
+- 全屏暂停只冻结视频时钟，不累加 fade 时钟；音频由 `sync_audio_state` 统一暂停 / 恢复。
+- `global_volume` 启动时由 `RenderCoordinator::refresh_volume` 从 DB 同步一次；设置变更时同时写 Native `SetVolume` 与 WebView `VolumeChangedPayload`。
+- 音视频同步以视频时钟为唯一基准：音频线程在 EOF 时自行 seek 0，renderer 每 5s 检查漂移，超过 100ms 才下发 `Seek`。
+- 不引入 WinRT `MediaPlayer` / `MediaSource` / `MediaSession`，不引入 `url` crate，视频格式白名单与 M8 策略不变。
+
+**新增文件 / 改动点**：
+
+- `desktop_renderer/audio.rs`：新建 `AudioPlayback`，封装独立 MTA 音频线程、audio `SourceReader`、PCM ring buffer、WASAPI shared-mode、`ISimpleAudioVolume`、seek / pause / reset / 漂移校准。
+- `desktop_renderer/video.rs`：`VideoPlayback` 持有 `Option<AudioPlayback>`；`open` 接受音量并默认暂停音频；`advance` 调 `tick`；`reset_clock` 同步重置音频；新增 `set_audio_paused` / `set_audio_volume`。
+- `desktop_renderer/surface.rs`：`open_video` 传音量；新增 `video_arcs()`，让音量 / 冻结覆盖 transition.to 与 pending 队列。
+- `desktop_renderer/renderer.rs`：新增 `SetVolume` 命令、renderer 内音量状态、`sync_audio_state()`；全屏暂停改为覆盖所有 video arc。
+- `render_coordinator.rs` / `ctx/mod.rs` / `setting_effects.rs`：音量持久化同步与双 backend 路由。
+- `Cargo.toml`：新增 `Win32_Media_Audio` feature；未引入新的第三方媒体运行时。
+
+**验证**：`cargo fmt --all -- --check`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning、`pnpm exec tsc --noEmit`、`pnpm exec oxlint src` 0 warning / 0 error。实机项按统一策略留到最终验收。
+
+### 3.18 M9 前置：图片 / 视频链路计时埋点
+
+M9 不先假设「异步解码」「DCT 缩放」「DYNAMIC 纹理」哪个是主因，先用日志分段取证。
+
+- **图片静态链路**
+  - `decoder.rs`：记录 `image::open`、`to_rgba8`、`rgba_to_bgra`、解码总耗时；
+  - `surface.rs::upload_frames`：记录 `decode_frames` 总耗时、`CreateTexture2D + initial data`、`CreateShaderResourceView`、整段 `upload_frames` 耗时。
+  - 日志只写文件名，不写绝对路径。
+- **视频链路**
+  - `VideoPlayback::open`：记录打开总耗时与首帧读取耗时；
+  - `read_next_frame`：把 `ReadSample + ConvertToContiguousBuffer` 计入 read，把 `upload_buffer` 计入 upload；
+  - 每 2s 聚合输出一次 `read_avg/max`、`upload_avg/max`、reset 次数与 reset 耗时，避免逐帧刷日志。
+
+当前静态图上传不是 `D3D11_USAGE_STAGING + Map/Unmap`，也不是逐行 `UpdateSubresource`；它是 `D3D11_USAGE_DEFAULT + CreateTexture2D(initial data)`。逐行 `UpdateSubresource` 只存在于视频链路。因此 M9 必须先通过计时确认阻塞究竟在解码、CPU 格式转换、纹理创建/上传，还是视频逐帧上传，再决定优化方案。
+
+**验证**：`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。实机计时按统一策略留到最终验收。
 
 ---
 
@@ -630,7 +693,7 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **混合 backend 时 extend 降级** | D2：组内出现非 Native backend 时整组退回逐屏独立渲染 | 若未来要求混合组也拼接，需先统一两套几何与帧时钟；17:27 决策明确不重写 WebView 侧行为 |
 | **selection 仍固定在启动阶段** | M8 已让 `apply_backend` 按每次壁纸的 capability 跨 backend 切换；但 `selection` 本身在 `RenderCoordinator::new` 时固定 | 用户确认方案 A：不新增设置项，不做运行时切 NativeOnly/Auto |
 | **WebView fallback 可播性依赖 Chromium** | Auto 下 MF 容器表外的格式回退到 `wallpaper.html`；WebM（VP8/VP9）通常可用，MKV 支持有限 | 回退成功 ≠ 一定能播；仍只是 capability fallback，不是解码失败兜底，列最终实机验收 |
-| **视频静音** | SourceReader 只选视频流、关音频流；`VideoPlayback` 不做音频渲染 | 用户确认「M6 先静音，后面补」；当前 WebView 侧的 volume 设置对 Native 视频不生效 |
+| **音频只做低频校准** | 音频线程在 EOF 自行 seek 0，renderer 每 5s 校准漂移，阈值 100ms | 不引入统一 Presentation Clock；用户确认低频校准即可，见 3.17 |
 | **无 HTML 网页壁纸** | 产品边界决策 | 见 1.3 |
 | **DWM 圆角 ~1px** | 继承自 `desktop_embedder`，选择接受 | 见关联文档 |
 | **动画帧同步仅在代码层保证** | `Arc<SharedFrames>` 让组内共用一个 `started_at`，但 GIF / 动态 WebP 的接缝同帧尚未实机确认 | 静态图 extend / mirror 已实测通过（3.11）；动画路径待补验 |
@@ -877,22 +940,25 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 
 **M8 已完成**（见 3.15）：范围按现状收窄为「Auto 模式 capability fallback 接线」——原清单三条中两条早已满足，不新增设置项、不删 WebView 资产。按壁纸格式自动切 backend 的能力由此真正生效；`selection` 仍在启动阶段固定。按用户要求，M6 起所有实机验证统一后置最终验收，不再逐项确认。
 
+**视频音频方案 A2 已完成**（见 3.17）：明确放弃 MediaPlayer frame server、MediaPlayer audio-only 与 MediaSession 三类高封装方案；视频和音频都走 `IMFSourceReader`，音频 PCM 经 WASAPI shared-mode 输出。共享模型按 display mode 对齐：Independent 每屏一份视频 + 音频，Mirror / Extend 全组各一份。音量、全屏暂停、crossfade 冻结 / reset、低频校准均已接线；无音轨静默降级。编译、单测、Windows probe 交叉检查与前端静态检查全绿，实机项统一留到最终验收。
+
 **性能收束已完成**（`d639b63`，见 3.12）：dev profile 优化把 O0 的 15~85 倍退化拉回正常量级，`FrameCache` 消除重复解码与纹理上传。注意它**没有削减单次解码**，release 下高分辨率大图的 `image::open` 成本仍在，因此下表新增两条 P1。剩余项：
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
 | ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态；表外格式的 WebView fallback 见 M8（3.15） |
 | ~~**P1**~~ | ~~WebView fallback 接线（M8）~~ | **已完成（3.15）**：Auto 下表外格式回 WebView，NativeOnly 下报错；页面与事件链原样复用 |
-| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast；**M7 新增**：四种 crossfade 组合、extend 接缝明暗一致、连续切换队列每段跑满 350ms；**M8 新增**：Auto 下 webm/mkv 回退 WebView 后能否实际播放、切回 Native 可支持格式时 WebView 窗口销毁、混合 backend 的 D2 降级提示；**控制链路新增**：Mirror/Extend 切换时副屏是否立刻跟随（含 M7 的 350ms crossfade 延迟）、切回 Independent 后从屏 fitMode 是否正确 |
+| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast；**M7 新增**：四种 crossfade 组合、extend 接缝明暗一致、连续切换队列每段跑满 350ms；**M8 新增**：Auto 下 webm/mkv 回退 WebView 后能否实际播放、切回 Native 可支持格式时 WebView 窗口销毁、混合 backend 的 D2 降级提示；**控制链路新增**：Mirror/Extend 切换时副屏是否立刻跟随（含 M7 的 350ms crossfade 延迟）、切回 Independent 后从屏 fitMode 是否正确；**音频新增**：默认 0 不突发有声、音量即时生效、Independent 多屏叠加 / Mirror-Extend 单份输出、无音轨视频静音正常、crossfade 冻结结束后从 0、5s 校准无音画漂移、全屏暂停音频同步停止 |
 | **P1** | 按目标分辨率降采样解码 | 当前 `upload_frames` 按原始尺寸建纹理，8K 图在 1080p 屏上仍上传 126MB。用 WIC / 更快的解码器在解码阶段就按目标尺寸取样，是**唯一能真正削减单次 ~75ms（4K JPEG）** 的路；改动最大，需 Windows 实机验证 |
 | **P1** | 解码移出渲染线程 + 保留旧帧 | `upload_frames` 现在同步跑在 `try_recv` 分支，解码期间所有 surface 停帧。改为专用解码线程、新帧就绪前保留上一张，可让切换不再顿；需处理连点取消与命令去重 |
 | P1 | 超大素材的连续命令合并 | 单份 >192MiB 不进缓存（见 5.3），同步模式下仍会重复解码；可在 renderer loop 内把一批连续同 key 的 `SetWallpaper` 合并成一次，无需常驻显存 |
 | ~~P1~~ | ~~渲染命令 ack~~ | **已完成（3.13 / 2.4）**：`ensure_monitor` / `set_wallpaper` 带 oneshot 回执，失败回传 `renderer-error` |
-| P1 | 视频音频 / NV12 硬解 | M6 静音且只接 RGB32；下一步接 IMFSourceReader 音频流 + volume，以及 NV12 → shader YUV 转换 / DXVA device manager 降低 4K 视频 CPU 开销 |
+| ~~P1~~ | ~~视频音频~~ | **已完成（3.17）**：audio `SourceReader` + WASAPI shared-mode 输出；Independent 每屏一份，Mirror/Extend 全组一份 |
+| P1 | NV12 硬解 | 视频仍只接 RGB32；NV12 → shader YUV 转换 / DXVA device manager 降低 4K 视频 CPU 开销尚未做 |
 | P1 | WebView 侧 DPI 偏差 | `WebviewWindowBuilder` 直接接收物理像素，`useExtendViewport` 又除以 `scaleFactor()`；Q2 决定另立条目处理，不在 M5 扩散 |
 | P2 | `selection` 运行时切换 | 按壁纸 capability 的自动切换已在 M8 生效；`selection` 本身仍固定在启动阶段，运行时切 NativeOnly/Auto 需新设置项，用户确认不做 |
 | P2 | 设备丢失恢复 | 消费 `DeviceLost`，处理 `DXGI_ERROR_DEVICE_REMOVED` / `ResizeBuffers` 失败后的重建 |
 | P2 | 显示器热插拔事件化 | 用 Tauri 原生显示器事件替代 5s 轮询；`refresh_group_geometry()` 已具备全组刷新能力，只差事件源 |
 | P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |
 | P3 | 契约生成 | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
-| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 51 passed），renderer 编排与桌面嵌入仍零覆盖 |
+| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 50 passed），renderer 编排与桌面嵌入仍零覆盖 |

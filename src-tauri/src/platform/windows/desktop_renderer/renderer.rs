@@ -97,6 +97,9 @@ enum RendererCommand {
     SetPaused {
         paused: bool,
     },
+    SetVolume {
+        volume: u32,
+    },
     Shutdown,
 }
 
@@ -189,6 +192,13 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    pub fn set_volume(&self, volume: u32) -> Result<()> {
+        self.sender.send(RendererCommand::SetVolume {
+            volume: volume.min(100),
+        })?;
+        Ok(())
+    }
+
     pub fn shutdown(&mut self) {
         if self.sender.send(RendererCommand::Shutdown).is_err() {
             return;
@@ -233,6 +243,8 @@ fn run(receiver: Receiver<RendererCommand>) {
     let mut frame_cache = FrameCache::<SharedFrames>::with_default_budget();
     let mut running = true;
     let mut paused = false;
+    // global_volume 默认 0；启动时由 RenderCoordinator 再同步一次 DB 中的值。
+    let mut volume = 0u32;
 
     while running {
         while let Ok(command) = receiver.try_recv() {
@@ -281,7 +293,7 @@ fn run(receiver: Receiver<RendererCommand>) {
                     // 两条链路都必须先构造出媒体内容，再挂到每个 surface，避免半挂状态。
                     let result: Result<WallpaperMedia> = match kind {
                         WallpaperKind::Video => shared
-                            .open_video(&path)
+                            .open_video(&path, volume)
                             .map(WallpaperMedia::Video)
                             .with_context(|| format!("视频解码失败 {:?}", path)),
                         _ => frame_cache
@@ -349,19 +361,32 @@ fn run(receiver: Receiver<RendererCommand>) {
                 }
                 RendererCommand::SetPaused { paused: next } => {
                     paused = next;
-                    // 冻结 / 恢复组内每个视频的播放时钟；不 flush、不重建 SourceReader。
-                    // 按 Arc 指针去重，同一个播放状态只记一次暂停时长。
+                    // 冻结 / 恢复所有视频（含 fade 队列里的 to）的播放时钟与音频；
+                    // 不 flush、不重建 SourceReader。按 Arc 指针去重，避免组内重复记暂停时长。
                     let now = Instant::now();
                     let mut seen = std::collections::HashSet::new();
                     for surface in surfaces.values_mut() {
-                        let Some(playback) = surface.video() else {
-                            continue;
-                        };
-                        if !seen.insert(Arc::as_ptr(playback)) {
-                            continue;
+                        for playback in surface.video_arcs() {
+                            if !seen.insert(Arc::as_ptr(playback)) {
+                                continue;
+                            }
+                            if let Ok(mut guard) = playback.lock() {
+                                guard.set_paused(next, now);
+                            }
                         }
-                        if let Ok(mut guard) = playback.lock() {
-                            guard.set_paused(next, now);
+                    }
+                }
+                RendererCommand::SetVolume { volume: next } => {
+                    volume = next;
+                    let mut seen = std::collections::HashSet::new();
+                    for surface in surfaces.values_mut() {
+                        for playback in surface.video_arcs() {
+                            if !seen.insert(Arc::as_ptr(playback)) {
+                                continue;
+                            }
+                            if let Ok(mut guard) = playback.lock() {
+                                guard.set_audio_volume(volume);
+                            }
                         }
                     }
                 }
@@ -372,6 +397,10 @@ fn run(receiver: Receiver<RendererCommand>) {
         if !pump_messages() {
             break;
         }
+
+        // 音频播放资格与视频绘制解耦：全屏暂停 / fade 冻结 / pending 队列统一在这里裁决。
+        // 必须在绘制前调用，避免 to 视频在 fade 结束前提前出声，或恢复全屏时 pending 漏音。
+        sync_audio_state(&surfaces, paused);
 
         // 全屏暂停时跳过绘制，但保留 surface 与壁纸内容，恢复后无需重新解码
         if !paused {
@@ -406,6 +435,40 @@ fn run(receiver: Receiver<RendererCommand>) {
 
     for (_, mut surface) in surfaces {
         surface.destroy();
+    }
+}
+
+/// 裁决每个视频的音频是否应该出声。
+///
+/// 只有「当前正在显示、且不在 fade / pending 中、且未全屏暂停」的播放状态才播放音频。
+/// 这样 Mirror/Extend 组共享一个 VideoPlayback 时自然只有一份音频；Independent 每屏
+/// 各自持有一个 VideoPlayback，自然按屏叠加。与 WebView 的过渡语义保持一致。
+fn sync_audio_state(surfaces: &HashMap<String, RenderSurface>, paused: bool) {
+    let mut frozen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    let mut active: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+
+    for surface in surfaces.values() {
+        if surface.fade_active_or_pending() {
+            for playback in surface.video_arcs() {
+                frozen.insert(Arc::as_ptr(playback));
+            }
+        } else if let Some(playback) = surface.video() {
+            active.insert(Arc::as_ptr(playback));
+        }
+    }
+
+    let mut seen = HashSet::new();
+    for surface in surfaces.values() {
+        for playback in surface.video_arcs() {
+            let ptr = Arc::as_ptr(playback);
+            if !seen.insert(ptr) {
+                continue;
+            }
+            let should_play = !paused && active.contains(&ptr) && !frozen.contains(&ptr);
+            if let Ok(mut guard) = playback.lock() {
+                guard.set_audio_paused(!should_play);
+            }
+        }
     }
 }
 

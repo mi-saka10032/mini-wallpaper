@@ -8,7 +8,8 @@
 //! 组内 surface 共享同一个 `Arc<VideoPlayback>`，绘制时读到的 SRV 必然是同一帧。
 //! 这与 GIF 的 `SharedFrames` 是两套机制，但共享同一个 device / pipeline。
 //!
-//! 静音：SourceReader 只选视频流、关掉音频流，不做音频渲染；音量由后续里程碑补。
+//! 音频：SourceReader 只选视频流；旁挂的 AudioPlayback 只负责把同一文件的音频
+//! 送到系统输出，视频帧与时钟仍由本模块独占控制。无音轨时静音降级。
 //! 暂停：冻结播放时钟，不 flush / 不销毁 SourceReader，恢复后从原时间点继续。
 
 use std::ffi::c_void;
@@ -19,6 +20,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::GUID;
+
+use super::audio::AudioPlayback;
 use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
     MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup,
@@ -41,6 +44,70 @@ struct FrameTexture {
     height: u32,
 }
 
+/// 视频链路计时样本：每 2s 聚合输出一次，避免每帧刷日志。
+#[derive(Default)]
+struct VideoTimingStats {
+    frames: u64,
+    read_total: Duration,
+    read_max: Duration,
+    upload_total: Duration,
+    upload_max: Duration,
+    resets: u64,
+    reset_total: Duration,
+    reset_max: Duration,
+    last_report: Option<Instant>,
+}
+
+impl VideoTimingStats {
+    fn record_frame(&mut self, read: Duration, upload: Duration) {
+        self.frames = self.frames.saturating_add(1);
+        self.read_total = self.read_total.saturating_add(read);
+        self.upload_total = self.upload_total.saturating_add(upload);
+        self.read_max = self.read_max.max(read);
+        self.upload_max = self.upload_max.max(upload);
+    }
+
+    fn record_reset(&mut self, reset: Duration) {
+        self.resets = self.resets.saturating_add(1);
+        self.reset_total = self.reset_total.saturating_add(reset);
+        self.reset_max = self.reset_max.max(reset);
+    }
+
+    fn report_if_due(&mut self, label: &str) {
+        let now = Instant::now();
+        let due = self
+            .last_report
+            .map(|at| now.saturating_duration_since(at) >= Duration::from_secs(2))
+            .unwrap_or(true);
+        if !due || self.frames == 0 {
+            return;
+        }
+
+        let frames = self.frames;
+        log::info!(
+            "[Video] 播放计时 file={} frames={} read_avg_ms={:.2} read_max_ms={:.2} upload_avg_ms={:.2} upload_max_ms={:.2} resets={} reset_avg_ms={:.2} reset_max_ms={:.2}",
+            label,
+            frames,
+            ms_per(self.read_total, frames),
+            self.read_max.as_secs_f64() * 1000.0,
+            ms_per(self.upload_total, frames),
+            self.upload_max.as_secs_f64() * 1000.0,
+            self.resets,
+            ms_per(self.reset_total, self.resets.max(1)),
+            self.reset_max.as_secs_f64() * 1000.0
+        );
+
+        *self = Self {
+            last_report: Some(now),
+            ..Self::default()
+        };
+    }
+}
+
+fn ms_per(total: Duration, count: u64) -> f64 {
+    total.as_secs_f64() * 1000.0 / count.max(1) as f64
+}
+
 /// 一组显示器共享的视频播放状态。
 ///
 /// 所有字段只在 renderer 线程访问（source reader / D3D11 即时上下文都不是线程安全的），
@@ -50,6 +117,8 @@ pub struct VideoPlayback {
     device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
     context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     texture: Option<FrameTexture>,
+    /// 同一个视频文件旁挂的音频；无音轨或打开失败时为 None，不影响视频链路。
+    audio: Option<AudioPlayback>,
     /// 播放起点；`now - started_at - paused_total` 即当前视频时间
     started_at: Instant,
     paused_total: Duration,
@@ -62,6 +131,9 @@ pub struct VideoPlayback {
     cycle_base: Duration,
     /// 播放列表总时长（最后一帧时间 + 时长），用于循环；未知时为 0
     loop_duration: Duration,
+    /// 日志只显示文件名，避免把绝对路径写进日志。
+    label: String,
+    timing: VideoTimingStats,
 }
 
 impl VideoPlayback {
@@ -73,7 +145,14 @@ impl VideoPlayback {
         device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
         context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
         path: &Path,
+        volume: u32,
     ) -> Result<Self> {
+        let started = Instant::now();
+        let label = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("<unknown>")
+            .to_string();
         let wide: Vec<u16> = path
             .as_os_str()
             .encode_wide()
@@ -116,11 +195,16 @@ impl VideoPlayback {
             ));
         }
 
+        // 音频默认暂停在 0；由 renderer 根据当前是否 active / fade / 全屏决定何时开始。
+        // 打开失败只记日志，视频继续静音播放。
+        let audio = AudioPlayback::open(path, volume);
+
         let mut playback = Self {
             reader,
             device: device.clone(),
             context: context.clone(),
             texture: None,
+            audio,
             started_at: Instant::now(),
             paused_total: Duration::ZERO,
             paused_at: None,
@@ -128,10 +212,19 @@ impl VideoPlayback {
             frame_duration: Duration::from_millis(40),
             cycle_base: Duration::ZERO,
             loop_duration: Duration::ZERO,
+            label: label.clone(),
+            timing: VideoTimingStats::default(),
         };
 
         // 先取一帧，确保打开阶段就能发现解码失败（错误需要在 set_wallpaper 时回传）。
+        let first_frame_started = Instant::now();
         playback.read_next_frame()?;
+        log::info!(
+            "[Video] 打开完成 file={} open_ms={:.1} first_frame_ms={:.1}",
+            label,
+            started.elapsed().as_secs_f64() * 1000.0,
+            first_frame_started.elapsed().as_secs_f64() * 1000.0
+        );
         Ok(playback)
     }
 
@@ -168,6 +261,12 @@ impl VideoPlayback {
                 return Err(anyhow!("视频循环后仍无法读取首帧"));
             }
         }
+
+        // 视频时钟是唯一基准；音频只做低频循环检测与漂移校准。
+        if let Some(audio) = self.audio.as_mut() {
+            audio.tick(self.frame_time, self.loop_duration, now);
+        }
+        self.timing.report_if_due(&self.label);
         Ok(())
     }
 
@@ -177,6 +276,7 @@ impl VideoPlayback {
     /// 这里 flush + seek(0) 并重新预读，丢掉的只是那张预读帧，不会打断正在播放的内容。
     /// 不销毁 SourceReader，和暂停恢复保持同一套生命周期。
     pub fn reset_clock(&mut self, now: Instant) -> Result<()> {
+        let reset_started = Instant::now();
         self.started_at = now;
         self.paused_total = Duration::ZERO;
         self.paused_at = None;
@@ -194,6 +294,16 @@ impl VideoPlayback {
         if !self.read_next_frame()? {
             return Err(anyhow!("视频重置时钟后无法读取首帧"));
         }
+        if let Some(audio) = self.audio.as_mut() {
+            audio.reset();
+        }
+        let elapsed = reset_started.elapsed();
+        self.timing.record_reset(elapsed);
+        log::debug!(
+            "[Video] 时钟重置 file={} reset_ms={:.1}",
+            self.label,
+            elapsed.as_secs_f64() * 1000.0
+        );
         Ok(())
     }
 
@@ -207,6 +317,21 @@ impl VideoPlayback {
                 self.paused_at = None;
             }
             _ => {}
+        }
+        // 音频的暂停由 renderer 的 sync_audio_state 统一决定：
+        // 全屏暂停、fade 冻结、pending 队列三种状态不能混用同一个开关。
+    }
+
+    /// fade 期间只冻结音频，不动视频时钟（视频冻结由 renderer 跳过 advance 实现）。
+    pub fn set_audio_paused(&mut self, paused: bool) {
+        if let Some(audio) = self.audio.as_mut() {
+            audio.set_paused(paused);
+        }
+    }
+
+    pub fn set_audio_volume(&mut self, volume: u32) {
+        if let Some(audio) = self.audio.as_mut() {
+            audio.set_volume(volume);
         }
     }
 
@@ -226,6 +351,7 @@ impl VideoPlayback {
 
     /// 读取下一帧并上传到复用纹理；返回 false 表示 EOF。
     fn read_next_frame(&mut self) -> Result<bool> {
+        let read_started = Instant::now();
         let mut flags = 0u32;
         let mut timestamp = 0i64;
         let mut sample: Option<IMFSample> = None;
@@ -257,7 +383,12 @@ impl VideoPlayback {
         }
 
         let buffer = unsafe { sample.ConvertToContiguousBuffer() }?;
+        let read_elapsed = read_started.elapsed();
+
+        let upload_started = Instant::now();
         self.upload_buffer(&buffer)?;
+        self.timing
+            .record_frame(read_elapsed, upload_started.elapsed());
 
         self.frame_time = frame_time;
         self.frame_duration = if frame_duration.is_zero() {

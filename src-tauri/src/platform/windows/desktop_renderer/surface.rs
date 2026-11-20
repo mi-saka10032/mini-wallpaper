@@ -255,14 +255,31 @@ impl SharedDevice {
 
     /// 一次解码 + 一次纹理上传，返回整组共用的帧序列。
     pub fn upload_frames(&self, path: &Path, _kind: WallpaperKind) -> Result<Arc<SharedFrames>> {
+        let started = Instant::now();
+        let decode_started = Instant::now();
         let decoded = decode_frames(path)?;
+        let decode_ms = elapsed_ms(decode_started);
         if decoded.is_empty() {
             anyhow::bail!("解码结果为空: {:?}", path);
         }
+
+        let upload_started = Instant::now();
         let mut frames = Vec::with_capacity(decoded.len());
         for frame in &decoded {
             frames.push(self.upload_frame(frame)?);
         }
+        let upload_ms = elapsed_ms(upload_started);
+        log::info!(
+            "[Upload] 图片就绪 file={} frames={} decode_ms={:.1} upload_ms={:.1} total_ms={:.1}",
+            path.file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("<unknown>"),
+            frames.len(),
+            decode_ms,
+            upload_ms,
+            elapsed_ms(started)
+        );
+
         Ok(Arc::new(SharedFrames {
             frames,
             started_at: Instant::now(),
@@ -271,8 +288,8 @@ impl SharedDevice {
 
     /// 打开一个流式视频播放状态；复用共享 device / context，不进 FrameCache
     /// （视频不缓存全部帧，缓存的是唯一一个正在推进的播放状态）。
-    pub fn open_video(&self, path: &Path) -> Result<Arc<Mutex<VideoPlayback>>> {
-        let playback = VideoPlayback::open(&self.device, &self.context, path)?;
+    pub fn open_video(&self, path: &Path, volume: u32) -> Result<Arc<Mutex<VideoPlayback>>> {
+        let playback = VideoPlayback::open(&self.device, &self.context, path, volume)?;
         Ok(Arc::new(Mutex::new(playback)))
     }
 
@@ -298,19 +315,29 @@ impl SharedDevice {
             SysMemSlicePitch: 0,
         };
 
+        let texture_started = Instant::now();
         let mut texture: Option<ID3D11Texture2D> = None;
         unsafe {
             self.device
                 .CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
         }
+        let texture_ms = elapsed_ms(texture_started);
         let texture = texture.context("D3D11 frame texture 创建失败")?;
 
         // SRV 内部持有 texture 引用，无需在 GpuFrame 里再保存一份
+        let srv_started = Instant::now();
         let mut view: Option<ID3D11ShaderResourceView> = None;
         unsafe {
             self.device
                 .CreateShaderResourceView(&texture, None, Some(&mut view))?;
         }
+        log::debug!(
+            "[Upload] texture {}x{} create_ms={:.1} srv_ms={:.1}",
+            frame.width,
+            frame.height,
+            texture_ms,
+            elapsed_ms(srv_started)
+        );
         let view = view.context("D3D11 frame shader resource view 创建失败")?;
 
         Ok(GpuFrame {
@@ -320,6 +347,10 @@ impl SharedDevice {
             duration: frame.duration,
         })
     }
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 pub struct RenderSurface {
@@ -467,6 +498,26 @@ impl RenderSurface {
             Some(WallpaperMedia::Video(playback)) => Some(playback),
             _ => None,
         }
+    }
+
+    /// 当前 / 过渡中 / 排队中的所有视频播放状态。
+    /// 音量与 fade 冻结必须覆盖 to 与队列里的视频，否则新音频会在 fade 前提前出声。
+    pub fn video_arcs(&self) -> Vec<&Arc<Mutex<VideoPlayback>>> {
+        let mut arcs = Vec::new();
+        if let Some(playback) = self.video() {
+            arcs.push(playback);
+        }
+        if let Some(transition) = &self.transition {
+            if let WallpaperMedia::Video(playback) = &transition.to {
+                arcs.push(playback);
+            }
+        }
+        for pending in &self.pending {
+            if let WallpaperMedia::Video(playback) = &pending.media {
+                arcs.push(playback);
+            }
+        }
+        arcs
     }
 
     pub fn set_extend_viewport(&mut self, viewport: Option<ExtendViewport>) {

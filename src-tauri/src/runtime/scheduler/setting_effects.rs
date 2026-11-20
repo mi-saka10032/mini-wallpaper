@@ -42,6 +42,8 @@ impl Scheduler {
             }
             setting_keys::GLOBAL_VOLUME => {
                 let volume = value.parse::<u32>().unwrap_or(0).min(100);
+                let coordinator = self.render_coordinator();
+                coordinator.lock().await.set_volume(volume);
                 let wm = self.window_manager();
                 let mgr = wm.lock().await;
                 mgr.broadcast(&VolumeChangedPayload {
@@ -117,7 +119,7 @@ impl Scheduler {
                 // 没收到通知，切回独立后必须按最新 config 重下发，否则保留旧 fitMode。
                 {
                     let coordinator = self.render_coordinator();
-                    let mut guard = coordinator.lock().await;
+                    let guard = coordinator.lock().await;
                     for config in &active_configs {
                         guard
                             .set_fit_mode(&config.monitor_id, Some(config.fit_mode.as_str()), false)

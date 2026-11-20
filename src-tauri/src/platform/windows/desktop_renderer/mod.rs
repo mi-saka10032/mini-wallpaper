@@ -1,3 +1,4 @@
+mod audio;
 mod renderer;
 mod surface;
 mod video;

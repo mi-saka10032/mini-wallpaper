@@ -12,31 +12,22 @@
 //! 送到系统输出，视频帧与时钟仍由本模块独占控制。无音轨时静音降级。
 //! 暂停：冻结播放时钟，不 flush / 不销毁 SourceReader，恢复后从原时间点继续。
 
-use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use std::ptr::{self, NonNull};
+use std::ptr;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use windows::core::{Interface, GUID};
-use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
-use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_SHADER_RESOURCE_VIEW_DESC,
-    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV,
-};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-};
+use windows::core::GUID;
+use windows::Win32::Graphics::Direct3D11::{ID3D11ShaderResourceView, ID3D11Texture2D};
 
 use super::audio::AudioPlayback;
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, IMFSample,
-    IMFSourceReader, MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType,
-    MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup, MFVideoFormat_NV12,
-    MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES, MF_MT_DEFAULT_STRIDE,
-    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM,
-    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
+    IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader, MFCreateAttributes,
+    MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video, MFStartup,
+    MFVideoFormat_NV12, MFVideoFormat_RGB32, MFSTARTUP_FULL, MF_E_NO_MORE_TYPES,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
@@ -133,41 +124,6 @@ impl VideoTimingStats {
 
 fn ms_per(total: Duration, count: u64) -> f64 {
     total.as_secs_f64() * 1000.0 / count.max(1) as f64
-}
-
-fn create_dxgi_device_manager(
-    attributes: &IMFAttributes,
-    device: &ID3D11Device,
-    label: &str,
-) -> Option<IMFDXGIDeviceManager> {
-    let mut reset_token = 0u32;
-    let mut manager: Option<IMFDXGIDeviceManager> = None;
-    let result = (|| -> windows::core::Result<()> {
-        unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)? };
-        let manager = manager
-            .as_ref()
-            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
-        unsafe {
-            manager.ResetDevice(device, reset_token)?;
-            attributes.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, manager)?;
-        }
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => {
-            log::info!("[Video] DXVA device manager 已绑定 file={}", label);
-            manager
-        }
-        Err(err) => {
-            log::warn!(
-                "[Video] DXVA device manager 不可用，回退软件解码 file={} err={:#}",
-                label,
-                err
-            );
-            None
-        }
-    }
 }
 
 /// 先尝试 RGB32（无需转换），失败后退 NV12（CPU 转 BGRA）。
@@ -271,10 +227,6 @@ pub struct VideoPlayback {
     loop_duration: Duration,
     /// 实际协商成功的解码输出格式；决定 upload_buffer 的像素路径。
     pixel_format: VideoPixelFormat,
-    /// SourceReader 通过它使用 DXVA 硬件解码；必须比 reader 活得更久。
-    _device_manager: Option<IMFDXGIDeviceManager>,
-    /// DXVA sample 是否出现过，只打印一次日志。
-    hardware_sample_logged: bool,
     /// 日志只显示文件名，避免把绝对路径写进日志。
     label: String,
     timing: VideoTimingStats,
@@ -309,7 +261,6 @@ impl VideoPlayback {
             MFCreateAttributes(&mut value, 0)?;
             value.context("MF 属性对象创建失败")?
         };
-        let device_manager = create_dxgi_device_manager(&attributes, device, &label);
         let reader = unsafe { MFCreateSourceReaderFromURL(url, &attributes) }
             .with_context(|| format!("Media Foundation 无法打开视频 {:?}", path))?;
 
@@ -340,8 +291,6 @@ impl VideoPlayback {
             cycle_base: Duration::ZERO,
             loop_duration: Duration::ZERO,
             pixel_format,
-            _device_manager: device_manager,
-            hardware_sample_logged: false,
             label: label.clone(),
             timing: VideoTimingStats::default(),
         };
@@ -476,66 +425,6 @@ impl VideoPlayback {
         })
     }
 
-    /// DXVA sample 的底层资源已经是 NV12 D3D11 texture，直接创建 Y/UV SRV 给 shader。
-    fn adopt_gpu_sample(
-        &mut self,
-        dxgi_buffer: &IMFDXGIBuffer,
-        frame_time: Duration,
-        frame_duration: Duration,
-        read_elapsed: Duration,
-    ) -> Result<()> {
-        let mut raw: *mut c_void = ptr::null_mut();
-        unsafe {
-            dxgi_buffer.GetResource(&ID3D11Texture2D::IID, &mut raw)?;
-        }
-        let raw = NonNull::new(raw).context("DXVA sample 返回空 D3D11 texture")?;
-        let texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
-
-        let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
-        if subresource != 0 {
-            log::warn!(
-                "[Video] DXVA sample 使用非 0 subresource({})，暂跳过该帧 file={}",
-                subresource,
-                self.label
-            );
-            return Ok(());
-        }
-
-        let media_type = unsafe {
-            self.reader
-                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
-        };
-        let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE)? };
-        let width = (frame_size >> 32) as u32;
-        let height = frame_size as u32;
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
-            return Err(anyhow!("DXVA sample 帧尺寸无效: {}x{}", width, height));
-        }
-
-        let y_view = create_plane_srv(&self.device, &texture, DXGI_FORMAT_R8_UNORM)
-            .context("为 DXVA Y 平面创建 SRV 失败")?;
-        let uv_view = create_plane_srv(&self.device, &texture, DXGI_FORMAT_R8G8_UNORM)
-            .context("为 DXVA UV 平面创建 SRV 失败")?;
-
-        self.texture = Some(FrameTexture {
-            view: y_view,
-            texture,
-            uv_view: Some(uv_view),
-            uv_texture: None,
-            pixel_format: VideoPixelFormat::Nv12,
-            width,
-            height,
-        });
-        self.frame_time = frame_time;
-        self.frame_duration = if frame_duration.is_zero() {
-            Duration::from_millis(40)
-        } else {
-            frame_duration
-        };
-        self.timing.record_frame(read_elapsed, Duration::ZERO);
-        Ok(())
-    }
-
     /// 读取下一帧并上传到复用纹理；返回 false 表示 EOF。
     fn read_next_frame(&mut self) -> Result<bool> {
         let read_started = Instant::now();
@@ -575,21 +464,6 @@ impl VideoPlayback {
         // 只在首轮估算循环时长；后续轮次 cycle_base 已承接，不需要重算。
         if self.cycle_base.is_zero() {
             self.loop_duration = frame_time.saturating_add(frame_duration);
-        }
-
-        // DXVA sample 直接拿底层 D3D11 texture，绝不调用 ConvertToContiguousBuffer。
-        if let Ok(dxgi_buffer) = sample.cast::<IMFDXGIBuffer>() {
-            if !self.hardware_sample_logged {
-                self.hardware_sample_logged = true;
-                log::info!("[Video] 使用 DXVA GPU sample file={}", self.label);
-            }
-            self.adopt_gpu_sample(
-                &dxgi_buffer,
-                frame_time,
-                frame_duration,
-                read_started.elapsed(),
-            )?;
-            return Ok(true);
         }
 
         let buffer = unsafe { sample.ConvertToContiguousBuffer() }
@@ -895,29 +769,6 @@ impl VideoPlayback {
         unsafe { self.context.Unmap(texture, 0) };
         copy_result
     }
-}
-
-/// 从 DXVA 解码纹理创建单个 NV12 平面的 SRV。
-fn create_plane_srv(
-    device: &ID3D11Device,
-    texture: &ID3D11Texture2D,
-    format: DXGI_FORMAT,
-) -> Result<ID3D11ShaderResourceView> {
-    let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
-        Format: format,
-        ViewDimension: D3D_SRV_DIMENSION_TEXTURE2D,
-        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
-            Texture2D: D3D11_TEX2D_SRV {
-                MostDetailedMip: 0,
-                MipLevels: 1,
-            },
-        },
-    };
-    let mut view: Option<ID3D11ShaderResourceView> = None;
-    unsafe {
-        device.CreateShaderResourceView(texture, Some(&desc), Some(&mut view))?;
-    }
-    view.context("DXVA 平面 SRV 创建失败")
 }
 
 /// hns（100ns）转 Duration；溢出时钳到最大值，避免 panic。

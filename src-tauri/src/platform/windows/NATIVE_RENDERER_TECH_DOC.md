@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14）
+> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14；M8 WebView capability fallback 接线，见 3.15）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -107,7 +107,7 @@ pub struct RenderDescriptor {
 | 模式 | 生效条件 | 行为 |
 |------|----------|------|
 | `NativeOnly` | `cfg!(debug_assertions)` 恒真；或 release 下 `MINI_WALLPAPER_RENDERER=native` | 绝不创建 WebView；不支持格式直接报错 |
-| `Auto` | release 默认 | 当前阶段视频同样不回退 WebView；参数保留给后续动态 backend 切换（M8） |
+| `Auto` | release 默认 | 按 capability 自动分流：Native 支持表内的格式走 Native，表外的全部走 WebView fallback |
 
 ```rust
 pub fn resolve_backend(
@@ -121,12 +121,12 @@ pub fn resolve_backend(
 |------|-----------|------|
 | 图片 / GIF / WebP（静态与动态） | `Native` | `Native` |
 | `.mp4` / `.m4v` / `.mov` / `.avi` / `.wmv` / `.asf` / `.3gp` / `.3g2` / `.3gp2` / `.3gpp` | `Native`（MF 解码） | `Native`（MF 解码） |
-| `.webm` / `.mkv` | `UnsupportedFormat` 报错 | `UnsupportedFormat` 报错（M6 无 WebView fallback） |
-| 其它视频扩展名 | `UnsupportedFormat` 报错 | `UnsupportedFormat` 报错 |
+| `.webm` / `.mkv` | `UnsupportedFormat` 报错 | `WebView`（解码前 capability fallback） |
+| 其它视频扩展名 | `UnsupportedFormat` 报错 | `WebView`（同上） |
 
 上面 10 个扩展名来自微软官方 *Supported Media Formats in Media Foundation* 的 File Containers 表（3GP / ASF / AVI / MPEG-4）。声明的是「交给 Media Foundation 的 SourceReader 尝试」，不保证容器内编码一定能解：`.mp4` 里装 HEVC 但系统没装对应 codec 时，SourceReader 打开失败会通过命令 ack 回传 `DecodeFailed`，不静默黑屏、不回退 WebView。
 
-> **WebView 不是解码失败后的兜底。** 一旦 `resolve_backend` 返回 Native，SourceReader / `decode_frames` 失败都通过 mpsc + oneshot ack 回传协调器，发 `renderer-error`，不会偷偷重建 WebView 窗口。这条路是 M6 刻意验证「Native 独立链路」的一部分：本地 dev 模式下不出现 WebView2。
+> **WebView 只做解码前的 capability fallback，不是解码失败后的兜底。** 一旦 `resolve_backend` 返回 Native，SourceReader / `decode_frames` 失败都通过 mpsc + oneshot ack 回传协调器，发 `renderer-error`，不会偷偷重建 WebView 窗口。M8 把 Auto 模式的 fallback 接回后这条铁律不变：分流依据是「容器在不在 MF 支持表」，不是「这次解码成不成功」。本地 dev 默认 NativeOnly，仍不出现 WebView2。
 
 ### 2.4 错误上报链路
 
@@ -404,7 +404,7 @@ Windows 实机确认：**图片 extend 与 mirror 均可正常渲染**。这一�
 
 **为什么不用 `SharedFrames` 装视频帧**：一段 30fps / 4K / 10s 视频，全帧 BGRA 约 10GB，常驻必然爆显存。视频改为流式：SourceReader 按 100ns 时间戳逐帧取出，上传进**一张**复用的 D3D11 纹理，所有 surface 绑定同一个 SRV。`SharedFrames` 继续服务图片 / GIF / 动态 WebP，两套机制并存于 `WallpaperMedia` 枚举。
 
-**支持的扩展名**（来自微软官方 *Supported Media Formats in Media Foundation* 的 File Containers 表）：`.mp4` / `.m4v` / `.mov` / `.avi` / `.wmv` / `.asf` / `.3gp` / `.3g2` / `.3gp2` / `.3gpp`。`wallpaper_service::VIDEO_EXTENSIONS` 同步补齐，`.m4v` 等此前无法导入的裂缝一并修掉。`.webm` / `.mkv` 保留导入但 `resolve_backend` 明确 `UnsupportedFormat`，当前阶段不回退 WebView。
+**支持的扩展名**（来自微软官方 *Supported Media Formats in Media Foundation* 的 File Containers 表）：`.mp4` / `.m4v` / `.mov` / `.avi` / `.wmv` / `.asf` / `.3gp` / `.3g2` / `.3gp2` / `.3gpp`。`wallpaper_service::VIDEO_EXTENSIONS` 同步补齐，`.m4v` 等此前无法导入的裂缝一并修掉。`.webm` / `.mkv` 保留导入；M6 阶段 `resolve_backend` 对它们明确 `UnsupportedFormat`，WebView fallback 于 M8 才接回（见 3.15）。
 
 **解码链路**：
 
@@ -430,7 +430,7 @@ renderer loop 每帧
 
 **回执与错误**：`DesktopRenderer::ensure_monitor` / `set_wallpaper` 改为 `async`，带 `tokio::sync::oneshot` 回执。解码 / surface 失败从 renderer thread 回到协调器，发 `renderer-error` toast（此前只在日志里）。其余命令仍是 fire-and-forget。
 
-**边界与后续**：当前只接受 RGB32 输出，HEVC/AV1 依赖系统可选 codec 包，缺失时明确报错；音频不渲染（静音），音量设置对 Native 视频不生效；`.webm` / `.mkv` 的 WebView fallback 留到后续里程碑。NV12 硬解、DXVA device manager、音视频同步是下一步方向，不进 M6。
+**边界与后续**：当前只接受 RGB32 输出，HEVC/AV1 依赖系统可选 codec 包，缺失时明确报错；音频不渲染（静音），音量设置对 Native 视频不生效；`.webm` / `.mkv` 的 WebView fallback 留到后续里程碑（已在 M8 接回，见 3.15）。NV12 硬解、DXVA device manager、音视频同步是下一步方向，不进 M6。
 
 ### 3.14 M7：Native↔Native 换图 crossfade（2026-11-20）
 
@@ -461,6 +461,22 @@ shader 因此改成输出预乘色（`color.rgb *= fade_alpha; color.a = fade_al
 **连续切换用 FIFO 队列，不覆盖**：`RenderSurface` 持有 `pending: VecDeque<PendingWallpaper>`。A→B 还没结束时又来 C，C 入队；A→B 跑满 350ms 后 `finish_transition` 用同一个 `now` 立即启动 B→C，每段 fade 都完整播放。硬切（跨 backend / 首帧）会清空队列和当前 transition。代价是队列里的视频会提前 `open` 并占用一个 SourceReader，不做过度设计。
 
 **跨屏同步**：`SetWallpaper` 命令在 renderer 线程取**一个** `Instant::now()` 发给组内所有 surface，fade 起跑线一致，extend 接缝不会一侧亮一侧暗。`crossfade_progress` 是跨平台纯函数并带单测（0 / 半程 / 超界 / 零时长），Windows 专有代码只消费它。
+
+### 3.15 M8：WebView capability fallback 接线与范围收尾（2026-11-20）
+
+**范围按现状调整，不照搬原清单**。原 M8 三条逐一取证后只有一条是真缺口：
+
+| 原条目 | 取证结果 | 处置 |
+|---|---|---|
+| 明确 WebView 为 fallback backend | `resolve_backend` 无任何返回 WebView 的路径，`selection` 被 `let _ = selection` 忽略；Auto 与 NativeOnly 行为完全等价 | **接线（本次唯一代码改动）** |
+| 保留 wallpaper page 与事件链 | `src/pages/wallpaper/` + `wallpaper.html` + 5 个事件监听完整，`WindowManager` 建窗 / 嵌入 / broadcast 全在 | 已满足，不动 |
+| 清理 debug / NativeOnly 下的无效 WebView 创建路径 | debug 默认 NativeOnly，不支持格式直接报错，从不走到 `create_and_show` | 已自然满足，不删代码 |
+
+**接线方式**：`resolve_backend` 真正消费 `selection`——图片 / GIF / WebP 与 MF 容器表内 10 种视频固定 Native；表外格式在 `Auto` 下返回 `RenderBackend::WebView`，在 `NativeOnly` 下仍报 `UnsupportedFormat`。**不新增设置项**，按壁纸 capability 自动分流即用户确认的「方案 A」；`selection` 仍在进程启动时由 debug / release + `MINI_WALLPAPER_RENDERER=native` 决定。
+
+**复用的既有资产**（无需新增代码）：`apply_backend` 已处理 Native↔WebView 双向切换（Native→WebView 建窗、WebView→Native 销毁窗）；WebView 页面自己 `loadConfig` 读 DB 显示首帧，`update_window` / `notify_fit_mode_changed` / `notify_wallpaper_cleared` / `broadcast_display_mode_changed` 事件链完整；D2 降级在混合 backend 的 extend 组里已会提示一次；M7 的 crossfade 本来就只在 Native↔Native，跨 backend 继续硬切。
+
+**边界**：WebView 仍只是**解码前** capability fallback——分流依据是容器在不在 MF 支持表，不是这次解码成不成功。选定 Native 后 SourceReader 失败只回 `DecodeFailed`，不会二次回退。回退后能否播放取决于 Chromium：WebM（VP8/VP9）通常可用，MKV 支持有限，可能仍黑屏；这属于实机验收项。不因为 M8 恢复 fallback 就修改 M6 的错误语义或 M7 的动画语义。
 
 ---
 
@@ -585,7 +601,8 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **视频播放状态只在 renderer 线程推进** | 视频用 `Arc<Mutex<VideoPlayback>>`，组级每帧只 advance 一次；不进 `FrameCache` | 与图片的 `SharedFrames` 是两套机制：视频是流式常驻一个播放状态，不是全帧缓存。跨屏同帧由「同一 Arc + 一次推进」保证，见 3.13 |
 | **WebView / Native 坐标系差异** | 物理像素（Native）vs 逻辑像素（WebView CSS，除以 `scaleFactor()`）；`WebviewWindowBuilder` 直接接收物理值存在既有 DPI 偏差 | Q2 决定 M5 只保证 Native 内部统一，WebView 侧 DPI 另立条目；D2 保证同一组不会混用两套坐标 |
 | **混合 backend 时 extend 降级** | D2：组内出现非 Native backend 时整组退回逐屏独立渲染 | 若未来要求混合组也拼接，需先统一两套几何与帧时钟；17:27 决策明确不重写 WebView 侧行为 |
-| **运行时动态 backend 切换** | `apply_backend` 已支持跨 backend 切换（先销毁旧目标再建新目标），但 `selection` 在 `RenderCoordinator::new` 时固定 | 运行时切换推到 M8 |
+| **selection 仍固定在启动阶段** | M8 已让 `apply_backend` 按每次壁纸的 capability 跨 backend 切换；但 `selection` 本身在 `RenderCoordinator::new` 时固定 | 用户确认方案 A：不新增设置项，不做运行时切 NativeOnly/Auto |
+| **WebView fallback 可播性依赖 Chromium** | Auto 下 MF 容器表外的格式回退到 `wallpaper.html`；WebM（VP8/VP9）通常可用，MKV 支持有限 | 回退成功 ≠ 一定能播；仍只是 capability fallback，不是解码失败兜底，列最终实机验收 |
 | **视频静音** | SourceReader 只选视频流、关音频流；`VideoPlayback` 不做音频渲染 | 用户确认「M6 先静音，后面补」；当前 WebView 侧的 volume 设置对 Native 视频不生效 |
 | **无 HTML 网页壁纸** | 产品边界决策 | 见 1.3 |
 | **DWM 圆角 ~1px** | 继承自 `desktop_embedder`，选择接受 | 见关联文档 |
@@ -763,7 +780,10 @@ b2a01a0  refactor: remove native renderer troubleshooting diagnostics
          ↓ 63067b3 feat: add native video decoding via Media Foundation
          ↓ M7：Native↔Native 换图 crossfade / 两 pass 预乘 alpha blend /
            FIFO fade 队列 / 视频冻结与时钟重置 / 跨屏统一起跑线
-         ↓ HEAD    feat: add native crossfade between wallpapers（当前版本 ⭐）
+         ↓ 7f3ab17 feat: add native crossfade between wallpapers
+         ↓ M8：Auto 模式 capability fallback 接线 / 按壁纸格式自动切 backend /
+           wallpaper page 与事件链保留 / 不新增设置项
+         ↓ HEAD    feat: restore WebView capability fallback（当前版本 ⭐）
 ```
 
 merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
@@ -811,33 +831,36 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
 M7 阶段回归：`cargo fmt --all --check`、`cargo test --lib` **51 passed**（`crossfade_progress` 边界单测）、`tsc --noEmit`、`oxlint`（118 文件）0 warning / 0 error。probe 同步 blend state / cbuffer / transition 队列后跑 Windows target `cargo check`，0 error / 0 warning；期间抓到一个类型陷阱：`D3D11_COLOR_WRITE_ENABLE_ALL` 是 windows crate 的 newtype，不能直接 `as u8`，必须 `.0 as u8`。
 
+M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报错」单测合并为一个 `unsupported_video_falls_back_only_in_auto`（webm / mkv / flv × Auto / NativeOnly），数量净 -1 但覆盖面扩大。改动只在跨平台 `selection.rs` 与注释，Windows 渲染器代码未动，probe 无需同步。按用户 14:05 的决策，**M6 起实机验证统一后置最终验收**，本阶段不再逐项确认。
+
 ### 8.5 历史收束
 
 21 个中间 commit（含 8 个纯诊断 log）压缩为一个 commit，去除冗余 log 与排查脚手架，force push 到 `feature/native-wallpaper-renderer`。本技术文档与最终代码状态一并入提交。
 
 ---
 
-## 九、后续优化方向（M7+）
+## 九、后续优化方向（M8+）
 
 **M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。**图片 extend / mirror 已 Windows 实机验证通过（3.11）**，负 viewport 与共享 SRV 两个核心风险已关闭。
 
 **M7 已完成**（见 3.14）：Native↔Native 换图 350ms crossfade，两 pass 预乘 alpha blend，四种媒体组合全覆盖；视频在 fade 期间冻结，to 为视频时 fade 结束才从 0 计时；连续切换走 FIFO 队列，跨 backend / 首帧硬切。画面效果与 M6 视频一并留到 Windows 最终统一验收，**本阶段只完成编译、单测与交叉检查**。
 
-**M8 尚未评审**：按用户要求不在 M7 一起展开，到 M8 时结合已有实现适度调整适用范围（明确 WebView 为 fallback backend、保留 wallpaper page 与事件链、清理 NativeOnly 下的无效 WebView 创建路径）。
+**M8 已完成**（见 3.15）：范围按现状收窄为「Auto 模式 capability fallback 接线」——原清单三条中两条早已满足，不新增设置项、不删 WebView 资产。按壁纸格式自动切 backend 的能力由此真正生效；`selection` 仍在启动阶段固定。按用户要求，M6 起所有实机验证统一后置最终验收，不再逐项确认。
 
 **性能收束已完成**（`d639b63`，见 3.12）：dev profile 优化把 O0 的 15~85 倍退化拉回正常量级，`FrameCache` 消除重复解码与纹理上传。注意它**没有削减单次解码**，release 下高分辨率大图的 `image::open` 成本仍在，因此下表新增两条 P1。剩余项：
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
-| ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态，`.webm` / `.mkv` 明确报错 |
-| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast；**M7 新增**：四种 crossfade 组合、extend 接缝明暗一致、连续切换队列每段跑满 350ms |
+| ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态；表外格式的 WebView fallback 见 M8（3.15） |
+| ~~**P1**~~ | ~~WebView fallback 接线（M8）~~ | **已完成（3.15）**：Auto 下表外格式回 WebView，NativeOnly 下报错；页面与事件链原样复用 |
+| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast；**M7 新增**：四种 crossfade 组合、extend 接缝明暗一致、连续切换队列每段跑满 350ms；**M8 新增**：Auto 下 webm/mkv 回退 WebView 后能否实际播放、切回 Native 可支持格式时 WebView 窗口销毁、混合 backend 的 D2 降级提示 |
 | **P1** | 按目标分辨率降采样解码 | 当前 `upload_frames` 按原始尺寸建纹理，8K 图在 1080p 屏上仍上传 126MB。用 WIC / 更快的解码器在解码阶段就按目标尺寸取样，是**唯一能真正削减单次 ~75ms（4K JPEG）** 的路；改动最大，需 Windows 实机验证 |
 | **P1** | 解码移出渲染线程 + 保留旧帧 | `upload_frames` 现在同步跑在 `try_recv` 分支，解码期间所有 surface 停帧。改为专用解码线程、新帧就绪前保留上一张，可让切换不再顿；需处理连点取消与命令去重 |
 | P1 | 超大素材的连续命令合并 | 单份 >192MiB 不进缓存（见 5.3），同步模式下仍会重复解码；可在 renderer loop 内把一批连续同 key 的 `SetWallpaper` 合并成一次，无需常驻显存 |
 | ~~P1~~ | ~~渲染命令 ack~~ | **已完成（3.13 / 2.4）**：`ensure_monitor` / `set_wallpaper` 带 oneshot 回执，失败回传 `renderer-error` |
 | P1 | 视频音频 / NV12 硬解 | M6 静音且只接 RGB32；下一步接 IMFSourceReader 音频流 + volume，以及 NV12 → shader YUV 转换 / DXVA device manager 降低 4K 视频 CPU 开销 |
 | P1 | WebView 侧 DPI 偏差 | `WebviewWindowBuilder` 直接接收物理像素，`useExtendViewport` 又除以 `scaleFactor()`；Q2 决定另立条目处理，不在 M5 扩散 |
-| P2 | 运行时动态 backend 切换 | `selection` 可运行时更新，配合设置项暴露（原计划 M8） |
+| P2 | `selection` 运行时切换 | 按壁纸 capability 的自动切换已在 M8 生效；`selection` 本身仍固定在启动阶段，运行时切 NativeOnly/Auto 需新设置项，用户确认不做 |
 | P2 | 设备丢失恢复 | 消费 `DeviceLost`，处理 `DXGI_ERROR_DEVICE_REMOVED` / `ResizeBuffers` 失败后的重建 |
 | P2 | 显示器热插拔事件化 | 用 Tauri 原生显示器事件替代 5s 轮询；`refresh_group_geometry()` 已具备全组刷新能力，只差事件源 |
 | P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |

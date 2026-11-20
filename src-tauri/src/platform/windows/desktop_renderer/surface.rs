@@ -447,7 +447,8 @@ impl RenderSurface {
     }
 
     /// 挂上一张新壁纸。`crossfade = false`（跨 backend / 首帧）直接替换并丢弃队列；
-    /// `true` 时入 FIFO 队列，当前没有 fade 才立即启动下一段。
+    /// `true` 时保留当前 fade，但排队项只保留最新一张——每个视频都持有独立
+    /// DXVA worker / D3D11 device / SourceReader，FIFO 堆积会让连续切换暴涨内存。
     pub fn queue_wallpaper(
         &mut self,
         media: WallpaperMedia,
@@ -462,6 +463,9 @@ impl RenderSurface {
             self.fit_mode = fit_mode;
             return;
         }
+        // 只保留最新排队项；被丢弃的 Arc 会立即触发 VideoPlayback::Drop，
+        // worker 收到 Exit 后释放 SourceReader / device manager / shared texture。
+        self.pending.clear();
         self.pending.push_back(PendingWallpaper { media, fit_mode });
         if self.transition.is_none() {
             self.start_next_transition(now);

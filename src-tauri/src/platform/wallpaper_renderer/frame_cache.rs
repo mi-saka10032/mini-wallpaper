@@ -17,9 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-/// 缓存显存预算。按字节而非条目数封顶：一张 8K 图就是 126MB，
-/// 固定 8 条在 8K 素材下会轻松吃到 1GB。192MiB ≈ 6 张 4K 或 1 张 8K + 2 张 4K。
-pub const DEFAULT_MAX_BYTES: usize = 192 * 1024 * 1024;
+/// 缓存显存预算。Native renderer 和主进程同生命周期，缓存过大等价于把 WebView
+/// 进程的解码常驻直接搬进主进程；这里压到 64MiB ≈ 1 张 4K 或 8 张 1080p。
+/// 8K 单帧本身约 126MiB，超出预算不会入缓存，仍由当前 surface 的 Arc 持有。
+pub const DEFAULT_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// 缓存值必须能报出自己占多少显存，用于字节预算淘汰。
 pub trait ByteSize {

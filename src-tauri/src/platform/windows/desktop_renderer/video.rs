@@ -128,6 +128,7 @@ pub struct VideoPlayback {
     paused_at: Option<Instant>,
     frame_time: Duration,
     frame_duration: Duration,
+    label: String,
 }
 
 impl VideoPlayback {
@@ -193,6 +194,7 @@ impl VideoPlayback {
             paused_at: None,
             frame_time: Duration::ZERO,
             frame_duration: Duration::from_millis(40),
+            label,
         })
     }
 
@@ -289,6 +291,7 @@ impl VideoPlayback {
 
 impl Drop for VideoPlayback {
     fn drop(&mut self) {
+        log::info!("[VideoHw] 释放 VideoPlayback file={}", self.label);
         let _ = self.commands.send(WorkerCommand::Exit);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -516,6 +519,16 @@ struct DxvaPipeline {
     first_frame_logged: bool,
     stage_logged: bool,
     blt_error_logged: bool,
+}
+
+impl Drop for DxvaPipeline {
+    fn drop(&mut self) {
+        // OpenDeviceHandle 持有 device manager 的引用；不开 Close 会让每个 VideoPlayback
+        // 的 handle 一直挂住 worker device / SourceReader 资源。
+        unsafe {
+            let _ = self.manager.CloseDeviceHandle(self.manager_handle);
+        }
+    }
 }
 
 impl DxvaPipeline {
@@ -787,7 +800,9 @@ impl DxvaPipeline {
                 )?;
             }
             let input_view = input_view.context("VideoProcessor input view 创建失败")?;
-            let stream = D3D11_VIDEO_PROCESSOR_STREAM {
+            // pInputSurface 是 ManuallyDrop：VideoProcessorBlt 不会替我们释放 COM 引用，
+            // 每帧不手动 drop 就会累积 input view，拖动 decoder surface 引用导致内存持续上涨。
+            let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
                 Enable: BOOL(1),
                 pInputSurface: ManuallyDrop::new(Some(input_view)),
                 ..Default::default()
@@ -795,11 +810,18 @@ impl DxvaPipeline {
             if !self.first_frame_logged {
                 log::info!("[VideoHw] 开始首帧 VideoProcessorBlt file={}", self.label);
             }
-            unsafe {
-                video_context.VideoProcessorBlt(&processor, &output_view, 0, &[stream])?;
-                // 必须把 VP 命令刷入 GPU 队列后再释放 key1，否则 renderer 可能拷到旧帧。
-                self.context.Flush();
-            }
+            let blt_result = unsafe {
+                video_context.VideoProcessorBlt(
+                    &processor,
+                    &output_view,
+                    0,
+                    std::slice::from_ref(&stream),
+                )
+            };
+            unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
+            blt_result?;
+            // 必须把 VP 命令刷入 GPU 队列后再释放 key1，否则 renderer 可能拷到旧帧。
+            unsafe { self.context.Flush() };
             Ok(())
         })();
         let release_key = if result.is_ok() { 1 } else { 0 };

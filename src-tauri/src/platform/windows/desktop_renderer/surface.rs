@@ -37,7 +37,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
-use super::video::VideoPlayback;
+use super::video::{VideoFrameSnapshot, VideoPlayback};
 use super::window::NativeWindow;
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
@@ -654,32 +654,27 @@ impl RenderSurface {
     fn draw_media(&self, media: &WallpaperMedia, fit_mode: FitMode, alpha: f32, now: Instant) {
         // 先取出 (SRV, 宽, 高)，两条媒体链路在这一步之后完全共用同一套 quad / viewport。
         // VideoPlayback 的时钟由 renderer loop 在绘制整组前统一推进，这里只读当前帧。
-        let current: Option<(
-            ID3D11ShaderResourceView,
-            Option<ID3D11ShaderResourceView>,
-            u32,
-            u32,
-        )> = match media {
+        let current: Option<VideoFrameSnapshot> = match media {
             WallpaperMedia::Frames(frames) => {
                 let frame = frames.current_frame(now);
-                Some((frame.view.clone(), None, frame.width, frame.height))
+                Some(VideoFrameSnapshot::for_static_frame(
+                    frame.view.clone(),
+                    frame.width,
+                    frame.height,
+                ))
             }
             WallpaperMedia::Video(playback) => playback
                 .lock()
                 .ok()
-                .and_then(|guard| guard.frame_snapshot())
-                .map(|snapshot| {
-                    (
-                        snapshot.view,
-                        snapshot.uv_view,
-                        snapshot.width,
-                        snapshot.height,
-                    )
-                }),
+                .and_then(|guard| guard.frame_snapshot()),
         };
-        let Some((view, uv_view, frame_width, frame_height)) = current else {
+        let Some(current) = current else {
             return;
         };
+        let view = current.view.clone();
+        let uv_view = current.uv_view.clone();
+        let frame_width = current.width;
+        let frame_height = current.height;
 
         let pipeline = &self.pipeline;
         let vertex_buffers = [Some(pipeline.vertex_buffer.clone())];
@@ -762,6 +757,8 @@ impl RenderSurface {
             self.context.RSSetState(&pipeline.rasterizer_state);
             self.context.RSSetViewports(Some(&[viewport]));
             self.context.Draw(4, 0);
+            // DXVA worker 等待 key 0 才能覆盖共享纹理；绘制提交后立即归还。
+            current.release();
         }
     }
 

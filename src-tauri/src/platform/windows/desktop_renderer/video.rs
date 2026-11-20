@@ -427,14 +427,16 @@ impl VideoPlayback {
         let mut timestamp = 0i64;
         let mut sample: Option<IMFSample> = None;
         unsafe {
-            self.reader.ReadSample(
-                MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                0,
-                None,
-                Some(&mut flags),
-                Some(&mut timestamp),
-                Some(&mut sample),
-            )?;
+            self.reader
+                .ReadSample(
+                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                    0,
+                    None,
+                    Some(&mut flags),
+                    Some(&mut timestamp),
+                    Some(&mut sample),
+                )
+                .context("ReadSample 读取视频帧失败")?;
         }
 
         if (flags as i32) & MF_SOURCE_READERF_ENDOFSTREAM.0 != 0 || sample.is_none() {
@@ -453,7 +455,8 @@ impl VideoPlayback {
             self.loop_duration = frame_time.saturating_add(frame_duration);
         }
 
-        let buffer = unsafe { sample.ConvertToContiguousBuffer() }?;
+        let buffer = unsafe { sample.ConvertToContiguousBuffer() }
+            .context("IMFSample 转为连续缓冲区失败")?;
         let read_elapsed = read_started.elapsed();
 
         let upload_started = Instant::now();
@@ -477,7 +480,11 @@ impl VideoPlayback {
         let mut ptr: *mut u8 = ptr::null_mut();
         let mut max_len = 0u32;
         let mut current_len = 0u32;
-        unsafe { buffer.Lock(&mut ptr, Some(&mut max_len), Some(&mut current_len))? };
+        unsafe {
+            buffer
+                .Lock(&mut ptr, Some(&mut max_len), Some(&mut current_len))
+                .context("锁定视频 sample 缓冲区失败")?
+        };
         let result = (|| -> Result<()> {
             if ptr.is_null() {
                 return Err(anyhow!("Video sample 缓冲区指针为空"));
@@ -485,9 +492,11 @@ impl VideoPlayback {
             let buffer_len = max_len.max(current_len) as usize;
             let media_type = unsafe {
                 self.reader
-                    .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
+                    .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+                    .context("读取当前视频媒体类型失败")?
             };
-            let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE)? };
+            let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE) }
+                .context("读取视频帧尺寸 MF_MT_FRAME_SIZE 失败")?;
             let width = (frame_size >> 32) as u32;
             let height = frame_size as u32;
             if width == 0 || height == 0 {
@@ -498,7 +507,9 @@ impl VideoPlayback {
                 VideoPixelFormat::Bgra8 => width as usize * 4,
                 VideoPixelFormat::Nv12 => width as usize,
             };
-            let raw_stride = unsafe { media_type.GetUINT64(&MF_MT_DEFAULT_STRIDE)? } as i64;
+            // NV12 的 MF_MT_DEFAULT_STRIDE 并非所有解码器都会提供；缺失时按无 padding 处理。
+            let raw_stride =
+                unsafe { media_type.GetUINT64(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(0) as i64;
             let stride = if raw_stride == 0 {
                 row_bytes
             } else {

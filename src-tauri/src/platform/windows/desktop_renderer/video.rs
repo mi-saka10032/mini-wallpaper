@@ -692,6 +692,7 @@ struct VideoSession {
     processor: Option<ID3D11VideoProcessor>,
     shared_texture: Option<ID3D11Texture2D>,
     shared_info: Option<SharedFrameInfo>,
+    output_texture: Option<ID3D11Texture2D>,
     output_view: Option<ID3D11VideoProcessorOutputView>,
     width: u32,
     height: u32,
@@ -760,6 +761,7 @@ impl VideoSession {
             processor: None,
             shared_texture: None,
             shared_info: None,
+            output_texture: None,
             output_view: None,
             width: 0,
             height: 0,
@@ -839,6 +841,31 @@ impl VideoSession {
             ));
         }
         let processor = unsafe { gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
+
+        // VideoProcessorBlt 不直接写 shared keyed-mutex texture；先写 worker 私有纹理，
+        // 成功后由 worker context CopyResource 到 shared texture，避免 OUTPUTHAZARD。
+        let output_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut output_texture: Option<ID3D11Texture2D> = None;
+        unsafe {
+            gpu.device
+                .CreateTexture2D(&output_desc, None, Some(&mut output_texture))?
+        };
+        let output_texture = output_texture.context("VideoProcessor 私有输出纹理创建失败")?;
+
         let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
             Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
@@ -848,7 +875,7 @@ impl VideoSession {
         let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
         unsafe {
             gpu.video_device.CreateVideoProcessorOutputView(
-                &texture,
+                &output_texture,
                 &enumerator,
                 &view_desc,
                 Some(&mut output_view),
@@ -868,6 +895,7 @@ impl VideoSession {
             width,
             height,
         });
+        self.output_texture = Some(output_texture);
         self.enumerator = Some(enumerator);
         self.processor = Some(processor);
         self.output_view = Some(output_view);
@@ -922,6 +950,7 @@ impl VideoSession {
 
     fn process_sample(&mut self, gpu: &WorkerGpu, decoded: &DecodedSample) -> Result<bool> {
         let output_view = self.output_view.clone().context("VideoProcessor 未就绪")?;
+        let output_texture = self.output_texture.clone().context("私有输出纹理未就绪")?;
         let processor = self.processor.clone().context("VideoProcessor 未就绪")?;
         let enumerator = self
             .enumerator
@@ -1028,7 +1057,12 @@ impl VideoSession {
                     self.media_type_diag()
                 )
             })?;
-            unsafe { gpu.context.Flush() };
+            unsafe {
+                // Blt 只写 worker 私有纹理；确认 GPU 完成写入后再复制到 shared texture。
+                gpu.context.Flush();
+                gpu.context.CopyResource(&shared_texture, &output_texture);
+                gpu.context.Flush();
+            }
             Ok(())
         })();
         let release_key = if result.is_ok() { 1 } else { 0 };

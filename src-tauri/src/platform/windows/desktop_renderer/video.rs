@@ -524,10 +524,16 @@ impl WorkerGpu {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
         let base_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
-        #[cfg(debug_assertions)]
-        let flags = base_flags | D3D11_CREATE_DEVICE_DEBUG;
-        #[cfg(not(debug_assertions))]
-        let flags = base_flags;
+        // D3D11 debug layer 会为对象生命周期跟踪持有内部引用，长期运行的 dev 构建里
+        // 会让“已释放资源”仍计入内存；默认关闭，需要时用环境变量显式打开。
+        let debug_layer = std::env::var("MINI_WALLPAPER_D3D11_DEBUG")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let flags = if debug_layer {
+            base_flags | D3D11_CREATE_DEVICE_DEBUG
+        } else {
+            base_flags
+        };
         unsafe {
             match D3D11CreateDevice(
                 Some(&adapter),
@@ -540,9 +546,15 @@ impl WorkerGpu {
                 None,
                 Some(&mut context),
             ) {
-                Ok(()) => {}
-                #[cfg(debug_assertions)]
+                Ok(()) => {
+                    if debug_layer {
+                        log::warn!("[VideoHw] D3D11 debug layer 已启用");
+                    }
+                }
                 Err(err) => {
+                    if !debug_layer {
+                        return Err(err.into());
+                    }
                     // Debug layer 未安装时不能阻断正常运行；回退到无 debug 的普通 device。
                     log::warn!(
                         "[VideoHw] D3D11 debug layer 不可用，回退普通 device: {:#}",
@@ -562,8 +574,6 @@ impl WorkerGpu {
                         Some(&mut context),
                     )?;
                 }
-                #[cfg(not(debug_assertions))]
-                Err(err) => return Err(err.into()),
             }
         }
         let device = device.context("DXVA worker device 创建失败")?;

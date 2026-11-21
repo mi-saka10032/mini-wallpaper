@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::surface::{RenderSurface, SharedDevice, SharedFrames, WallpaperMedia};
-use super::video::{startup as mf_startup, VideoPlayback};
+use super::video::{shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback};
 use crate::platform::wallpaper_renderer::frame_cache::{cache_key, FrameCache};
 use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 
@@ -220,12 +220,16 @@ fn run(receiver: Receiver<RendererCommand>) {
 
     // Media Foundation 的 SourceReader 依赖 MF 平台已启动；失败时图片链路照常工作，
     // 只有视频会打开失败并把错误回传给协调器。
-    if let Err(err) = mf_startup() {
-        log::error!(
-            "[Renderer] Media Foundation 初始化失败，视频壁纸不可用: {:#}",
-            err
-        );
-    }
+    let mf_started = match mf_startup() {
+        Ok(()) => true,
+        Err(err) => {
+            log::error!(
+                "[Renderer] Media Foundation 初始化失败，视频壁纸不可用: {:#}",
+                err
+            );
+            false
+        }
+    };
 
     // 所有 surface 共用一个 device；SRV 不能跨 device 绑定，而 extend 组要求同纹理同帧。
     let shared = match SharedDevice::new() {
@@ -292,10 +296,21 @@ fn run(receiver: Receiver<RendererCommand>) {
                     // 视频走流式：一次打开、组内共享一个 Arc；图片/GIF/WebP 走缓存。
                     // 两条链路都必须先构造出媒体内容，再挂到每个 surface，避免半挂状态。
                     let result: Result<WallpaperMedia> = match kind {
-                        WallpaperKind::Video => shared
-                            .open_video(&path, volume)
-                            .map(WallpaperMedia::Video)
-                            .with_context(|| format!("视频解码失败 {:?}", path)),
+                        WallpaperKind::Video => {
+                            let identity = VideoIdentity::from_path(&path);
+                            if let Some(existing) = find_reusable_video(&surfaces, &identity) {
+                                log::info!(
+                                    "[Renderer] 复用已有视频播放状态 {:?}",
+                                    path.file_name().unwrap_or_default()
+                                );
+                                Ok(WallpaperMedia::Video(existing))
+                            } else {
+                                shared
+                                    .open_video(&path, volume)
+                                    .map(WallpaperMedia::Video)
+                                    .with_context(|| format!("视频解码失败 {:?}", path))
+                            }
+                        }
                         _ => frame_cache
                             .get_or_insert_with(cache_key(&path), || {
                                 shared.upload_frames(&path, kind)
@@ -439,6 +454,37 @@ fn run(receiver: Receiver<RendererCommand>) {
     for (_, mut surface) in surfaces {
         surface.destroy();
     }
+    // 所有 SourceReader / worker 已随 surface 释放；先释放 D3D11，再关闭 MF 平台，
+    // 保证 MFStartup / MFShutdown 成对，且不会从工作队列线程调用 shutdown。
+    drop(frame_cache);
+    drop(shared);
+    if mf_started {
+        if let Err(err) = mf_shutdown() {
+            log::warn!("[Renderer] Media Foundation 关闭失败: {:#}", err);
+        }
+    }
+}
+
+/// 同一份视频在 current / transition / pending 中已经存在时直接复用，不再开新 worker。
+fn find_reusable_video(
+    surfaces: &HashMap<String, RenderSurface>,
+    identity: &VideoIdentity,
+) -> Option<Arc<Mutex<VideoPlayback>>> {
+    let mut seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    for surface in surfaces.values() {
+        for playback in surface.video_arcs() {
+            let ptr = Arc::as_ptr(playback);
+            if !seen.insert(ptr) {
+                continue;
+            }
+            if let Ok(guard) = playback.lock() {
+                if guard.identity() == identity {
+                    return Some(playback.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 每帧对所有唯一 VideoPlayback 做一次共享帧刷新。

@@ -8,12 +8,12 @@
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use windows::core::{Interface, BOOL, GUID};
@@ -40,7 +40,7 @@ use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice, IDXGIKeyedMutex,
 use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaType, IMFSample, IMFSourceReader,
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType, MFCreateSourceReaderFromURL,
-    MFMediaType_Video, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
+    MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
     MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
     MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
     MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_DISABLE_DXVA,
@@ -51,6 +51,31 @@ use super::audio::AudioPlayback;
 
 pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("Media Foundation 初始化失败")
+}
+
+/// 只在 renderer 退出、所有 SourceReader / worker 都已经释放后调用一次。
+/// MFStartup / MFShutdown 必须成对，否则 MF 平台 work queue / codec cache 会常驻到进程退出。
+pub fn shutdown() -> Result<()> {
+    unsafe { MFShutdown() }.context("Media Foundation 关闭失败")
+}
+
+/// 视频身份：同一路径 + 长度 + mtime 视为同一份视频，避免重复打开 worker。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoIdentity {
+    path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl VideoIdentity {
+    pub fn from_path(path: &Path) -> Self {
+        let metadata = std::fs::metadata(path).ok();
+        Self {
+            path: path.to_path_buf(),
+            len: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+            modified: metadata.and_then(|m| m.modified().ok()),
+        }
+    }
 }
 
 /// renderer 实际绘制的帧。视频帧始终来自 renderer 自己的本地纹理，
@@ -129,6 +154,7 @@ pub struct VideoPlayback {
     frame_time: Duration,
     frame_duration: Duration,
     label: String,
+    identity: VideoIdentity,
 }
 
 impl VideoPlayback {
@@ -143,6 +169,7 @@ impl VideoPlayback {
             .and_then(|value| value.to_str())
             .unwrap_or("<unknown>")
             .to_string();
+        let identity = VideoIdentity::from_path(path);
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(SharedState::default()));
@@ -195,6 +222,7 @@ impl VideoPlayback {
             frame_time: Duration::ZERO,
             frame_duration: Duration::from_millis(40),
             label,
+            identity,
         })
     }
 
@@ -258,6 +286,10 @@ impl VideoPlayback {
 
     /// renderer 每帧开始时调用一次：尝试把 worker 产出的共享帧复制到本地纹理。
     /// 没有新帧时保留本地上一帧，所有 surface 继续显示同一画面，避免双屏闪烁。
+    pub fn identity(&self) -> &VideoIdentity {
+        &self.identity
+    }
+
     pub fn begin_frame(&mut self) {
         let Some(frame) = self.frame.as_ref() else {
             return;

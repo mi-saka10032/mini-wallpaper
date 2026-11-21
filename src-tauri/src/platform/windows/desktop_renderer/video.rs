@@ -1,15 +1,17 @@
-//! DXVA 硬件解码视频链路：解码与 GPU 处理隔离到独立 worker，renderer 只读共享纹理。
+//! DXVA 硬件解码视频链路：所有视频 session 由一个全局 worker 管理，renderer 只读本地纹理。
 //!
 //! 为什么单独 worker：MF 解码器、SourceReader、device manager 会在自己的线程占用 D3D11
 //! device；renderer 直接消费 DXVA sample 会争抢同一个 device/context，表现为 device removed
-//! 或线程冻结。这里让 worker 独占解码设备，VideoProcessor 输出到 keyed-mutex 共享纹理，
-//! renderer 只打开该纹理并短暂持有 mutex 绘制。
+//! 或线程冻结。这里让全局 worker 独占解码设备，多个视频以 session 形式共存，VideoProcessor
+//! 输出到 keyed-mutex 共享纹理，renderer 只打开该纹理并短暂持有 mutex 复制本地纹理。
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -44,9 +46,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType, MFCreateSourceReaderFromURL,
     MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
     MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
-    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_DISABLE_DXVA,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
+    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 use super::audio::AudioPlayback;
@@ -100,7 +101,7 @@ impl VideoFrameSnapshot {
     }
 }
 
-/// DXVA worker 写入的 shared texture，以及 renderer 私有的本地副本。
+/// renderer 侧持有的视频帧资源：shared texture 只用于同步复制，实际绘制读本地 NV12。
 struct VideoFrameSource {
     shared_texture: ID3D11Texture2D,
     keyed_mutex: IDXGIKeyedMutex,
@@ -128,24 +129,108 @@ struct SharedFrameInfo {
 }
 
 enum WorkerCommand {
-    Exit,
+    OpenSession {
+        id: u64,
+        path: PathBuf,
+        state: Arc<Mutex<SharedState>>,
+        ack: Sender<Result<SharedFrameInfo>>,
+    },
+    CloseSession {
+        id: u64,
+    },
     Pause {
+        id: u64,
         paused: bool,
         now: Instant,
     },
     Reset {
+        id: u64,
         now: Instant,
         ack: Sender<Result<()>>,
     },
+    Shutdown,
 }
 
-enum WorkerEvent {
-    Frame(SharedFrameInfo),
+struct VideoWorkerInner {
+    commands: Mutex<Sender<WorkerCommand>>,
+    next_id: AtomicU64,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
+impl Drop for VideoWorkerInner {
+    fn drop(&mut self) {
+        let _ = self.commands.lock().unwrap().send(WorkerCommand::Shutdown);
+        if let Some(worker) = self.worker.lock().unwrap().take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// 全局视频 worker 的可克隆 handle。真正线程与 session map 都在 worker 内。
+#[derive(Clone)]
+pub struct VideoWorkerHost {
+    inner: Arc<VideoWorkerInner>,
+}
+
+impl VideoWorkerHost {
+    pub fn start(renderer_device: &ID3D11Device) -> Result<Self> {
+        let (commands, receiver) = mpsc::channel();
+        let worker_device = renderer_device.clone();
+        let worker = thread::Builder::new()
+            .name("wallpaper-video-worker".to_string())
+            .spawn(move || {
+                if let Err(err) = video_worker_main(&worker_device, receiver) {
+                    log::error!("[VideoHw] worker 退出: {:#}", err);
+                }
+            })
+            .context("全局 DXVA worker 线程创建失败")?;
+
+        Ok(Self {
+            inner: Arc::new(VideoWorkerInner {
+                commands: Mutex::new(commands),
+                next_id: AtomicU64::new(1),
+                worker: Mutex::new(Some(worker)),
+            }),
+        })
+    }
+
+    fn next_session_id(&self) -> u64 {
+        self.inner.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn send(&self, command: WorkerCommand) -> Result<()> {
+        self.inner
+            .commands
+            .lock()
+            .unwrap()
+            .send(command)
+            .context("全局 DXVA worker 命令通道关闭")
+    }
+
+    fn open_session(
+        &self,
+        path: &Path,
+        state: Arc<Mutex<SharedState>>,
+    ) -> Result<(u64, SharedFrameInfo)> {
+        let id = self.next_session_id();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.send(WorkerCommand::OpenSession {
+            id,
+            path: path.to_path_buf(),
+            state,
+            ack: ack_tx,
+        })?;
+        let info = ack_rx
+            .recv_timeout(Duration::from_secs(10))
+            .context("等待 DXVA session 打开超时")??;
+        Ok((id, info))
+    }
+}
+
+/// renderer 侧的轻量视频播放 handle；不再独占 worker / D3D11 device。
 pub struct VideoPlayback {
-    worker: Option<JoinHandle<()>>,
-    commands: Sender<WorkerCommand>,
+    worker: VideoWorkerHost,
+    session_id: u64,
     state: Arc<Mutex<SharedState>>,
     context: ID3D11DeviceContext,
     frame: Option<VideoFrameSource>,
@@ -164,6 +249,7 @@ impl VideoPlayback {
     pub fn open(
         renderer_device: &ID3D11Device,
         renderer_context: &ID3D11DeviceContext,
+        worker: &VideoWorkerHost,
         path: &Path,
         volume: u32,
     ) -> Result<Self> {
@@ -173,47 +259,28 @@ impl VideoPlayback {
             .unwrap_or("<unknown>")
             .to_string();
         let identity = VideoIdentity::from_path(path);
-        let (command_tx, command_rx) = mpsc::channel();
-        let (event_tx, event_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(SharedState::default()));
-        let worker_state = state.clone();
-        let worker_label = label.clone();
-        let worker_path = path.to_path_buf();
-        let worker_renderer_device = renderer_device.clone();
+        let (session_id, info) = worker.open_session(path, state.clone())?;
 
-        let worker = thread::Builder::new()
-            .name("wallpaper-dxva".to_string())
-            .spawn(move || {
-                if let Err(err) = worker_main(
-                    &worker_renderer_device,
-                    &worker_path,
-                    &worker_label,
-                    command_rx,
-                    event_tx,
-                    worker_state,
-                ) {
-                    log::error!("[VideoHw] worker 退出: {:#}", err);
-                }
-            })
-            .context("DXVA worker 线程创建失败")?;
-
-        let frame_info = event_rx
-            .recv_timeout(Duration::from_secs(10))
-            .context("等待 DXVA 首帧共享纹理超时")?;
-        let WorkerEvent::Frame(info) = frame_info;
-
-        let frame = open_shared_frame(renderer_device, &info)?;
+        let frame = match open_shared_frame(renderer_device, &info) {
+            Ok(frame) => frame,
+            Err(err) => {
+                let _ = worker.send(WorkerCommand::CloseSession { id: session_id });
+                return Err(err);
+            }
+        };
         let audio = AudioPlayback::open(path, volume);
 
         log::info!(
-            "[VideoHw] DXVA worker 就绪 file={} {}x{}",
+            "[VideoHw] DXVA session 就绪 id={} file={} {}x{}",
+            session_id,
             label,
             info.width,
             info.height
         );
         Ok(Self {
-            worker: Some(worker),
-            commands: command_tx,
+            worker: worker.clone(),
+            session_id,
             state,
             context: renderer_context.clone(),
             frame: Some(frame),
@@ -227,6 +294,10 @@ impl VideoPlayback {
             label,
             identity,
         })
+    }
+
+    pub fn identity(&self) -> &VideoIdentity {
+        &self.identity
     }
 
     pub fn advance(&mut self, now: Instant) -> Result<()> {
@@ -246,12 +317,14 @@ impl VideoPlayback {
 
     pub fn reset_clock(&mut self, now: Instant) -> Result<()> {
         let (ack_tx, ack_rx) = mpsc::channel();
-        self.commands
-            .send(WorkerCommand::Reset { now, ack: ack_tx })
-            .context("DXVA worker 命令通道关闭")?;
+        self.worker.send(WorkerCommand::Reset {
+            id: self.session_id,
+            now,
+            ack: ack_tx,
+        })?;
         ack_rx
             .recv_timeout(Duration::from_secs(3))
-            .context("等待 DXVA worker 重置超时")??;
+            .context("等待 DXVA session 重置超时")??;
         self.started_at = now;
         self.paused_total = Duration::ZERO;
         self.paused_at = None;
@@ -272,7 +345,11 @@ impl VideoPlayback {
             }
             _ => return,
         }
-        let _ = self.commands.send(WorkerCommand::Pause { paused, now });
+        let _ = self.worker.send(WorkerCommand::Pause {
+            id: self.session_id,
+            paused,
+            now,
+        });
     }
 
     pub fn set_audio_paused(&mut self, paused: bool) {
@@ -289,10 +366,6 @@ impl VideoPlayback {
 
     /// renderer 每帧开始时调用一次：尝试把 worker 产出的共享帧复制到本地纹理。
     /// 没有新帧时保留本地上一帧，所有 surface 继续显示同一画面，避免双屏闪烁。
-    pub fn identity(&self) -> &VideoIdentity {
-        &self.identity
-    }
-
     pub fn begin_frame(&mut self) {
         let Some(frame) = self.frame.as_ref() else {
             return;
@@ -303,7 +376,6 @@ impl VideoPlayback {
         unsafe {
             self.context
                 .CopyResource(&frame.local_texture, &frame.shared_texture);
-            // 必须让 CopyResource 进入命令队列后再把 key 还给 worker。
             self.context.Flush();
             let _ = frame.keyed_mutex.ReleaseSync(0);
         }
@@ -326,11 +398,14 @@ impl VideoPlayback {
 
 impl Drop for VideoPlayback {
     fn drop(&mut self) {
-        log::info!("[VideoHw] 释放 VideoPlayback file={}", self.label);
-        let _ = self.commands.send(WorkerCommand::Exit);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        log::info!(
+            "[VideoHw] 释放 VideoPlayback session={} file={}",
+            self.session_id,
+            self.label
+        );
+        let _ = self.worker.send(WorkerCommand::CloseSession {
+            id: self.session_id,
+        });
     }
 }
 
@@ -392,148 +467,88 @@ fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<Vi
     })
 }
 
-fn worker_main(
-    renderer_device: &ID3D11Device,
-    path: &Path,
-    label: &str,
-    commands: Receiver<WorkerCommand>,
-    events: Sender<WorkerEvent>,
-    state: Arc<Mutex<SharedState>>,
-) -> Result<()> {
-    let mut events = Some(events);
-    let (device, context) = create_worker_device(renderer_device)?;
-    let mut pipeline = DxvaPipeline::new(&device, &context, path, label)?;
-    let mut started = Instant::now();
-    let mut paused_total = Duration::ZERO;
-    let mut paused_at: Option<Instant> = None;
-    let mut cycle_base = Duration::ZERO;
-    let mut pending: Option<DecodedSample> = None;
+struct WorkerGpu {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    video_device: ID3D11VideoDevice,
+    video_context: ID3D11VideoContext,
+    manager: IMFDXGIDeviceManager,
+    manager_handle: HANDLE,
+}
 
-    loop {
-        while let Ok(command) = commands.try_recv() {
-            match command {
-                WorkerCommand::Exit => return Ok(()),
-                WorkerCommand::Pause { paused, now } => match (paused, paused_at) {
-                    (true, None) => paused_at = Some(now),
-                    (false, Some(at)) => {
-                        paused_total =
-                            paused_total.saturating_add(now.saturating_duration_since(at));
-                        paused_at = None;
-                    }
-                    _ => {}
-                },
-                WorkerCommand::Reset { now, ack } => {
-                    let result = pipeline.reset();
-                    if result.is_ok() {
-                        started = now;
-                        paused_total = Duration::ZERO;
-                        paused_at = None;
-                        cycle_base = Duration::ZERO;
-                        pending = None;
-                        let mut shared = state.lock().unwrap();
-                        shared.frame_time = Duration::ZERO;
-                        shared.frame_duration = Duration::from_millis(40);
-                        shared.loop_duration = Duration::ZERO;
-                        shared.generation = shared.generation.wrapping_add(1);
-                        shared.ready = false;
-                    }
-                    let _ = ack.send(result);
-                }
-            }
-        }
-
-        if paused_at.is_some() {
-            thread::sleep(Duration::from_millis(10));
-            continue;
-        }
-
-        let target = started.elapsed().saturating_sub(paused_total);
-        {
-            let shared = state.lock().unwrap();
-            if shared.ready && target < shared.frame_time.saturating_add(shared.frame_duration) {
-                drop(shared);
-                thread::sleep(Duration::from_millis(1));
-                continue;
-            }
-        }
-
-        let sample = match pending.take() {
-            Some(sample) => sample,
-            None => match pipeline.read_sample()? {
-                Some(sample) => sample,
-                None => {
-                    cycle_base = cycle_base.saturating_add(pipeline.loop_duration());
-                    pipeline.seek_zero()?;
-                    continue;
-                }
-            },
-        };
-
-        // 共享纹理在 read_sample() 中已创建；立刻通知 renderer，避免首帧 VideoProcessor
-        // 尚未完成时 open() 卡在等待事件上。renderer 在 state.ready 之前不会拿到帧。
-        if let Some(sender) = events.take() {
-            if sender
-                .send(WorkerEvent::Frame(pipeline.shared_frame_info().clone()))
-                .is_err()
-            {
-                return Ok(());
-            }
-        }
-
-        match pipeline.process_sample(&sample) {
-            Ok(true) => {
-                let frame_time = cycle_base.saturating_add(sample.timestamp);
-                pipeline.note_frame(frame_time, sample.duration, cycle_base.is_zero());
-                let mut shared = state.lock().unwrap();
-                shared.frame_time = frame_time;
-                shared.frame_duration = sample.duration;
-                shared.loop_duration = pipeline.loop_duration();
-                shared.ready = true;
-                drop(shared);
-                log::debug!(
-                    "[VideoHw] 首帧已提交 file={} frame_ms={:.1}",
-                    label,
-                    frame_time.as_secs_f64() * 1000.0
-                );
-            }
-            Ok(false) => {
-                pending = Some(sample);
-                thread::sleep(Duration::from_millis(1));
-            }
-            Err(err) => return Err(err),
+impl Drop for WorkerGpu {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.manager.CloseDeviceHandle(self.manager_handle);
         }
     }
 }
 
-fn create_worker_device(
-    renderer_device: &ID3D11Device,
-) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
-    let dxgi_device: IDXGIDevice = renderer_device.cast()?;
-    let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
-    unsafe {
-        D3D11CreateDevice(
-            Some(&adapter),
-            D3D_DRIVER_TYPE_UNKNOWN,
-            windows::Win32::Foundation::HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )?;
+impl WorkerGpu {
+    fn new(renderer_device: &ID3D11Device) -> Result<Self> {
+        let dxgi_device: IDXGIDevice = renderer_device.cast()?;
+        let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+        unsafe {
+            D3D11CreateDevice(
+                Some(&adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
+                windows::Win32::Foundation::HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )?;
+        }
+        let device = device.context("DXVA worker device 创建失败")?;
+        let context = context.context("DXVA worker context 创建失败")?;
+        if let Ok(multithread) = device.cast::<ID3D10Multithread>() {
+            let _ = unsafe { multithread.SetMultithreadProtected(true) };
+        } else {
+            log::warn!("[VideoHw] ID3D10Multithread 不可用，跳过多线程保护");
+        }
+
+        let mut reset_token = 0u32;
+        let mut manager: Option<IMFDXGIDeviceManager> = None;
+        unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)? };
+        let manager = manager.context("IMFDXGIDeviceManager 创建失败")?;
+        unsafe { manager.ResetDevice(&device, reset_token)? };
+        let manager_handle = unsafe { manager.OpenDeviceHandle() }?;
+
+        let video_device: ID3D11VideoDevice = device.cast()?;
+        let video_context = match (|| -> Result<ID3D11VideoContext> {
+            let mut device_raw: *mut c_void = ptr::null_mut();
+            unsafe {
+                manager.GetVideoService(manager_handle, &ID3D11Device::IID, &mut device_raw)?;
+            }
+            let device_raw = NonNull::new(device_raw).context("GetVideoService 返回空 device")?;
+            let manager_device: ID3D11Device =
+                unsafe { ID3D11Device::from_raw(device_raw.as_ptr()) };
+            let manager_context = unsafe { manager_device.GetImmediateContext()? };
+            Ok(manager_context.cast()?)
+        })() {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!(
+                    "[VideoHw] device manager 取 VideoContext 失败，改用 worker context: {:#}",
+                    err
+                );
+                context.cast()?
+            }
+        };
+        log::info!("[VideoHw] 全局 VideoContext 就绪");
+        Ok(Self {
+            device,
+            context,
+            video_device,
+            video_context,
+            manager,
+            manager_handle,
+        })
     }
-    let device = device.context("DXVA worker device 创建失败")?;
-    let context = context.context("DXVA worker context 创建失败")?;
-    // 微软文档明确建议给 MF/D3D11 共用 device 打开多线程保护，避免 VideoContext 死锁。
-    if let Ok(multithread) = device.cast::<ID3D10Multithread>() {
-        let _ = unsafe { multithread.SetMultithreadProtected(true) };
-    } else {
-        log::warn!("[VideoHw] ID3D10Multithread 不可用，跳过多线程保护");
-    }
-    Ok((device, context))
 }
 
 struct DecodedSample {
@@ -552,14 +567,10 @@ impl DecodedSample {
     }
 }
 
-struct DxvaPipeline {
+struct VideoSession {
+    id: u64,
+    state: Arc<Mutex<SharedState>>,
     reader: IMFSourceReader,
-    manager: IMFDXGIDeviceManager,
-    manager_handle: HANDLE,
-    device: ID3D11Device,
-    context: ID3D11DeviceContext,
-    video_device: ID3D11VideoDevice,
-    video_context: ID3D11VideoContext,
     enumerator: Option<ID3D11VideoProcessorEnumerator>,
     processor: Option<ID3D11VideoProcessor>,
     shared_texture: Option<ID3D11Texture2D>,
@@ -568,44 +579,25 @@ struct DxvaPipeline {
     width: u32,
     height: u32,
     loop_duration: Duration,
-    label: String,
+    started: Instant,
+    paused_total: Duration,
+    paused_at: Option<Instant>,
+    cycle_base: Duration,
+    pending: Option<DecodedSample>,
     first_frame_logged: bool,
     stage_logged: bool,
     blt_error_logged: bool,
 }
 
-impl Drop for DxvaPipeline {
-    fn drop(&mut self) {
-        // OpenDeviceHandle 持有 device manager 的引用；不开 Close 会让每个 VideoPlayback
-        // 的 handle 一直挂住 worker device / SourceReader 资源。
-        unsafe {
-            let _ = self.manager.CloseDeviceHandle(self.manager_handle);
-        }
-    }
-}
-
-impl DxvaPipeline {
-    fn new(
-        device: &ID3D11Device,
-        context: &ID3D11DeviceContext,
-        path: &Path,
-        label: &str,
-    ) -> Result<Self> {
-        let mut reset_token = 0u32;
-        let mut manager: Option<IMFDXGIDeviceManager> = None;
-        unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)? };
-        let manager = manager.context("IMFDXGIDeviceManager 创建失败")?;
-        unsafe {
-            manager.ResetDevice(device, reset_token)?;
-        }
-
+impl VideoSession {
+    fn new(gpu: &WorkerGpu, id: u64, path: &Path, state: Arc<Mutex<SharedState>>) -> Result<Self> {
         let attributes: IMFAttributes = unsafe {
             let mut value = None;
             MFCreateAttributes(&mut value, 3)?;
             value.context("MF attributes 创建失败")?
         };
         unsafe {
-            attributes.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &manager)?;
+            attributes.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &gpu.manager)?;
             attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
             attributes.SetUINT32(&MF_SOURCE_READER_DISABLE_DXVA, 0)?;
         }
@@ -633,38 +625,20 @@ impl DxvaPipeline {
                 &output_type,
             )?;
         }
-        let manager_handle = unsafe { manager.OpenDeviceHandle() }?;
-        // 微软文档：GetVideoService 只用于取 ID3D11Device / ID3D11VideoDevice，
-        // ID3D11VideoContext 必须从 ID3D11DeviceContext QueryInterface。
-        let video_context = match (|| -> Result<ID3D11VideoContext> {
-            let mut device_raw: *mut c_void = ptr::null_mut();
-            unsafe {
-                manager.GetVideoService(manager_handle, &ID3D11Device::IID, &mut device_raw)?;
-            }
-            let device_raw = NonNull::new(device_raw).context("GetVideoService 返回空 device")?;
-            let manager_device: ID3D11Device =
-                unsafe { ID3D11Device::from_raw(device_raw.as_ptr()) };
-            let manager_context = unsafe { manager_device.GetImmediateContext()? };
-            Ok(manager_context.cast()?)
-        })() {
-            Ok(value) => value,
-            Err(err) => {
-                log::warn!(
-                    "[VideoHw] device manager 取 VideoContext 失败，改用 worker context: {:#}",
-                    err
-                );
-                context.cast()?
-            }
-        };
-        log::info!("[VideoHw] VideoContext 就绪 file={}", label);
-        Ok(Self {
-            manager,
-            manager_handle,
+
+        let media_type =
+            unsafe { reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)? };
+        let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE)? };
+        let width = (frame_size >> 32) as u32;
+        let height = frame_size as u32;
+        if width == 0 || height == 0 {
+            return Err(anyhow::anyhow!("视频尺寸无效 {}x{}", width, height));
+        }
+
+        let mut session = Self {
+            id,
+            state,
             reader,
-            device: device.clone(),
-            context: context.clone(),
-            video_device: device.cast()?,
-            video_context,
             enumerator: None,
             processor: None,
             shared_texture: None,
@@ -673,11 +647,113 @@ impl DxvaPipeline {
             width: 0,
             height: 0,
             loop_duration: Duration::ZERO,
-            label: label.to_string(),
+            started: Instant::now(),
+            paused_total: Duration::ZERO,
+            paused_at: None,
+            cycle_base: Duration::ZERO,
+            pending: None,
             first_frame_logged: false,
             stage_logged: false,
             blt_error_logged: false,
-        })
+        };
+        session.ensure_output(gpu, width, height)?;
+        Ok(session)
+    }
+
+    fn shared_frame_info(&self) -> &SharedFrameInfo {
+        self.shared_info.as_ref().expect("共享纹理信息已就绪")
+    }
+
+    fn ensure_output(&mut self, gpu: &WorkerGpu, width: u32, height: u32) -> Result<()> {
+        if self.width == width && self.height == height && self.output_view.is_some() {
+            return Ok(());
+        }
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32,
+        };
+        let mut texture: Option<ID3D11Texture2D> = None;
+        unsafe {
+            gpu.device
+                .CreateTexture2D(&desc, None, Some(&mut texture))?
+        };
+        let texture = texture.context("共享视频纹理创建失败")?;
+        let resource: IDXGIResource = texture.cast()?;
+        let handle = unsafe { resource.GetSharedHandle() }?.0 as isize;
+
+        let rate = DXGI_RATIONAL {
+            Numerator: 30,
+            Denominator: 1,
+        };
+        let content = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+            InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            InputFrameRate: rate,
+            InputWidth: width,
+            InputHeight: height,
+            OutputFrameRate: rate,
+            OutputWidth: width,
+            OutputHeight: height,
+            Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+        };
+        let enumerator = unsafe { gpu.video_device.CreateVideoProcessorEnumerator(&content) }?;
+        let format_support = unsafe { enumerator.CheckVideoProcessorFormat(DXGI_FORMAT_NV12)? };
+        if format_support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32 == 0 {
+            return Err(anyhow::anyhow!(
+                "DXVA VideoProcessor 不支持 NV12 输出: support={}",
+                format_support
+            ));
+        }
+        let processor = unsafe { gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
+        let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+            ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
+                Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
+            },
+        };
+        let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
+        unsafe {
+            gpu.video_device.CreateVideoProcessorOutputView(
+                &texture,
+                &enumerator,
+                &view_desc,
+                Some(&mut output_view),
+            )?;
+        }
+        let output_view = output_view.context("VideoProcessor output view 创建失败")?;
+
+        let keyed_mutex: IDXGIKeyedMutex = texture.cast()?;
+        unsafe { keyed_mutex.AcquireSync(0, 0)? };
+        let _ = unsafe { keyed_mutex.ReleaseSync(0) };
+
+        self.width = width;
+        self.height = height;
+        self.shared_texture = Some(texture);
+        self.shared_info = Some(SharedFrameInfo {
+            handle,
+            width,
+            height,
+        });
+        self.enumerator = Some(enumerator);
+        self.processor = Some(processor);
+        self.output_view = Some(output_view);
+        log::info!(
+            "[VideoHw] session={} 共享纹理就绪 {}x{}",
+            self.id,
+            width,
+            height
+        );
+        Ok(())
     }
 
     fn read_sample(&mut self) -> Result<Option<DecodedSample>> {
@@ -699,115 +775,10 @@ impl DxvaPipeline {
         }
         let sample = sample.context("SourceReader 返回空 sample")?;
         let duration = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
-        let decoded = DecodedSample::new(sample, timestamp, duration);
-        if (flags as i32) & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 != 0 || self.width == 0 {
-            let media_type = unsafe {
-                self.reader
-                    .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
-            };
-            let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE)? };
-            let width = (frame_size >> 32) as u32;
-            let height = frame_size as u32;
-            self.ensure_output(width, height)?;
-        }
-        Ok(Some(decoded))
+        Ok(Some(DecodedSample::new(sample, timestamp, duration)))
     }
 
-    fn ensure_output(&mut self, width: u32, height: u32) -> Result<()> {
-        if self.width == width && self.height == height && self.output_view.is_some() {
-            return Ok(());
-        }
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_NV12,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            // NV12 输出视图需要 render target；shader resource 供 renderer 打开 shared texture 后建双平面 SRV。
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32,
-        };
-        let mut texture: Option<ID3D11Texture2D> = None;
-        unsafe {
-            self.device
-                .CreateTexture2D(&desc, None, Some(&mut texture))?
-        };
-        let texture = texture.context("共享视频纹理创建失败")?;
-        let resource: IDXGIResource = texture.cast()?;
-        let handle = unsafe { resource.GetSharedHandle() }?.0 as isize;
-
-        let rate = DXGI_RATIONAL {
-            Numerator: 30,
-            Denominator: 1,
-        };
-        let content = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
-            InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-            InputFrameRate: rate,
-            InputWidth: width,
-            InputHeight: height,
-            OutputFrameRate: rate,
-            OutputWidth: width,
-            OutputHeight: height,
-            Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-        };
-        let enumerator = unsafe { self.video_device.CreateVideoProcessorEnumerator(&content) }?;
-        let format_support = unsafe { enumerator.CheckVideoProcessorFormat(DXGI_FORMAT_NV12)? };
-        if format_support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32 == 0 {
-            return Err(anyhow::anyhow!(
-                "DXVA VideoProcessor 不支持 NV12 输出: support={}",
-                format_support
-            ));
-        }
-        let processor = unsafe { self.video_device.CreateVideoProcessor(&enumerator, 0) }?;
-        let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
-            ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
-            Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
-                Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
-            },
-        };
-        let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
-        unsafe {
-            self.video_device.CreateVideoProcessorOutputView(
-                &texture,
-                &enumerator,
-                &view_desc,
-                Some(&mut output_view),
-            )?;
-        }
-        let output_view = output_view.context("VideoProcessor output view 创建失败")?;
-
-        let keyed_mutex: IDXGIKeyedMutex = texture.cast()?;
-        // 初始状态交给 worker 写 key0；不能先释放 key1，否则 renderer 会拷贝未初始化的纹理。
-        unsafe { keyed_mutex.AcquireSync(0, 0)? };
-        let _ = unsafe { keyed_mutex.ReleaseSync(0) };
-
-        self.width = width;
-        self.height = height;
-        self.shared_texture = Some(texture);
-        self.shared_info = Some(SharedFrameInfo {
-            handle,
-            width,
-            height,
-        });
-        self.enumerator = Some(enumerator);
-        self.processor = Some(processor);
-        self.output_view = Some(output_view);
-        log::info!(
-            "[VideoHw] 共享纹理就绪 file={} {}x{}",
-            self.label,
-            width,
-            height
-        );
-        Ok(())
-    }
-
-    fn process_sample(&mut self, decoded: &DecodedSample) -> Result<bool> {
+    fn process_sample(&mut self, gpu: &WorkerGpu, decoded: &DecodedSample) -> Result<bool> {
         let output_view = self.output_view.clone().context("VideoProcessor 未就绪")?;
         let processor = self.processor.clone().context("VideoProcessor 未就绪")?;
         let enumerator = self
@@ -823,21 +794,16 @@ impl DxvaPipeline {
         let decoder_texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
         let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
 
-        // VideoContext 在 pipeline 初始化时通过 immediate context QueryInterface 得到。
-        // 不能逐帧调用 GetVideoService(IID_ID3D11VideoContext)，该 IID 不受支持。
-        let video_context = self.video_context.clone();
-        let _ = unsafe { self.manager.TestDevice(self.manager_handle) };
+        let _ = unsafe { gpu.manager.TestDevice(gpu.manager_handle) };
 
         let shared_texture = self.shared_texture.clone().context("共享纹理缺失")?;
         let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;
-        // key0 代表 worker 可写。renderer 尚未归还 key0 时保留 sample 等下一轮，
-        // 不能把 AcquireSync 失败当 worker 错误直接退出。
         if unsafe { keyed_mutex.AcquireSync(0, 0) }.is_err() {
             return Ok(false);
         }
         if !self.stage_logged {
             self.stage_logged = true;
-            log::info!("[VideoHw] 共享纹理 key0 已获取 file={}", self.label);
+            log::info!("[VideoHw] session={} 共享纹理 key0 已获取", self.id);
         }
 
         let result = (|| -> Result<()> {
@@ -853,7 +819,7 @@ impl DxvaPipeline {
             };
             let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
             unsafe {
-                self.video_device.CreateVideoProcessorInputView(
+                gpu.video_device.CreateVideoProcessorInputView(
                     &decoder_texture,
                     &enumerator,
                     &input_desc,
@@ -861,18 +827,16 @@ impl DxvaPipeline {
                 )?;
             }
             let input_view = input_view.context("VideoProcessor input view 创建失败")?;
-            // pInputSurface 是 ManuallyDrop：VideoProcessorBlt 不会替我们释放 COM 引用，
-            // 每帧不手动 drop 就会累积 input view，拖动 decoder surface 引用导致内存持续上涨。
             let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
                 Enable: BOOL(1),
                 pInputSurface: ManuallyDrop::new(Some(input_view)),
                 ..Default::default()
             };
             if !self.first_frame_logged {
-                log::info!("[VideoHw] 开始首帧 VideoProcessorBlt file={}", self.label);
+                log::info!("[VideoHw] session={} 开始首帧 VideoProcessorBlt", self.id);
             }
             let blt_result = unsafe {
-                video_context.VideoProcessorBlt(
+                gpu.video_context.VideoProcessorBlt(
                     &processor,
                     &output_view,
                     0,
@@ -881,8 +845,7 @@ impl DxvaPipeline {
             };
             unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
             blt_result?;
-            // 必须把 VP 命令刷入 GPU 队列后再释放 key1，否则 renderer 可能拷到旧帧。
-            unsafe { self.context.Flush() };
+            unsafe { gpu.context.Flush() };
             Ok(())
         })();
         let release_key = if result.is_ok() { 1 } else { 0 };
@@ -891,7 +854,7 @@ impl DxvaPipeline {
             Ok(()) => {
                 if !self.first_frame_logged {
                     self.first_frame_logged = true;
-                    log::info!("[VideoHw] 首帧 VideoProcessorBlt 完成 file={}", self.label);
+                    log::info!("[VideoHw] session={} 首帧 VideoProcessorBlt 完成", self.id);
                 }
                 Ok(true)
             }
@@ -899,8 +862,8 @@ impl DxvaPipeline {
                 if !self.blt_error_logged {
                     self.blt_error_logged = true;
                     log::warn!(
-                        "[VideoHw] VideoProcessorBlt 失败，保留 sample 重试 file={} err={:#}",
-                        self.label,
+                        "[VideoHw] session={} VideoProcessorBlt 失败，保留 sample 重试: {:#}",
+                        self.id,
                         err
                     );
                 }
@@ -909,18 +872,10 @@ impl DxvaPipeline {
         }
     }
 
-    fn shared_frame_info(&self) -> &SharedFrameInfo {
-        self.shared_info.as_ref().expect("共享纹理信息已就绪")
-    }
-
     fn note_frame(&mut self, frame_time: Duration, duration: Duration, first_cycle: bool) {
         if first_cycle && self.loop_duration.is_zero() {
             self.loop_duration = frame_time.saturating_add(duration);
         }
-    }
-
-    fn loop_duration(&self) -> Duration {
-        self.loop_duration
     }
 
     fn seek_zero(&mut self) -> Result<()> {
@@ -934,9 +889,157 @@ impl DxvaPipeline {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
+    fn reset(&mut self, now: Instant) -> Result<()> {
         self.loop_duration = Duration::ZERO;
-        self.seek_zero()
+        self.seek_zero()?;
+        self.started = now;
+        self.paused_total = Duration::ZERO;
+        self.paused_at = None;
+        self.cycle_base = Duration::ZERO;
+        self.pending = None;
+        let mut shared = self.state.lock().unwrap();
+        shared.frame_time = Duration::ZERO;
+        shared.frame_duration = Duration::from_millis(40);
+        shared.loop_duration = Duration::ZERO;
+        shared.generation = shared.generation.wrapping_add(1);
+        shared.ready = false;
+        Ok(())
+    }
+
+    fn pause(&mut self, paused: bool, now: Instant) {
+        match (paused, self.paused_at) {
+            (true, None) => self.paused_at = Some(now),
+            (false, Some(at)) => {
+                self.paused_total = self
+                    .paused_total
+                    .saturating_add(now.saturating_duration_since(at));
+                self.paused_at = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn tick(&mut self, gpu: &WorkerGpu) -> Result<bool> {
+        if self.paused_at.is_some() {
+            return Ok(false);
+        }
+        let target = self.started.elapsed().saturating_sub(self.paused_total);
+        {
+            let shared = self.state.lock().unwrap();
+            if shared.ready && target < shared.frame_time.saturating_add(shared.frame_duration) {
+                return Ok(false);
+            }
+        }
+
+        let sample = match self.pending.take() {
+            Some(sample) => sample,
+            None => match self.read_sample()? {
+                Some(sample) => sample,
+                None => {
+                    self.cycle_base = self.cycle_base.saturating_add(self.loop_duration);
+                    self.seek_zero()?;
+                    return Ok(true);
+                }
+            },
+        };
+
+        match self.process_sample(gpu, &sample) {
+            Ok(true) => {
+                let frame_time = self.cycle_base.saturating_add(sample.timestamp);
+                self.note_frame(frame_time, sample.duration, self.cycle_base.is_zero());
+                let mut shared = self.state.lock().unwrap();
+                shared.frame_time = frame_time;
+                shared.frame_duration = sample.duration;
+                shared.loop_duration = self.loop_duration;
+                shared.ready = true;
+                Ok(true)
+            }
+            Ok(false) => {
+                self.pending = Some(sample);
+                Ok(false)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+fn video_worker_main(
+    renderer_device: &ID3D11Device,
+    commands: Receiver<WorkerCommand>,
+) -> Result<()> {
+    let mut gpu: Option<WorkerGpu> = None;
+    let mut sessions: HashMap<u64, VideoSession> = HashMap::new();
+
+    loop {
+        while let Ok(command) = commands.try_recv() {
+            match command {
+                WorkerCommand::OpenSession {
+                    id,
+                    path,
+                    state,
+                    ack,
+                } => {
+                    let result = (|| -> Result<SharedFrameInfo> {
+                        if gpu.is_none() {
+                            gpu = Some(WorkerGpu::new(renderer_device)?);
+                        }
+                        let session = VideoSession::new(gpu.as_ref().unwrap(), id, &path, state)?;
+                        let info = session.shared_frame_info().clone();
+                        sessions.insert(id, session);
+                        Ok(info)
+                    })();
+                    let _ = ack.send(result);
+                }
+                WorkerCommand::CloseSession { id } => {
+                    if sessions.remove(&id).is_some() {
+                        log::info!("[VideoHw] session={} 已关闭", id);
+                    }
+                }
+                WorkerCommand::Pause { id, paused, now } => {
+                    if let Some(session) = sessions.get_mut(&id) {
+                        session.pause(paused, now);
+                    }
+                }
+                WorkerCommand::Reset { id, now, ack } => {
+                    let result = if let Some(session) = sessions.get_mut(&id) {
+                        session.reset(now)
+                    } else {
+                        Err(anyhow::anyhow!("DXVA session {} 不存在", id))
+                    };
+                    let _ = ack.send(result);
+                }
+                WorkerCommand::Shutdown => {
+                    sessions.clear();
+                    return Ok(());
+                }
+            }
+        }
+
+        if sessions.is_empty() {
+            thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+
+        let ids: Vec<u64> = sessions.keys().copied().collect();
+        let mut progressed = false;
+        for id in ids {
+            let Some(gpu) = gpu.as_ref() else {
+                break;
+            };
+            let Some(session) = sessions.get_mut(&id) else {
+                continue;
+            };
+            match session.tick(gpu) {
+                Ok(done) => progressed |= done,
+                Err(err) => {
+                    log::warn!("[VideoHw] session={} 帧处理失败: {:#}", id, err);
+                    sessions.remove(&id);
+                }
+            }
+        }
+        if !progressed {
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 }
 

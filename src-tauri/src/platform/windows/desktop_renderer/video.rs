@@ -23,11 +23,12 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_SRV_DIMENSION_TEXTURE2D};
 use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
-    ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
-    ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11InfoQueue,
+    ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
+    ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
+    ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+    D3D11_MESSAGE, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
     D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
     D3D11_TEX2D_SRV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
@@ -521,18 +522,48 @@ impl WorkerGpu {
         let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
+        let base_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+        #[cfg(debug_assertions)]
+        let flags = base_flags | D3D11_CREATE_DEVICE_DEBUG;
+        #[cfg(not(debug_assertions))]
+        let flags = base_flags;
         unsafe {
-            D3D11CreateDevice(
+            match D3D11CreateDevice(
                 Some(&adapter),
                 D3D_DRIVER_TYPE_UNKNOWN,
                 windows::Win32::Foundation::HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                flags,
                 None,
                 D3D11_SDK_VERSION,
                 Some(&mut device),
                 None,
                 Some(&mut context),
-            )?;
+            ) {
+                Ok(()) => {}
+                #[cfg(debug_assertions)]
+                Err(err) => {
+                    // Debug layer 未安装时不能阻断正常运行；回退到无 debug 的普通 device。
+                    log::warn!(
+                        "[VideoHw] D3D11 debug layer 不可用，回退普通 device: {:#}",
+                        err
+                    );
+                    device = None;
+                    context = None;
+                    D3D11CreateDevice(
+                        Some(&adapter),
+                        D3D_DRIVER_TYPE_UNKNOWN,
+                        windows::Win32::Foundation::HMODULE::default(),
+                        base_flags,
+                        None,
+                        D3D11_SDK_VERSION,
+                        Some(&mut device),
+                        None,
+                        Some(&mut context),
+                    )?;
+                }
+                #[cfg(not(debug_assertions))]
+                Err(err) => return Err(err.into()),
+            }
         }
         let device = device.context("DXVA worker device 创建失败")?;
         let context = context.context("DXVA worker context 创建失败")?;
@@ -579,6 +610,55 @@ impl WorkerGpu {
             manager,
             manager_handle,
         })
+    }
+}
+
+/// 只在失败时读取 D3D11 debug layer 的 info queue，不改变设备状态。
+fn log_d3d11_info_queue(device: &ID3D11Device, stage: &str) {
+    let Ok(queue) = device.cast::<ID3D11InfoQueue>() else {
+        return;
+    };
+    unsafe {
+        let count = queue.GetNumStoredMessages();
+        if count == 0 {
+            log::warn!("[VideoHw] D3D11 info queue {} 为空", stage);
+            return;
+        }
+        let start = count.saturating_sub(8);
+        for index in start..count {
+            let mut byte_length = 0usize;
+            if queue.GetMessage(index, None, &mut byte_length).is_err() || byte_length == 0 {
+                continue;
+            }
+            let bytes = vec![0u8; byte_length];
+            let mut message = D3D11_MESSAGE::default();
+            if queue
+                .GetMessage(index, Some(&mut message), &mut byte_length)
+                .is_err()
+            {
+                continue;
+            }
+            let description =
+                if message.pDescription.is_null() || message.DescriptionByteLength == 0 {
+                    String::new()
+                } else {
+                    let len = message.DescriptionByteLength.min(bytes.len());
+                    String::from_utf8_lossy(std::slice::from_raw_parts(message.pDescription, len))
+                        .trim_end_matches('\0')
+                        .to_string()
+                };
+            log::warn!(
+                "[VideoHw] D3D11 info queue {} #{}/{} category={:?} severity={:?} id={:?} {}",
+                stage,
+                index + 1,
+                count,
+                message.Category,
+                message.Severity,
+                message.ID,
+                description
+            );
+        }
+        queue.ClearStoredMessages();
     }
 }
 
@@ -965,6 +1045,7 @@ impl VideoSession {
                         self.id,
                         err
                     );
+                    log_d3d11_info_queue(&gpu.device, "VideoProcessorBlt");
                 }
                 Ok(false)
             }

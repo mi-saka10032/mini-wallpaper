@@ -129,6 +129,15 @@ struct SharedFrameInfo {
     height: u32,
 }
 
+enum SampleResult {
+    /// 已成功提交到 shared texture。
+    Presented,
+    /// keyed mutex 暂不可写，保留 sample，下一轮重试。
+    Busy,
+    /// 这个 sample / decoder surface 有问题，必须丢弃，不能无限重试。
+    BadSample,
+}
+
 enum WorkerCommand {
     OpenSession {
         id: u64,
@@ -617,6 +626,8 @@ struct VideoSession {
     stage_logged: bool,
     blt_error_logged: bool,
     media_type_change_logged: bool,
+    bad_sample_logged: bool,
+    consecutive_bad_samples: u32,
 }
 
 impl VideoSession {
@@ -718,6 +729,8 @@ impl VideoSession {
             stage_logged: false,
             blt_error_logged: false,
             media_type_change_logged: false,
+            bad_sample_logged: false,
+            consecutive_bad_samples: 0,
         };
         session.ensure_output(gpu, width, height)?;
         Ok(session)
@@ -882,7 +895,7 @@ impl VideoSession {
         Ok(Some(DecodedSample::new(sample, timestamp, duration)))
     }
 
-    fn process_sample(&mut self, gpu: &WorkerGpu, decoded: &DecodedSample) -> Result<bool> {
+    fn process_sample(&mut self, gpu: &WorkerGpu, decoded: &DecodedSample) -> Result<SampleResult> {
         let output_view = self.output_view.clone().context("VideoProcessor 未就绪")?;
         let processor = self.processor.clone().context("VideoProcessor 未就绪")?;
         let enumerator = self
@@ -897,13 +910,15 @@ impl VideoSession {
         let raw = NonNull::new(raw).context("DXVA sample 返回空 texture")?;
         let decoder_texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
         let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
+        let mut decoder_desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { decoder_texture.GetDesc(&mut decoder_desc) };
 
         let _ = unsafe { gpu.manager.TestDevice(gpu.manager_handle) };
 
         let shared_texture = self.shared_texture.clone().context("共享纹理缺失")?;
         let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;
         if unsafe { keyed_mutex.AcquireSync(0, 0) }.is_err() {
-            return Ok(false);
+            return Ok(SampleResult::Busy);
         }
         if !self.stage_logged {
             self.stage_logged = true;
@@ -932,8 +947,16 @@ impl VideoSession {
                     )
                     .with_context(|| {
                         format!(
-                            "CreateVideoProcessorInputView 失败 subresource={} {}x{}",
-                            subresource, self.width, self.height
+                            "CreateVideoProcessorInputView 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={}",
+                            subresource,
+                            self.width,
+                            self.height,
+                            decoder_desc.Width,
+                            decoder_desc.Height,
+                            decoder_desc.Format,
+                            decoder_desc.BindFlags,
+                            decoder_desc.ArraySize,
+                            decoder_desc.MipLevels
                         )
                     })?;
             }
@@ -957,8 +980,16 @@ impl VideoSession {
             unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
             blt_result.with_context(|| {
                 format!(
-                    "VideoProcessorBlt 失败 subresource={} {}x{}",
-                    subresource, self.width, self.height
+                    "VideoProcessorBlt 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={}",
+                    subresource,
+                    self.width,
+                    self.height,
+                    decoder_desc.Width,
+                    decoder_desc.Height,
+                    decoder_desc.Format,
+                    decoder_desc.BindFlags,
+                    decoder_desc.ArraySize,
+                    decoder_desc.MipLevels
                 )
             })?;
             unsafe { gpu.context.Flush() };
@@ -972,18 +1003,18 @@ impl VideoSession {
                     self.first_frame_logged = true;
                     log::info!("[VideoHw] session={} 首帧 VideoProcessorBlt 完成", self.id);
                 }
-                Ok(true)
+                Ok(SampleResult::Presented)
             }
             Err(err) => {
                 if !self.blt_error_logged {
                     self.blt_error_logged = true;
                     log::warn!(
-                        "[VideoHw] session={} VideoProcessorBlt 失败，保留 sample 重试: {:#}",
+                        "[VideoHw] session={} 丢弃坏 sample，不保留重试: {:#}",
                         self.id,
                         err
                     );
                 }
-                Ok(false)
+                Ok(SampleResult::BadSample)
             }
         }
     }
@@ -1059,8 +1090,9 @@ impl VideoSession {
             },
         };
 
-        match self.process_sample(gpu, &sample) {
-            Ok(true) => {
+        match self.process_sample(gpu, &sample)? {
+            SampleResult::Presented => {
+                self.consecutive_bad_samples = 0;
                 let frame_time = self.cycle_base.saturating_add(sample.timestamp);
                 self.note_frame(frame_time, sample.duration, self.cycle_base.is_zero());
                 let mut shared = self.state.lock().unwrap();
@@ -1070,11 +1102,30 @@ impl VideoSession {
                 shared.ready = true;
                 Ok(true)
             }
-            Ok(false) => {
+            SampleResult::Busy => {
                 self.pending = Some(sample);
                 Ok(false)
             }
-            Err(err) => Err(err),
+            SampleResult::BadSample => {
+                // 坏 sample 必须丢弃；保留会形成永久失败循环，表现为视频卡死。
+                self.consecutive_bad_samples = self.consecutive_bad_samples.saturating_add(1);
+                if !self.bad_sample_logged {
+                    self.bad_sample_logged = true;
+                    log::warn!(
+                        "[VideoHw] session={} 已丢弃坏 sample，累计={}，继续读取下一帧",
+                        self.id,
+                        self.consecutive_bad_samples
+                    );
+                }
+                if self.consecutive_bad_samples >= 30 {
+                    return Err(anyhow::anyhow!(
+                        "session={} 连续 {} 个坏 sample，关闭 session",
+                        self.id,
+                        self.consecutive_bad_samples
+                    ));
+                }
+                Ok(false)
+            }
         }
     }
 }

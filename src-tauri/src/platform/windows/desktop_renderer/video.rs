@@ -28,8 +28,8 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
-    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV,
-    D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
+    D3D11_TEX2D_SRV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
     D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
@@ -367,6 +367,11 @@ impl VideoPlayback {
     /// renderer 每帧开始时调用一次：尝试把 worker 产出的共享帧复制到本地纹理。
     /// 没有新帧时保留本地上一帧，所有 surface 继续显示同一画面，避免双屏闪烁。
     pub fn begin_frame(&mut self) {
+        // worker 只有在 VideoProcessorBlt 成功并更新 state 后才 ready。首帧 ready 前
+        // 即使 keyed mutex 处于可读状态也不绘制，避免把全 0 NV12 当有效帧采样成绿屏。
+        if !self.state.lock().unwrap().ready {
+            return;
+        }
         let Some(frame) = self.frame.as_ref() else {
             return;
         };
@@ -432,8 +437,16 @@ fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<Vi
         CPUAccessFlags: 0,
         MiscFlags: 0,
     };
+    // 用视频黑初始化本地副本：Y=16, UV=128。即使 shader 在异常时序下提前采样，
+    // 也只是黑色，不会把全 0 NV12 解成绿色。
+    let initial = nv12_black_data(info.width, info.height);
+    let initial_data = D3D11_SUBRESOURCE_DATA {
+        pSysMem: initial.as_ptr() as *const c_void,
+        SysMemPitch: info.width,
+        SysMemSlicePitch: 0,
+    };
     let mut local_texture: Option<ID3D11Texture2D> = None;
-    unsafe { device.CreateTexture2D(&desc, None, Some(&mut local_texture))? };
+    unsafe { device.CreateTexture2D(&desc, Some(&initial_data), Some(&mut local_texture))? };
     let local_texture = local_texture.context("DXVA 本地副本纹理创建失败")?;
 
     let plane_view = |format| {
@@ -683,10 +696,17 @@ impl VideoSession {
             CPUAccessFlags: 0,
             MiscFlags: D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32,
         };
+        // shared texture 也用视频黑初始化；worker 首帧前即使被打开，也不会是全 0 绿屏。
+        let initial = nv12_black_data(width, height);
+        let initial_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: initial.as_ptr() as *const c_void,
+            SysMemPitch: width,
+            SysMemSlicePitch: 0,
+        };
         let mut texture: Option<ID3D11Texture2D> = None;
         unsafe {
             gpu.device
-                .CreateTexture2D(&desc, None, Some(&mut texture))?
+                .CreateTexture2D(&desc, Some(&initial_data), Some(&mut texture))?
         };
         let texture = texture.context("共享视频纹理创建失败")?;
         let resource: IDXGIResource = texture.cast()?;
@@ -1077,4 +1097,15 @@ fn normalize_duration(duration: Duration) -> Duration {
     } else {
         duration
     }
+}
+
+/// NV12 视频黑：Y=16，UV=128。全 0 会被 BT.601 shader 解成绿色。
+fn nv12_black_data(width: u32, height: u32) -> Vec<u8> {
+    let y_plane = width as usize * height as usize;
+    let uv_height = (height as usize + 1) / 2;
+    let uv_plane = width as usize * uv_height;
+    let mut data = vec![0u8; y_plane + uv_plane];
+    data[..y_plane].fill(16);
+    data[y_plane..].fill(128);
+    data
 }

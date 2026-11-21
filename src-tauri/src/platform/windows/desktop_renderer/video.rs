@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use windows::core::{Interface, BOOL, GUID};
-use windows::Win32::Foundation::{HANDLE, RECT};
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_SRV_DIMENSION_TEXTURE2D};
 use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
 use windows::Win32::Graphics::Direct3D11::{
@@ -30,13 +30,12 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
     D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
     D3D11_TEX2D_SRV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_ALPHA_FILL_MODE_OPAQUE,
-    D3D11_VIDEO_PROCESSOR_COLOR_SPACE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
     D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-    D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
+    D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
+    D3D11_VPOV_DIMENSION_TEXTURE2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
@@ -580,57 +579,6 @@ impl WorkerGpu {
     }
 }
 
-/// 仅显式初始化 VideoProcessor 的 stream/output 状态。
-/// 不重建 processor、不重建 output view、不改 shared handle、不碰 sample/时钟。
-fn configure_video_processor(
-    gpu: &WorkerGpu,
-    processor: &ID3D11VideoProcessor,
-    width: u32,
-    height: u32,
-) {
-    let rect = RECT {
-        left: 0,
-        top: 0,
-        right: width as i32,
-        bottom: height as i32,
-    };
-    let color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE::default();
-    unsafe {
-        gpu.video_context.VideoProcessorSetStreamFrameFormat(
-            processor,
-            0,
-            D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-        );
-        gpu.video_context
-            .VideoProcessorSetStreamColorSpace(processor, 0, &color_space);
-        gpu.video_context
-            .VideoProcessorSetOutputColorSpace(processor, &color_space);
-        gpu.video_context
-            .VideoProcessorSetStreamSourceRect(processor, 0, true, Some(&rect));
-        gpu.video_context
-            .VideoProcessorSetStreamDestRect(processor, 0, true, Some(&rect));
-        gpu.video_context
-            .VideoProcessorSetOutputTargetRect(processor, true, Some(&rect));
-        gpu.video_context.VideoProcessorSetStreamOutputRate(
-            processor,
-            0,
-            D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL,
-            false,
-            None,
-        );
-        gpu.video_context
-            .VideoProcessorSetStreamAlpha(processor, 0, false, 1.0);
-        gpu.video_context.VideoProcessorSetOutputAlphaFillMode(
-            processor,
-            D3D11_VIDEO_PROCESSOR_ALPHA_FILL_MODE_OPAQUE,
-            0,
-        );
-        gpu.video_context
-            .VideoProcessorSetStreamAutoProcessingMode(processor, 0, false);
-        gpu.context.Flush();
-    }
-}
-
 struct DecodedSample {
     sample: IMFSample,
     timestamp: Duration,
@@ -802,7 +750,6 @@ impl VideoSession {
             ));
         }
         let processor = unsafe { gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
-        configure_video_processor(gpu, &processor, width, height);
         let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
             Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {

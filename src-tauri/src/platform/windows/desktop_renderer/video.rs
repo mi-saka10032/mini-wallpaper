@@ -47,12 +47,13 @@ use windows::Win32::Media::MediaFoundation::{
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType, MFCreateSourceReaderFromURL,
     MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
     MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_VIDEO_NOMINAL_RANGE,
-    MF_MT_YUV_MATRIX, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_MT_YUV_MATRIX, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
     MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
     MF_SOURCE_READERF_ERROR, MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED,
     MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_DISABLE_DXVA,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE, MF_VERSION,
 };
+use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToUInt64};
 
 use super::audio::AudioPlayback;
 
@@ -697,6 +698,7 @@ struct VideoSession {
     width: u32,
     height: u32,
     loop_duration: Duration,
+    presentation_duration: Duration,
     started: Instant,
     paused_total: Duration,
     paused_at: Option<Instant>,
@@ -753,6 +755,20 @@ impl VideoSession {
             return Err(anyhow::anyhow!("视频尺寸无效 {}x{}", width, height));
         }
 
+        let presentation_duration = read_presentation_duration(&reader).unwrap_or(Duration::ZERO);
+        if presentation_duration.is_zero() {
+            log::warn!(
+                "[VideoHw] session={} MF_PD_DURATION 不可用，改用最大帧时间推断循环时长",
+                id
+            );
+        } else {
+            log::info!(
+                "[VideoHw] session={} 视频时长 {:.3}s",
+                id,
+                presentation_duration.as_secs_f64()
+            );
+        }
+
         let mut session = Self {
             id,
             state,
@@ -765,7 +781,8 @@ impl VideoSession {
             output_view: None,
             width: 0,
             height: 0,
-            loop_duration: Duration::ZERO,
+            loop_duration: presentation_duration,
+            presentation_duration,
             started: Instant::now(),
             paused_total: Duration::ZERO,
             paused_at: None,
@@ -1091,8 +1108,10 @@ impl VideoSession {
     }
 
     fn note_frame(&mut self, frame_time: Duration, duration: Duration, first_cycle: bool) {
-        if first_cycle && self.loop_duration.is_zero() {
-            self.loop_duration = frame_time.saturating_add(duration);
+        if first_cycle {
+            // 第一圈持续用最大帧结束时间修正 loop_duration；不能用第一帧的 33ms，
+            // 否则下一次 EOF 只推进几十毫秒，墙钟 target 远大于 frame_time，全速追赶。
+            self.loop_duration = self.loop_duration.max(frame_time.saturating_add(duration));
         }
     }
 
@@ -1108,7 +1127,7 @@ impl VideoSession {
     }
 
     fn reset(&mut self, now: Instant) -> Result<()> {
-        self.loop_duration = Duration::ZERO;
+        self.loop_duration = self.presentation_duration;
         self.seek_zero()?;
         self.started = now;
         self.paused_total = Duration::ZERO;
@@ -1118,7 +1137,7 @@ impl VideoSession {
         let mut shared = self.state.lock().unwrap();
         shared.frame_time = Duration::ZERO;
         shared.frame_duration = Duration::from_millis(40);
-        shared.loop_duration = Duration::ZERO;
+        shared.loop_duration = self.loop_duration;
         shared.generation = shared.generation.wrapping_add(1);
         shared.ready = false;
         Ok(())
@@ -1154,7 +1173,19 @@ impl VideoSession {
             None => match self.read_sample()? {
                 Some(sample) => sample,
                 None => {
-                    self.cycle_base = self.cycle_base.saturating_add(self.loop_duration);
+                    let completed = if self.loop_duration.is_zero() {
+                        target
+                    } else {
+                        self.loop_duration
+                    };
+                    self.loop_duration = completed;
+                    self.cycle_base = self.cycle_base.saturating_add(completed);
+                    {
+                        let mut shared = self.state.lock().unwrap();
+                        shared.frame_time = self.cycle_base;
+                        shared.frame_duration = Duration::from_millis(40);
+                        shared.loop_duration = self.loop_duration;
+                    }
                     self.seek_zero()?;
                     return Ok(true);
                 }
@@ -1283,6 +1314,19 @@ fn seek_zero_position() -> windows::Win32::System::Com::StructuredStorage::PROPV
             }),
         },
     }
+}
+
+fn read_presentation_duration(reader: &IMFSourceReader) -> Option<Duration> {
+    let mut variant = unsafe {
+        reader.GetPresentationAttribute(
+            MF_SOURCE_READER_MEDIASOURCE.0 as u32,
+            &MF_PD_DURATION as *const GUID,
+        )
+    }
+    .ok()?;
+    let hns = unsafe { PropVariantToUInt64(&variant) }.ok();
+    unsafe { PropVariantClear(&mut variant) }.ok()?;
+    hns.filter(|value| *value > 0).map(hns_to_duration)
 }
 
 fn hns_to_duration(hns: u64) -> Duration {

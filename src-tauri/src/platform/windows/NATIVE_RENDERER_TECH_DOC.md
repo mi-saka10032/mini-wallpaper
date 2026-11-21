@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-21（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14；M8 WebView capability fallback 接线，见 3.15；控制链路收尾与副屏跟随修复，见 3.16；Native 视频音频方案 A2（audio SourceReader + WASAPI），见 3.17；M9 前置计时埋点，见 3.18；DXVA 独立 worker、NV12 纹理、多屏帧同步、全局 VideoWorker 与零会话 GPU 释放，见 3.19）
+> **最后更新**: 2026-11-21（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14；M8 WebView capability fallback 接线，见 3.15；控制链路收尾与副屏跟随修复，见 3.16；Native 视频音频方案 A2（audio SourceReader + WASAPI），见 3.17；M9 前置计时埋点，见 3.18；DXVA 独立 worker、NV12 纹理、多屏帧同步、全局 VideoWorker 与零会话 GPU 释放，见 3.19；音频加载与格式协商修复实机验收通过，见 3.20）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -630,6 +630,34 @@ N 个 video session
 - 峰值 Native ≤360MB，WebView 约 410MB；Native 峰值更低且少一个 WebView renderer。
 
 **验证**：`cargo fmt --all`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。相关提交：`8c4ec19`、`b4a0523`、`c296ec0`、`cf0460b`、`725bfad`、`b4ab356`、`f8ce4ff`、`3ecdb7a`。
+
+### 3.20 音频加载失败与无声修复
+
+音频链路在 Native 视频稳定后启用，实机出现两类问题：
+
+1. 初始化失败被静默忽略；
+2. SourceReader / WASAPI / PCM 协商 / Start 日志全部正常但无声。
+
+修复内容：
+
+- `7cca949 fix: keep full WASAPI mix format during init`
+  - `GetMixFormat()` 返回的可能是 `WAVEFORMATEXTENSIBLE`，原始完整结构保留到 `IAudioClient::Initialize` 之后才释放；
+  - 新增 SourceReader / WASAPI / PCM 协商 / Start 阶段日志；
+  - ring buffer 从 `max_len.max(current_len)` 改为 `current_len`，避免把缓冲区容量当有效音频写入。
+- `c4da1a0 fix: match audio decoder output to WASAPI mix format`
+  - 检测 `WAVE_FORMAT_IEEE_FLOAT` 与 `WAVEFORMATEXTENSIBLE.SubFormat`；
+  - float mix 请求 `MFAudioFormat_Float`，否则请求 `MFAudioFormat_PCM`；
+  - 设置音量时先 `SetMute(false)`；
+  - 输出协商后的 tag / float / channels / rate / bits / block_align 日志。
+
+实机验收：
+
+- 有音轨视频正常播放；
+- volume 50 正常；
+- 音频常驻约 10MB，用户确认可接受；
+- 用户确认音频 M 项完成。
+
+**验证**：`cargo fmt --all`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。
 
 ---
 

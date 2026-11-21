@@ -581,10 +581,27 @@ impl WorkerGpu {
         let manager_handle = unsafe { manager.OpenDeviceHandle() }?;
 
         let video_device: ID3D11VideoDevice = device.cast()?;
-        // AcquireSync / output view / Blt / Flush 必须绑定同一个 immediate context。
-        // device manager 只服务于 MF 解码器；VP Blt 不再从 manager 取另一个 context。
-        let video_context: ID3D11VideoContext = context.cast()?;
-        log::info!("[VideoHw] 全局 VideoContext 就绪（worker context）");
+        let video_context = match (|| -> Result<ID3D11VideoContext> {
+            let mut device_raw: *mut c_void = ptr::null_mut();
+            unsafe {
+                manager.GetVideoService(manager_handle, &ID3D11Device::IID, &mut device_raw)?;
+            }
+            let device_raw = NonNull::new(device_raw).context("GetVideoService 返回空 device")?;
+            let manager_device: ID3D11Device =
+                unsafe { ID3D11Device::from_raw(device_raw.as_ptr()) };
+            let manager_context = unsafe { manager_device.GetImmediateContext()? };
+            Ok(manager_context.cast()?)
+        })() {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!(
+                    "[VideoHw] device manager 取 VideoContext 失败，改用 worker context: {:#}",
+                    err
+                );
+                context.cast()?
+            }
+        };
+        log::info!("[VideoHw] 全局 VideoContext 就绪");
         Ok(Self {
             device,
             context,

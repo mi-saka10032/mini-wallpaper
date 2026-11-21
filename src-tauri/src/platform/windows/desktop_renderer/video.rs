@@ -630,19 +630,23 @@ fn log_d3d11_info_queue(device: &ID3D11Device, stage: &str) {
             if queue.GetMessage(index, None, &mut byte_length).is_err() || byte_length == 0 {
                 continue;
             }
-            let bytes = vec![0u8; byte_length];
-            let mut message = D3D11_MESSAGE::default();
+
+            // GetMessage 写入的是 D3D11_MESSAGE + 变长 description，必须传入
+            // 一整段足够大的对齐缓冲区；直接传栈上 D3D11_MESSAGE 会造成越界写。
+            let mut words = vec![0usize; byte_length.div_ceil(std::mem::size_of::<usize>())];
+            let message_ptr = words.as_mut_ptr() as *mut D3D11_MESSAGE;
             if queue
-                .GetMessage(index, Some(&mut message), &mut byte_length)
+                .GetMessage(index, Some(message_ptr), &mut byte_length)
                 .is_err()
             {
                 continue;
             }
+            let message = &*message_ptr;
             let description =
                 if message.pDescription.is_null() || message.DescriptionByteLength == 0 {
                     String::new()
                 } else {
-                    let len = message.DescriptionByteLength.min(bytes.len());
+                    let len = message.DescriptionByteLength.min(byte_length);
                     String::from_utf8_lossy(std::slice::from_raw_parts(message.pDescription, len))
                         .trim_end_matches('\0')
                         .to_string()

@@ -828,6 +828,9 @@ impl VideoSession {
         let raw = NonNull::new(raw).context("DXVA sample 返回空 texture")?;
         let decoder_texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
         let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
+        // 只读诊断：区分 E_INVALIDARG 来自 input view 还是 Blt；不改变任何处理流程。
+        let mut decoder_desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { decoder_texture.GetDesc(&mut decoder_desc) };
 
         let _ = unsafe { gpu.manager.TestDevice(gpu.manager_handle) };
 
@@ -854,12 +857,27 @@ impl VideoSession {
             };
             let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
             unsafe {
-                gpu.video_device.CreateVideoProcessorInputView(
-                    &decoder_texture,
-                    &enumerator,
-                    &input_desc,
-                    Some(&mut input_view),
-                )?;
+                gpu.video_device
+                    .CreateVideoProcessorInputView(
+                        &decoder_texture,
+                        &enumerator,
+                        &input_desc,
+                        Some(&mut input_view),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "CreateVideoProcessorInputView 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={}",
+                            subresource,
+                            self.width,
+                            self.height,
+                            decoder_desc.Width,
+                            decoder_desc.Height,
+                            decoder_desc.Format,
+                            decoder_desc.BindFlags,
+                            decoder_desc.ArraySize,
+                            decoder_desc.MipLevels
+                        )
+                    })?;
             }
             let input_view = input_view.context("VideoProcessor input view 创建失败")?;
             let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
@@ -879,7 +897,20 @@ impl VideoSession {
                 )
             };
             unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
-            blt_result?;
+            blt_result.with_context(|| {
+                format!(
+                    "VideoProcessorBlt 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={}",
+                    subresource,
+                    self.width,
+                    self.height,
+                    decoder_desc.Width,
+                    decoder_desc.Height,
+                    decoder_desc.Format,
+                    decoder_desc.BindFlags,
+                    decoder_desc.ArraySize,
+                    decoder_desc.MipLevels
+                )
+            })?;
             unsafe { gpu.context.Flush() };
             Ok(())
         })();

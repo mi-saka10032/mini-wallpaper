@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14；M8 WebView capability fallback 接线，见 3.15；控制链路收尾与副屏跟随修复，见 3.16；Native 视频音频方案 A2（audio SourceReader + WASAPI），见 3.17；M9 前置计时埋点，见 3.18）
+> **最后更新**: 2026-11-21（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13；M7 Native↔Native 换图 crossfade，见 3.14；M8 WebView capability fallback 接线，见 3.15；控制链路收尾与副屏跟随修复，见 3.16；Native 视频音频方案 A2（audio SourceReader + WASAPI），见 3.17；M9 前置计时埋点，见 3.18；DXVA 独立 worker、NV12 纹理、多屏帧同步、全局 VideoWorker 与零会话 GPU 释放，见 3.19）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -565,6 +565,71 @@ M9 不先假设「异步解码」「DCT 缩放」「DYNAMIC 纹理」哪个是�
 当前静态图上传不是 `D3D11_USAGE_STAGING + Map/Unmap`，也不是逐行 `UpdateSubresource`；它是 `D3D11_USAGE_DEFAULT + CreateTexture2D(initial data)`。逐行 `UpdateSubresource` 只存在于视频链路。因此 M9 必须先通过计时确认阻塞究竟在解码、CPU 格式转换、纹理创建/上传，还是视频逐帧上传，再决定优化方案。
 
 **验证**：`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。实机计时按统一策略留到最终验收。
+
+### 3.19 DXVA 硬解稳定链路与全局 VideoWorker
+
+本节覆盖 `feature/native-wallpaper-renderer` 分支在 M9 之后的视频链路重构。最终实机结论以本节和 `docs/NATIVE_RENDERER_ARCHITECTURE_REVIEW.md` 为准；3.13 / 3.17 中早期“每视频 SourceReader + RGB32 上传”“单视频 worker”的描述属于阶段历史。
+
+**最终链路**：
+
+```text
+一个 renderer 线程
+一个全局 VideoWorker 线程
+N 个 video session
+```
+
+- `VideoWorkerHost`
+  - 全局唯一 worker handle；
+  - 命令：`OpenSession` / `CloseSession` / `Pause` / `Reset` / `Shutdown`；
+  - renderer 侧 `VideoPlayback` 退化为轻量 handle。
+- `WorkerGpu`
+  - 唯一 `ID3D11Device` / `ID3D11DeviceContext`；
+  - 唯一 `IMFDXGIDeviceManager` / device handle / `ID3D11VideoContext`；
+  - session 清零时释放，下一次视频打开时惰性重建。
+- `VideoSession`
+  - 每个视频独立 `IMFSourceReader`、VideoProcessor、shared texture、timing、`pending sample`；
+  - worker 每轮轮询所有 session，每个 session 每轮最多产一帧，命令处理优先于帧推进。
+- renderer 侧
+  - `begin_video_frames()` 每帧按 `Arc<Mutex<VideoPlayback>>` 指针去重；
+  - 每个唯一视频只 `AcquireSync(1)` + `CopyResource` 一次；
+  - mirror / extend 共享一份本地纹理，independent 每个视频各自一份。
+
+**纹理与同步**：
+
+- DXVA 输出、shared texture、renderer 本地副本统一为 NV12；
+- Y 平面 SRV：`DXGI_FORMAT_R8_UNORM`；
+- UV 平面 SRV：`DXGI_FORMAT_R8G8_UNORM`；
+- 复用 `ps_nv12` shader 做 GPU 侧色彩转换；
+- keyed mutex 协议：
+  ```text
+  key0 = worker 可写
+  key1 = renderer 可复制
+  worker: AcquireSync(0) → VideoProcessorBlt → Flush → ReleaseSync(1)
+  renderer: AcquireSync(1) → CopyResource → Flush → ReleaseSync(0)
+  ```
+
+**生命周期修复**：
+
+- `ManuallyDrop<Option<ID3D11VideoProcessorInputView>>` 在每次 `VideoProcessorBlt` 后显式 drop；
+- `IMFDXGIDeviceManager::OpenDeviceHandle` 在 `WorkerGpu::drop()` 中关闭；
+- `pending` 队列只保留最新排队项，避免连续切换时堆积多个 worker/session；
+- 相同 `VideoIdentity(path, len, mtime)` 复用已有 `VideoPlayback`；
+- `MFStartup` / `MFShutdown` 在 renderer 生命周期内成对；
+- Worker 线程空闲常驻，零 session 时释放 GPU 资源；Worker 真正退出 / 按需重启暂缓。
+
+**实机验收**：
+
+- mirror 稳定；
+- extend 稳定；
+- independent 稳定；
+- 双屏闪烁消失；
+- 快速切换、暂停、循环正常；
+- CPU 约 1%；
+- 内存稳定、切换后可回落；
+- 稳态总量 Native 约 350MB，WebView 约 310MB；Native 稳态高约 40MB；
+- 峰值 Native ≤360MB，WebView 约 410MB；Native 峰值更低且少一个 WebView renderer。
+
+**验证**：`cargo fmt --all`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。相关提交：`8c4ec19`、`b4a0523`、`c296ec0`、`cf0460b`、`725bfad`、`b4ab356`、`f8ce4ff`、`3ecdb7a`。
 
 ---
 

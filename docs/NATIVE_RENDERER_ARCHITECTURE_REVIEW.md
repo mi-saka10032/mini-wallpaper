@@ -2,7 +2,7 @@
 
 - 日期：2026-11-21
 - 分支：`feature/native-wallpaper-renderer`
-- 当前验证基线：`b4ab356 perf: render videos from NV12 shared textures`
+- 当前验证基线：`3ecdb7a perf: release video GPU when no sessions remain`
 - 评审对象：Windows Native 壁纸渲染链路，重点为视频解码、多屏绘制、内存生命周期与后续架构方向
 
 ---
@@ -33,10 +33,17 @@
    - 但 Native 峰值 ≤360MB，WebView 峰值约 410MB。
    - Native 少一个 WebView renderer 进程，CPU 更低。
 
-5. **下一步的收益判断**
+5. **全局唯一 Worker 已实施并验收**
+   - `VideoWorkerHost` 管理唯一 video worker 线程。
+   - `WorkerGpu` 持有唯一 D3D11 video device / context / device manager。
+   - 每个视频是 worker 侧 `VideoSession`，`VideoPlayback` 退化为 renderer 侧 handle。
+   - session 清零时释放 GPU 资源，worker 线程继续空闲常驻；下一个视频出现时惰性重建。
+   - independent / mirror / extend、切换、暂停、循环均已实机验收通过。
+
+6. **下一步的收益判断**
    - 继续找 Windows / COM / D3D11 / MF 的 “clear cache” API 没有实际意义。
    - Native 解码拆到子进程主要改善 main 进程账面和隔离性，不会降低总内存，且增加 IPC/句柄复杂度，不建议作为内存优化首选。
-   - 全局唯一 Worker 对单视频稳态内存帮助有限，但对架构清晰化、多视频生命周期、重复 device 创建收敛有明显价值。
+   - 当前不建议立即实现 Worker 线程真正退出/按需重启：GPU 资源已在零会话时释放，空闲线程成本极低，线程重启会引入 MF/命令通道竞态。
 
 ---
 
@@ -601,15 +608,16 @@ independent 多视频串行解码
 | 保留视频身份复用 | 保留 |
 | 继续寻找 clear cache API | 不做 |
 | 子进程拆 decoder | 不作为内存优化首选 |
-| 全局 Worker | 建议作为架构清晰化方向 |
+| 全局 Worker | 已实施并实机验收通过 |
 
 ### 待办
 
 | 项 | 状态 |
 |---|---|
 | 音频链路修复后复查内存 | 待办，Task #144 |
-| 全局 Worker 设计细化 | 待确认 |
-| 合并前 squash 测试分支 | 待确认 |
+| Worker 线程真正退出 / 按需重启 | 暂缓；零会话 GPU 释放已覆盖主要收益 |
+| 音频链路加载失败修复 | 待评审 / 待处理 |
+| 合并前 squash 测试分支 | 不单独切干净分支；在本分支继续交付 |
 
 ---
 
@@ -634,11 +642,12 @@ Native 与 WebView 稳态差距约 40MB
    少 WebView renderer
    ```
 
-2. 若架构清晰度优先，实施全局 Worker：
+2. 全局 Worker 已完成当前阶段实施：
    ```text
    one renderer
-   one video worker
+   one idle-resident video worker
    N sessions
+   zero-session GPU release
    ```
 
 3. 若硬指标是 main 进程低于 50MB，再评估子进程方案：
@@ -651,20 +660,21 @@ Native 与 WebView 稳态差距约 40MB
 
 ---
 
-## 12. 验收标准
+## 12. 验收标准与结果
 
-若实施全局 Worker，应满足：
+全局 Worker 阶段验收标准：
 
-1. independent / mirror / extend 全部稳定；
-2. 同一视频身份只对应一个 session；
-3. 当前 / transition / pending 中的视频均计入活跃集合；
-4. 活跃集合清空后 session 能关闭；
-5. 所有 session 关闭后 worker 能退出；
-6. `MFStartup` / `MFShutdown` 成对；
-7. 快速连续切换不产生 worker 残留；
-8. 不再出现 per-video D3D11 device 重复创建；
-9. CPU 仍保持约 1%；
-10. 峰值内存不高于当前方案。
+1. independent / mirror / extend 全部稳定 —— 已通过；
+2. 同一视频身份只对应一个 session —— 已通过；
+3. 当前 / transition / pending 中的视频均计入活跃集合 —— 已通过；
+4. 活跃集合清空后 session 能关闭 —— 已通过；
+5. 所有 session 关闭后 GPU 资源释放 —— 已通过；
+6. Worker 线程保留空闲，不立即退出 —— 当前设计；
+7. `MFStartup` / `MFShutdown` 成对 —— 已保留在 renderer 生命周期；
+8. 快速连续切换不产生 worker 残留 —— 已通过；
+9. 不再出现 per-video D3D11 device 重复创建 —— 已通过；
+10. CPU 仍保持约 1% —— 已通过；
+11. 峰值内存不高于当前方案 —— 已通过。
 
 ---
 
@@ -681,6 +691,9 @@ Native 与 WebView 稳态差距约 40MB
 | `cf0460b` | MFShutdown 配对、相同视频身份复用 |
 | `725bfad` | FrameCache 16MiB |
 | `b4ab356` | NV12 shared/local texture 路径 |
+| `e6cfc10` | 架构评审文档 |
+| `f8ce4ff` | 全局 VideoWorker session 化 |
+| `3ecdb7a` | 零会话 GPU 资源释放 |
 
 ---
 
@@ -706,10 +719,13 @@ renderer 进程更多
 CPU/GPU 成本更高
 ```
 
-后续优化不建议继续围绕 clear API 或小范围缓存调参展开，而应明确目标后选择：
+后续优化不建议继续围绕 clear API 或小范围缓存调参展开。当前已完成：
 
 ```text
-架构清晰化 → 全局 Worker
-main 进程账面降低 → 子进程隔离
+架构清晰化 → 全局 Worker 已实施
+GPU 生命周期 → 零会话释放已实施
+main 进程账面降低 → 子进程隔离仍不推荐
 稳态总量必须最低 → 重新评估是否保留 Native 视频方案
 ```
+
+当前待处理重点是音频链路加载失败，完成后再复查其对内存和稳定性的影响。

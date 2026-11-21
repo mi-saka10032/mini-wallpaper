@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, Result};
 use windows::core::{Interface, BOOL, GUID};
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_SRV_DIMENSION_TEXTURE2D};
 use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
@@ -26,15 +26,17 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV,
     D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-    D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
+    D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
+    D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
+    D3D11_VPOV_DIMENSION_TEXTURE2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice, IDXGIKeyedMutex, IDXGIResource};
 use windows::Win32::Media::MediaFoundation::{
@@ -103,7 +105,8 @@ struct VideoFrameSource {
     shared_texture: ID3D11Texture2D,
     keyed_mutex: IDXGIKeyedMutex,
     local_texture: ID3D11Texture2D,
-    local_view: ID3D11ShaderResourceView,
+    local_y_view: ID3D11ShaderResourceView,
+    local_uv_view: ID3D11ShaderResourceView,
     width: u32,
     height: u32,
 }
@@ -313,8 +316,8 @@ impl VideoPlayback {
         }
         let frame = self.frame.as_ref()?;
         Some(VideoFrameSnapshot {
-            view: frame.local_view.clone(),
-            uv_view: None,
+            view: frame.local_y_view.clone(),
+            uv_view: Some(frame.local_uv_view.clone()),
             width: frame.width,
             height: frame.height,
         })
@@ -338,13 +341,13 @@ fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<Vi
     let shared_texture = shared_texture.context("打开 DXVA 共享纹理失败")?;
     let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;
 
-    // renderer 私有副本：所有 surface 都从这张本地纹理取样，worker 只写共享纹理。
+    // renderer 私有副本：NV12 单纹理双 SRV（Y=R8, UV=R8G8），显存比 BGRA8 副本少约 60%。
     let desc = D3D11_TEXTURE2D_DESC {
         Width: info.width,
         Height: info.height,
         MipLevels: 1,
         ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        Format: DXGI_FORMAT_NV12,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
@@ -357,15 +360,33 @@ fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<Vi
     let mut local_texture: Option<ID3D11Texture2D> = None;
     unsafe { device.CreateTexture2D(&desc, None, Some(&mut local_texture))? };
     let local_texture = local_texture.context("DXVA 本地副本纹理创建失败")?;
-    let mut local_view: Option<ID3D11ShaderResourceView> = None;
-    unsafe { device.CreateShaderResourceView(&local_texture, None, Some(&mut local_view))? };
-    let local_view = local_view.context("DXVA 本地副本 SRV 创建失败")?;
+
+    let plane_view = |format| {
+        let view_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+            Format: format,
+            ViewDimension: D3D_SRV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D11_TEX2D_SRV {
+                    MostDetailedMip: 0,
+                    MipLevels: 1,
+                },
+            },
+        };
+        let mut view: Option<ID3D11ShaderResourceView> = None;
+        unsafe {
+            device.CreateShaderResourceView(&local_texture, Some(&view_desc), Some(&mut view))?
+        };
+        view.context("DXVA NV12 平面 SRV 创建失败")
+    };
+    let local_y_view = plane_view(DXGI_FORMAT_R8_UNORM)?;
+    let local_uv_view = plane_view(DXGI_FORMAT_R8G8_UNORM)?;
 
     Ok(VideoFrameSource {
         shared_texture,
         keyed_mutex,
         local_texture,
-        local_view,
+        local_y_view,
+        local_uv_view,
         width: info.width,
         height: info.height,
     })
@@ -701,12 +722,13 @@ impl DxvaPipeline {
             Height: height,
             MipLevels: 1,
             ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Format: DXGI_FORMAT_NV12,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
             },
             Usage: D3D11_USAGE_DEFAULT,
+            // NV12 输出视图需要 render target；shader resource 供 renderer 打开 shared texture 后建双平面 SRV。
             BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
             CPUAccessFlags: 0,
             MiscFlags: D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32,
@@ -735,6 +757,13 @@ impl DxvaPipeline {
             Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
         };
         let enumerator = unsafe { self.video_device.CreateVideoProcessorEnumerator(&content) }?;
+        let format_support = unsafe { enumerator.CheckVideoProcessorFormat(DXGI_FORMAT_NV12)? };
+        if format_support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32 == 0 {
+            return Err(anyhow::anyhow!(
+                "DXVA VideoProcessor 不支持 NV12 输出: support={}",
+                format_support
+            ));
+        }
         let processor = unsafe { self.video_device.CreateVideoProcessor(&enumerator, 0) }?;
         let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,

@@ -1016,6 +1016,11 @@ fn video_worker_main(
         }
 
         if sessions.is_empty() {
+            // 没有任何视频 session 时释放 worker 侧 D3D11 / device manager 资源；
+            // Worker 线程保留空闲等待，下一个视频 session 会重新创建 GPU。
+            if gpu.take().is_some() {
+                log::info!("[VideoHw] 视频 session 清零，全局 GPU 资源已释放");
+            }
             thread::sleep(Duration::from_millis(2));
             continue;
         }

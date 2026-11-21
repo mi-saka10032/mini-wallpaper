@@ -190,10 +190,16 @@ fn audio_loop(
 ) -> Result<()> {
     let _com = AudioComScope::init();
 
-    let reader = open_audio_reader(&path)?;
-    let wasapi = WasapiOutput::open(volume.load(Ordering::Relaxed))?;
-    configure_audio_format(&reader, &wasapi.format)?;
+    let reader = open_audio_reader(&path)
+        .with_context(|| format!("打开音频 SourceReader 失败 file={}", path.display()))?;
+    log::info!("[Audio] 音频 SourceReader 已打开 file={}", path.display());
+    let wasapi =
+        WasapiOutput::open(volume.load(Ordering::Relaxed)).context("WASAPI 输出初始化失败")?;
+    log::info!("[Audio] WASAPI 输出已初始化");
+    configure_audio_format(&reader, &wasapi.format).context("音频 PCM 格式协商失败")?;
+    log::info!("[Audio] 音频 PCM 格式协商完成");
     unsafe { wasapi.client.Start()? };
+    log::info!("[Audio] 音频输出已启动 file={}", path.display());
 
     let mut ring: VecDeque<u8> = VecDeque::new();
     let mut paused = false;
@@ -308,17 +314,20 @@ impl WasapiOutput {
             let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
             let mix = client.GetMixFormat()?;
+            // GetMixFormat 可能返回 WAVEFORMATEXTENSIBLE。必须把原始完整结构保留到
+            // Initialize 之后，不能只复制 WAVEFORMATEX 后立刻释放，否则 cbSize 扩展丢失，
+            // 在 float / 多声道设备上会得到 E_INVALIDARG。
             let format = *mix;
-            CoTaskMemFree(Some(mix as *const c_void));
-
-            client.Initialize(
+            let init_result = client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 0,
                 AUDIO_BUFFER_DURATION_HNS,
                 0,
-                &format,
+                mix,
                 None,
-            )?;
+            );
+            CoTaskMemFree(Some(mix as *const c_void));
+            init_result?;
             let buffer_frames = client.GetBufferSize()? as usize;
             let render: IAudioRenderClient = client.GetService()?;
             let volume: ISimpleAudioVolume = client.GetService()?;
@@ -400,7 +409,9 @@ fn pump_audio_sample(
         if ptr.is_null() {
             return Err(anyhow!("音频 sample 缓冲区指针为空"));
         }
-        let len = max_len.max(current_len) as usize;
+        // IMFDXGIBuffer/IMFMediaBuffer::Lock 的 max_len 是缓冲区容量，current_len 才是本次
+        // sample 的有效字节数。取 max 会把旧数据或空闲容量写进 WASAPI ring buffer。
+        let len = current_len as usize;
         if len > 0 {
             ring.extend(
                 unsafe { std::slice::from_raw_parts(ptr, len) }

@@ -387,6 +387,10 @@ impl VideoPlayback {
         self.frame_ready = true;
     }
 
+    pub fn is_frame_ready(&self) -> bool {
+        self.frame_ready
+    }
+
     pub fn frame_snapshot(&self) -> Option<VideoFrameSnapshot> {
         if !self.frame_ready {
             return None;

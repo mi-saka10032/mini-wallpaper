@@ -452,6 +452,17 @@ impl RenderSurface {
             backbuffer_error_logged: false,
         };
         surface.bind_current_backbuffer()?;
+        // 首帧前先提交一张完全透明的 backbuffer，避免 DirectComposition 初始内容
+        // 在 renderer loop 第一帧之前显示为黑色。
+        if let Some(render_target) = &surface.render_target {
+            unsafe {
+                surface
+                    .context
+                    .ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 0.0]);
+                surface.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
+                surface.composition_device.Commit()?;
+            }
+        }
         Ok(surface)
     }
 

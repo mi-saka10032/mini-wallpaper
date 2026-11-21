@@ -262,6 +262,17 @@ impl VideoPlayback {
         let state = Arc::new(Mutex::new(SharedState::default()));
         let (session_id, info) = worker.open_session(path, state.clone())?;
 
+        // 等 worker 首帧真正完成后再让 surface attach。这样 SetWallpaper 返回时视频已经
+        // 可绘制，避免系统壁纸 → 空视频 surface → 首帧之间的黑屏窗口。
+        let wait_deadline = Instant::now() + Duration::from_secs(10);
+        while !state.lock().unwrap().ready {
+            if Instant::now() >= wait_deadline {
+                let _ = worker.send(WorkerCommand::CloseSession { id: session_id });
+                return Err(anyhow::anyhow!("等待视频首帧超时 file={}", label));
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
         let frame = match open_shared_frame(renderer_device, &info) {
             Ok(frame) => frame,
             Err(err) => {

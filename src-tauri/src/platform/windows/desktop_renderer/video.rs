@@ -46,9 +46,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType, MFCreateSourceReaderFromURL,
     MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
     MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
-    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_DISABLE_DXVA,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
+    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 use super::audio::AudioPlayback;
@@ -616,7 +615,6 @@ struct VideoSession {
     first_frame_logged: bool,
     stage_logged: bool,
     blt_error_logged: bool,
-    media_type_change_logged: bool,
 }
 
 impl VideoSession {
@@ -656,23 +654,6 @@ impl VideoSession {
             )?;
         }
 
-        // MF SourceReader 经常在第一次 ReadSample 时才提交最终 media type。
-        // 先预读一帧，等 CURRENTMEDIATYPECHANGED 后再按最终尺寸创建 output view，
-        // 否则首帧成功、第二帧用旧 enumerator 处理新 decoder surface 会报 E_INVALIDARG。
-        let mut flags = 0u32;
-        let mut timestamp = 0i64;
-        let mut first_sample: Option<IMFSample> = None;
-        unsafe {
-            reader.ReadSample(
-                MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                0,
-                None,
-                Some(&mut flags),
-                Some(&mut timestamp),
-                Some(&mut first_sample),
-            )?;
-        }
-        let type_changed = (flags as i32) & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 != 0;
         let media_type =
             unsafe { reader.GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)? };
         let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE)? };
@@ -681,21 +662,6 @@ impl VideoSession {
         if width == 0 || height == 0 {
             return Err(anyhow::anyhow!("视频尺寸无效 {}x{}", width, height));
         }
-        log::info!(
-            "[VideoHw] session={} 预读首帧 media_type_changed={} {}x{}",
-            id,
-            type_changed,
-            width,
-            height
-        );
-
-        let pending = match first_sample {
-            Some(sample) => {
-                let duration = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
-                Some(DecodedSample::new(sample, timestamp, duration))
-            }
-            None => None,
-        };
 
         let mut session = Self {
             id,
@@ -713,11 +679,10 @@ impl VideoSession {
             paused_total: Duration::ZERO,
             paused_at: None,
             cycle_base: Duration::ZERO,
-            pending,
+            pending: None,
             first_frame_logged: false,
             stage_logged: false,
             blt_error_logged: false,
-            media_type_change_logged: false,
         };
         session.ensure_output(gpu, width, height)?;
         Ok(session)
@@ -840,40 +805,6 @@ impl VideoSession {
                 Some(&mut sample),
             )?;
         }
-
-        // 运行中 media type 再变化时，用最终尺寸重建 shared texture / processor。
-        if (flags as i32) & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 != 0 {
-            let media_type = unsafe {
-                self.reader
-                    .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
-            };
-            let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE)? };
-            let width = (frame_size >> 32) as u32;
-            let height = frame_size as u32;
-            if width != self.width || height != self.height {
-                if !self.media_type_change_logged {
-                    self.media_type_change_logged = true;
-                    log::warn!(
-                        "[VideoHw] session={} 运行时媒体尺寸变化 {}x{} -> {}x{}；shared handle 已发布，关闭 session 重建",
-                        self.id,
-                        self.width,
-                        self.height,
-                        width,
-                        height
-                    );
-                }
-                // 运行中重建纹理会改变 shared handle，renderer 侧已经打开旧 handle，
-                // 不能悄悄替换；让 worker 关闭 session，由上层重新设置壁纸。
-                return Err(anyhow::anyhow!(
-                    "视频运行期媒体尺寸变化 {}x{} -> {}x{}",
-                    self.width,
-                    self.height,
-                    width,
-                    height
-                ));
-            }
-        }
-
         if (flags as i32) & MF_SOURCE_READERF_ENDOFSTREAM.0 != 0 || sample.is_none() {
             return Ok(None);
         }
@@ -923,19 +854,12 @@ impl VideoSession {
             };
             let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
             unsafe {
-                gpu.video_device
-                    .CreateVideoProcessorInputView(
-                        &decoder_texture,
-                        &enumerator,
-                        &input_desc,
-                        Some(&mut input_view),
-                    )
-                    .with_context(|| {
-                        format!(
-                            "CreateVideoProcessorInputView 失败 subresource={} {}x{}",
-                            subresource, self.width, self.height
-                        )
-                    })?;
+                gpu.video_device.CreateVideoProcessorInputView(
+                    &decoder_texture,
+                    &enumerator,
+                    &input_desc,
+                    Some(&mut input_view),
+                )?;
             }
             let input_view = input_view.context("VideoProcessor input view 创建失败")?;
             let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
@@ -955,12 +879,7 @@ impl VideoSession {
                 )
             };
             unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
-            blt_result.with_context(|| {
-                format!(
-                    "VideoProcessorBlt 失败 subresource={} {}x{}",
-                    subresource, self.width, self.height
-                )
-            })?;
+            blt_result?;
             unsafe { gpu.context.Flush() };
             Ok(())
         })();

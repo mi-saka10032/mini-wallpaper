@@ -45,9 +45,12 @@ use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaType, IMFSample, IMFSourceReader,
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType, MFCreateSourceReaderFromURL,
     MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
-    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_VIDEO_NOMINAL_RANGE,
+    MF_MT_YUV_MATRIX, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READERF_ERROR, MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED,
+    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_DISABLE_DXVA,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 
 use super::audio::AudioPlayback;
@@ -583,14 +586,16 @@ struct DecodedSample {
     sample: IMFSample,
     timestamp: Duration,
     duration: Duration,
+    flags: u32,
 }
 
 impl DecodedSample {
-    fn new(sample: IMFSample, timestamp: i64, duration: i64) -> Self {
+    fn new(sample: IMFSample, timestamp: i64, duration: i64, flags: u32) -> Self {
         Self {
             sample,
             timestamp: hns_to_duration(timestamp.max(0) as u64),
             duration: normalize_duration(hns_to_duration(duration.max(0) as u64)),
+            flags,
         }
     }
 }
@@ -810,7 +815,25 @@ impl VideoSession {
         }
         let sample = sample.context("SourceReader 返回空 sample")?;
         let duration = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
-        Ok(Some(DecodedSample::new(sample, timestamp, duration)))
+        Ok(Some(DecodedSample::new(sample, timestamp, duration, flags)))
+    }
+
+    fn media_type_diag(&self) -> String {
+        let Ok(media_type) = (unsafe {
+            self.reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+        }) else {
+            return "media_type=unavailable".to_string();
+        };
+        let interlace = unsafe { media_type.GetUINT32(&MF_MT_INTERLACE_MODE) }.unwrap_or(u32::MAX);
+        let matrix = unsafe { media_type.GetUINT32(&MF_MT_YUV_MATRIX) }.unwrap_or(u32::MAX);
+        let nominal =
+            unsafe { media_type.GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE) }.unwrap_or(u32::MAX);
+        let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(u64::MAX);
+        format!(
+            "media_type interlace={} matrix={} nominal={} frame_size=0x{:x}",
+            interlace, matrix, nominal, frame_size
+        )
     }
 
     fn process_sample(&mut self, gpu: &WorkerGpu, decoded: &DecodedSample) -> Result<bool> {
@@ -866,7 +889,7 @@ impl VideoSession {
                     )
                     .with_context(|| {
                         format!(
-                            "CreateVideoProcessorInputView 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={}",
+                            "CreateVideoProcessorInputView 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={} flags=0x{:x} type_changed={} native_changed={} error_flag={} {}",
                             subresource,
                             self.width,
                             self.height,
@@ -875,7 +898,12 @@ impl VideoSession {
                             decoder_desc.Format,
                             decoder_desc.BindFlags,
                             decoder_desc.ArraySize,
-                            decoder_desc.MipLevels
+                            decoder_desc.MipLevels,
+                            decoded.flags,
+                            (decoded.flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32) != 0,
+                            (decoded.flags & MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED.0 as u32) != 0,
+                            (decoded.flags & MF_SOURCE_READERF_ERROR.0 as u32) != 0,
+                            self.media_type_diag()
                         )
                     })?;
             }
@@ -899,7 +927,7 @@ impl VideoSession {
             unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
             blt_result.with_context(|| {
                 format!(
-                    "VideoProcessorBlt 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={}",
+                    "VideoProcessorBlt 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={} flags=0x{:x} type_changed={} native_changed={} error_flag={} {}",
                     subresource,
                     self.width,
                     self.height,
@@ -908,7 +936,12 @@ impl VideoSession {
                     decoder_desc.Format,
                     decoder_desc.BindFlags,
                     decoder_desc.ArraySize,
-                    decoder_desc.MipLevels
+                    decoder_desc.MipLevels,
+                    decoded.flags,
+                    (decoded.flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32) != 0,
+                    (decoded.flags & MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED.0 as u32) != 0,
+                    (decoded.flags & MF_SOURCE_READERF_ERROR.0 as u32) != 0,
+                    self.media_type_diag()
                 )
             })?;
             unsafe { gpu.context.Flush() };

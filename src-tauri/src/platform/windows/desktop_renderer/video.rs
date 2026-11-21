@@ -5,7 +5,7 @@
 //! 或线程冻结。这里让全局 worker 独占解码设备，多个视频以 session 形式共存，VideoProcessor
 //! 输出到 keyed-mutex 共享纹理，renderer 只打开该纹理并短暂持有 mutex 复制本地纹理。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::os::windows::ffi::OsStrExt;
@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use windows::core::{Interface, BOOL, GUID};
-use windows::Win32::Foundation::{HANDLE, RECT};
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_SRV_DIMENSION_TEXTURE2D};
 use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
 use windows::Win32::Graphics::Direct3D11::{
@@ -30,11 +30,9 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
     D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
     D3D11_TEX2D_SRV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_ALPHA_FILL_MODE_OPAQUE,
-    D3D11_VIDEO_PROCESSOR_COLOR_SPACE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
-    D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT, D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT,
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+    D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
     D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
     D3D11_VPOV_DIMENSION_TEXTURE2D,
@@ -47,12 +45,11 @@ use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaType, IMFSample, IMFSourceReader,
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType, MFCreateSourceReaderFromURL,
     MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
     MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
     MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_DISABLE_DXVA,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE, MF_VERSION,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
-use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToUInt64};
 
 use super::audio::AudioPlayback;
 
@@ -138,8 +135,7 @@ enum SampleResult {
     /// keyed mutex 暂不可写，保留 sample，下一轮重试。
     Busy,
     /// 这个 sample / decoder surface 有问题，必须丢弃，不能无限重试。
-    /// hard_error 表示刚刚触发 VP API 失败，需要尝试重建 processor/output view。
-    BadSample { subresource: u32, hard_error: bool },
+    BadSample,
 }
 
 enum WorkerCommand {
@@ -593,57 +589,6 @@ impl WorkerGpu {
     }
 }
 
-/// D3D11 VideoProcessor 默认 stream state 太依赖驱动默认值；显式设置完整状态，
-/// 避免部分 decoder surface / 驱动把未初始化 state 判成 E_INVALIDARG。
-fn configure_video_processor(
-    gpu: &WorkerGpu,
-    processor: &ID3D11VideoProcessor,
-    width: u32,
-    height: u32,
-) {
-    let rect = RECT {
-        left: 0,
-        top: 0,
-        right: width as i32,
-        bottom: height as i32,
-    };
-    let color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE::default();
-    unsafe {
-        gpu.video_context.VideoProcessorSetStreamFrameFormat(
-            processor,
-            0,
-            D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-        );
-        gpu.video_context
-            .VideoProcessorSetStreamColorSpace(processor, 0, &color_space);
-        gpu.video_context
-            .VideoProcessorSetOutputColorSpace(processor, &color_space);
-        gpu.video_context
-            .VideoProcessorSetStreamSourceRect(processor, 0, true, Some(&rect));
-        gpu.video_context
-            .VideoProcessorSetStreamDestRect(processor, 0, true, Some(&rect));
-        gpu.video_context
-            .VideoProcessorSetOutputTargetRect(processor, true, Some(&rect));
-        gpu.video_context.VideoProcessorSetStreamOutputRate(
-            processor,
-            0,
-            D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL,
-            false,
-            None,
-        );
-        gpu.video_context
-            .VideoProcessorSetStreamAlpha(processor, 0, false, 1.0);
-        gpu.video_context.VideoProcessorSetOutputAlphaFillMode(
-            processor,
-            D3D11_VIDEO_PROCESSOR_ALPHA_FILL_MODE_OPAQUE,
-            0,
-        );
-        gpu.video_context
-            .VideoProcessorSetStreamAutoProcessingMode(processor, 0, false);
-        gpu.context.Flush();
-    }
-}
-
 struct DecodedSample {
     sample: IMFSample,
     timestamp: Duration,
@@ -672,7 +617,6 @@ struct VideoSession {
     width: u32,
     height: u32,
     loop_duration: Duration,
-    presentation_duration: Duration,
     started: Instant,
     paused_total: Duration,
     paused_at: Option<Instant>,
@@ -684,9 +628,6 @@ struct VideoSession {
     media_type_change_logged: bool,
     bad_sample_logged: bool,
     consecutive_bad_samples: u32,
-    bad_subresources: HashSet<u32>,
-    rebuild_pending: bool,
-    rebuilt_output_once: bool,
 }
 
 impl VideoSession {
@@ -759,20 +700,6 @@ impl VideoSession {
             height
         );
 
-        let presentation_duration = read_presentation_duration(&reader).unwrap_or(Duration::ZERO);
-        if presentation_duration.is_zero() {
-            log::warn!(
-                "[VideoHw] session={} MF_PD_DURATION 不可用，改用最大帧时间推断循环时长",
-                id
-            );
-        } else {
-            log::info!(
-                "[VideoHw] session={} 视频时长 {:.3}s",
-                id,
-                presentation_duration.as_secs_f64()
-            );
-        }
-
         let pending = match first_sample {
             Some(sample) => {
                 let duration = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
@@ -792,8 +719,7 @@ impl VideoSession {
             output_view: None,
             width: 0,
             height: 0,
-            loop_duration: presentation_duration,
-            presentation_duration,
+            loop_duration: Duration::ZERO,
             started: Instant::now(),
             paused_total: Duration::ZERO,
             paused_at: None,
@@ -805,9 +731,6 @@ impl VideoSession {
             media_type_change_logged: false,
             bad_sample_logged: false,
             consecutive_bad_samples: 0,
-            bad_subresources: HashSet::new(),
-            rebuild_pending: false,
-            rebuilt_output_once: false,
         };
         session.ensure_output(gpu, width, height)?;
         Ok(session)
@@ -868,16 +791,13 @@ impl VideoSession {
         };
         let enumerator = unsafe { gpu.video_device.CreateVideoProcessorEnumerator(&content) }?;
         let format_support = unsafe { enumerator.CheckVideoProcessorFormat(DXGI_FORMAT_NV12)? };
-        let required = (D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT.0 as u32)
-            | (D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32);
-        if format_support & required != required {
+        if format_support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32 == 0 {
             return Err(anyhow::anyhow!(
-                "DXVA VideoProcessor 不支持 NV12 输入/输出: support={}",
+                "DXVA VideoProcessor 不支持 NV12 输出: support={}",
                 format_support
             ));
         }
         let processor = unsafe { gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
-        configure_video_processor(gpu, &processor, width, height);
         let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
             Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
@@ -1094,74 +1014,15 @@ impl VideoSession {
                         err
                     );
                 }
-                Ok(SampleResult::BadSample {
-                    subresource,
-                    hard_error: true,
-                })
+                Ok(SampleResult::BadSample)
             }
         }
     }
 
     fn note_frame(&mut self, frame_time: Duration, duration: Duration, first_cycle: bool) {
-        if first_cycle {
-            // 第一圈用“最大帧结束时间”推断真实循环时长；MF_PD_DURATION 不可用时必须靠它，
-            // 否则 loop_duration 会停在第一帧的 33ms，下一圈全速追赶。
-            self.loop_duration = self.loop_duration.max(frame_time.saturating_add(duration));
+        if first_cycle && self.loop_duration.is_zero() {
+            self.loop_duration = frame_time.saturating_add(duration);
         }
-    }
-
-    fn rebuild_output(&mut self, gpu: &WorkerGpu) -> Result<()> {
-        let texture = self
-            .shared_texture
-            .clone()
-            .context("重建 VideoProcessor 时 shared texture 缺失")?;
-        let rate = DXGI_RATIONAL {
-            Numerator: 30,
-            Denominator: 1,
-        };
-        let content = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
-            InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-            InputFrameRate: rate,
-            InputWidth: self.width,
-            InputHeight: self.height,
-            OutputFrameRate: rate,
-            OutputWidth: self.width,
-            OutputHeight: self.height,
-            Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-        };
-        let enumerator = unsafe { gpu.video_device.CreateVideoProcessorEnumerator(&content) }?;
-        let format_support = unsafe { enumerator.CheckVideoProcessorFormat(DXGI_FORMAT_NV12)? };
-        let required = (D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT.0 as u32)
-            | (D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32);
-        if format_support & required != required {
-            return Err(anyhow::anyhow!(
-                "重建时 DXVA VideoProcessor 不支持 NV12 输入/输出: support={}",
-                format_support
-            ));
-        }
-        let processor = unsafe { gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
-        configure_video_processor(gpu, &processor, self.width, self.height);
-        let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
-            ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
-            Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
-                Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
-            },
-        };
-        let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
-        unsafe {
-            gpu.video_device.CreateVideoProcessorOutputView(
-                &texture,
-                &enumerator,
-                &view_desc,
-                Some(&mut output_view),
-            )?;
-        }
-        let output_view = output_view.context("重建 VideoProcessor output view 失败")?;
-        self.enumerator = Some(enumerator);
-        self.processor = Some(processor);
-        self.output_view = Some(output_view);
-        unsafe { gpu.context.Flush() };
-        Ok(())
     }
 
     fn seek_zero(&mut self) -> Result<()> {
@@ -1176,23 +1037,17 @@ impl VideoSession {
     }
 
     fn reset(&mut self, now: Instant) -> Result<()> {
-        self.loop_duration = self.presentation_duration;
+        self.loop_duration = Duration::ZERO;
         self.seek_zero()?;
         self.started = now;
         self.paused_total = Duration::ZERO;
         self.paused_at = None;
         self.cycle_base = Duration::ZERO;
         self.pending = None;
-        self.bad_subresources.clear();
-        self.rebuild_pending = false;
-        self.rebuilt_output_once = false;
-        self.consecutive_bad_samples = 0;
-        self.bad_sample_logged = false;
-        self.blt_error_logged = false;
         let mut shared = self.state.lock().unwrap();
         shared.frame_time = Duration::ZERO;
         shared.frame_duration = Duration::from_millis(40);
-        shared.loop_duration = self.loop_duration;
+        shared.loop_duration = Duration::ZERO;
         shared.generation = shared.generation.wrapping_add(1);
         shared.ready = false;
         Ok(())
@@ -1228,23 +1083,7 @@ impl VideoSession {
             None => match self.read_sample()? {
                 Some(sample) => sample,
                 None => {
-                    let completed = if self.loop_duration.is_zero() {
-                        target
-                    } else {
-                        self.loop_duration
-                    };
-                    self.loop_duration = completed;
-                    self.cycle_base = self.cycle_base.saturating_add(completed);
-                    self.bad_subresources.clear();
-                    self.rebuild_pending = false;
-                    self.rebuilt_output_once = false;
-                    self.consecutive_bad_samples = 0;
-                    {
-                        let mut shared = self.state.lock().unwrap();
-                        shared.frame_time = self.cycle_base;
-                        shared.frame_duration = Duration::from_millis(40);
-                        shared.loop_duration = self.loop_duration;
-                    }
+                    self.cycle_base = self.cycle_base.saturating_add(self.loop_duration);
                     self.seek_zero()?;
                     return Ok(true);
                 }
@@ -1267,54 +1106,14 @@ impl VideoSession {
                 self.pending = Some(sample);
                 Ok(false)
             }
-            SampleResult::BadSample {
-                subresource,
-                hard_error,
-            } => {
+            SampleResult::BadSample => {
                 // 坏 sample 必须丢弃；保留会形成永久失败循环，表现为视频卡死。
-                self.bad_subresources.insert(subresource);
                 self.consecutive_bad_samples = self.consecutive_bad_samples.saturating_add(1);
-                let frame_time = self.cycle_base.saturating_add(sample.timestamp);
-                self.note_frame(frame_time, sample.duration, self.cycle_base.is_zero());
-                {
-                    // 即使这一帧没有提交给 renderer，也要推进逻辑时钟；否则墙钟 target
-                    // 远大于 frame_time，下一圈会全速追赶，表现为高倍速播放。
-                    let mut shared = self.state.lock().unwrap();
-                    shared.frame_time = frame_time;
-                    shared.frame_duration = sample.duration;
-                    shared.loop_duration = self.loop_duration;
-                }
-                if hard_error && !self.rebuilt_output_once {
-                    self.rebuild_pending = true;
-                }
-                if self.rebuild_pending && !self.rebuilt_output_once {
-                    match self.rebuild_output(gpu) {
-                        Ok(()) => {
-                            self.rebuilt_output_once = true;
-                            self.rebuild_pending = false;
-                            self.bad_subresources.clear();
-                            self.consecutive_bad_samples = 0;
-                            self.blt_error_logged = false;
-                            log::warn!(
-                                "[VideoHw] session={} 已原地重建 VideoProcessor/output view，shared handle 不变",
-                                self.id
-                            );
-                        }
-                        Err(err) => {
-                            log::warn!(
-                                "[VideoHw] session={} 原地重建 VideoProcessor 失败: {:#}",
-                                self.id,
-                                err
-                            );
-                        }
-                    }
-                }
                 if !self.bad_sample_logged {
                     self.bad_sample_logged = true;
                     log::warn!(
-                        "[VideoHw] session={} 已丢弃坏 sample，subresource={}，累计={}，继续读取下一帧",
+                        "[VideoHw] session={} 已丢弃坏 sample，累计={}，继续读取下一帧",
                         self.id,
-                        subresource,
                         self.consecutive_bad_samples
                     );
                 }
@@ -1433,19 +1232,6 @@ fn seek_zero_position() -> windows::Win32::System::Com::StructuredStorage::PROPV
             }),
         },
     }
-}
-
-fn read_presentation_duration(reader: &IMFSourceReader) -> Option<Duration> {
-    let mut variant = unsafe {
-        reader.GetPresentationAttribute(
-            MF_SOURCE_READER_MEDIASOURCE.0 as u32,
-            &MF_PD_DURATION as *const GUID,
-        )
-    }
-    .ok()?;
-    let hns = unsafe { PropVariantToUInt64(&variant) }.ok();
-    unsafe { PropVariantClear(&mut variant) }.ok()?;
-    hns.filter(|value| *value > 0).map(hns_to_duration)
 }
 
 fn hns_to_duration(hns: u64) -> Duration {

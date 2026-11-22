@@ -61,6 +61,10 @@ pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("Media Foundation 初始化失败")
 }
 
+/// 暂停原因按位合并：全屏暂停与 fade 暂停互不覆盖。
+pub const PAUSE_FULLSCREEN: u8 = 1;
+pub const PAUSE_FADE: u8 = 2;
+
 /// 只在 renderer 退出、所有 SourceReader / worker 都已经释放后调用一次。
 /// MFStartup / MFShutdown 必须成对，否则 MF 平台 work queue / codec cache 会常驻到进程退出。
 pub fn shutdown() -> Result<()> {
@@ -244,6 +248,7 @@ pub struct VideoPlayback {
     started_at: Instant,
     paused_total: Duration,
     paused_at: Option<Instant>,
+    pause_reasons: u8,
     frame_time: Duration,
     frame_duration: Duration,
     label: String,
@@ -305,6 +310,7 @@ impl VideoPlayback {
             started_at: Instant::now(),
             paused_total: Duration::ZERO,
             paused_at: None,
+            pause_reasons: 0,
             frame_time: Duration::ZERO,
             frame_duration: Duration::from_millis(40),
             label,
@@ -343,29 +349,52 @@ impl VideoPlayback {
             .context("等待 DXVA session 重置超时")??;
         self.started_at = now;
         self.paused_total = Duration::ZERO;
-        self.paused_at = None;
+        // reset 会清空 worker 的暂停时长；若仍有 pause reason，reset 后立刻恢复暂停状态。
+        self.paused_at = if self.pause_reasons == 0 {
+            None
+        } else {
+            Some(now)
+        };
+        if self.pause_reasons != 0 {
+            let _ = self.worker.send(WorkerCommand::Pause {
+                id: self.session_id,
+                paused: true,
+                now,
+            });
+        }
         if let Some(audio) = self.audio.as_mut() {
             audio.reset();
         }
         Ok(())
     }
 
-    pub fn set_paused(&mut self, paused: bool, now: Instant) {
-        match (paused, self.paused_at) {
-            (true, None) => self.paused_at = Some(now),
-            (false, Some(at)) => {
+    /// 按原因暂停 / 恢复；只有所有原因都清除时才真正恢复 worker。
+    pub fn set_pause_reason(&mut self, reason: u8, paused: bool, now: Instant) {
+        let before = self.pause_reasons;
+        if paused {
+            self.pause_reasons |= reason;
+        } else {
+            self.pause_reasons &= !reason;
+        }
+        if before == 0 && self.pause_reasons != 0 {
+            self.paused_at = Some(now);
+            let _ = self.worker.send(WorkerCommand::Pause {
+                id: self.session_id,
+                paused: true,
+                now,
+            });
+        } else if before != 0 && self.pause_reasons == 0 {
+            if let Some(at) = self.paused_at.take() {
                 self.paused_total = self
                     .paused_total
                     .saturating_add(now.saturating_duration_since(at));
-                self.paused_at = None;
             }
-            _ => return,
+            let _ = self.worker.send(WorkerCommand::Pause {
+                id: self.session_id,
+                paused: false,
+                now,
+            });
         }
-        let _ = self.worker.send(WorkerCommand::Pause {
-            id: self.session_id,
-            paused,
-            now,
-        });
     }
 
     pub fn set_audio_paused(&mut self, paused: bool) {

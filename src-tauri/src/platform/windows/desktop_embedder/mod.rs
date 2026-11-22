@@ -28,7 +28,9 @@ use anyhow::{bail, Context, Result};
 use log::info;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, SendMessageTimeoutW, SetParent, SMTO_NORMAL,
+    FindWindowW, GetWindowLongPtrW, SendMessageTimeoutW, SetParent, SetWindowLongPtrW,
+    SetWindowPos, GWL_EXSTYLE, HWND_TOP, SMTO_NORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 
 use self::strategy::{select_strategy, MonitorRect};
@@ -109,6 +111,23 @@ pub fn embed_in_desktop(
             .embed(hwnd as HWND, workerw, rect, policy)
             .context("嵌入操作失败")?;
 
+        // 6. 显式置顶：最近一次嵌入的窗口必须盖住同一块屏幕区域的旧窗口。
+        // Native↔WebView 切换时新旧窗口会短暂同时存在（新建先于旧的销毁，
+        // 见 RenderCoordinator::apply_backend），SetParent 之后系统默认的
+        // Z-order 没有文档保证，不能依赖它恰好把新窗口放在最上面；
+        // 这里用 SWP_NOMOVE | SWP_NOSIZE 只改 Z-order、不动位置尺寸，
+        // 确保「新窗口已经挡住旧窗口」这个前提恒成立，新内容画出来之前
+        // 新窗口是透明的，用户透过它看到的仍是旧窗口内容，不会露出系统桌面。
+        SetWindowPos(
+            hwnd as HWND,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+
         // 注意：DWM 圆角裁剪（~1px）已确认无法通过任何窗口级 API 消除，
         // Overscan 方案虽能消除圆角但会导致多屏交接处溢出更明显（色差壁纸下尤为突出）。
         // 权衡后选择接受 1px 圆角溢出——面积更小、更可控。
@@ -126,12 +145,25 @@ pub fn embed_in_desktop(
 ///
 /// 必须在 `window.close()` 之前调用：还原 WndProc 需要 HWND 仍然有效，
 /// 且紧随其后的 WM_CLOSE / WM_DESTROY 要能回到 tao 自己的窗口过程。
+///
+/// `SetParent(hwnd, NULL)` 之后、`DestroyWindow` 真正生效之前，窗口会短暂
+/// 变回顶层窗口；嵌入阶段（见 `embed_in_desktop` → `ModernStrategy::embed`）
+/// 可能已经清掉了 `WS_EX_NOACTIVATE`（Native 窗口成为 WorkerW 子窗口后不再
+/// 需要顶层窗口语义），裸露期内这个全屏幕尺寸的窗口有被系统误判为
+/// 「前台全屏应用」的风险（`fullscreen_detector` 也从结果侧做了防御，见
+/// `monitor_geometry::is_own_wallpaper_window`）。这里补回
+/// `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，从根上让这段裸露期内的窗口
+/// 不可被激活/置为前台，双重防御。
 pub fn unembed_from_desktop(hwnd: isize) {
     // ModernStrategy 才会子类化，其余情况内部静默跳过
     wndproc::restore_and_unregister(hwnd as HWND);
 
     unsafe {
         SetParent(hwnd as HWND, std::ptr::null_mut());
+
+        let ex_style = GetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE);
+        let guarded_ex_style = ex_style | (WS_EX_NOACTIVATE as isize) | (WS_EX_TOOLWINDOW as isize);
+        SetWindowLongPtrW(hwnd as HWND, GWL_EXSTYLE, guarded_ex_style);
     }
     info!("已解除嵌入: HWND=0x{:X}", hwnd);
 }

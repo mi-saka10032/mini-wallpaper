@@ -105,6 +105,7 @@ mod imp {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow, GetWindowRect,
+        GetWindowTextW,
     };
 
     /// 获取前台窗口 HWND，无前台窗口或为桌面窗口时返回 `None`
@@ -138,6 +139,37 @@ mod imp {
             }
             Some(String::from_utf16_lossy(&buf[..len as usize]))
         }
+    }
+
+    /// 读取窗口标题（仅前 256 字符），失败或无标题返回 `None`
+    ///
+    /// 上层可用此判断是否为本应用自己创建的无边框窗口（壁纸 / Toast 等
+    /// 不依赖窗口类名、而是用显式设置的 title 区分的场景）。
+    fn window_title(hwnd: HWND) -> Option<String> {
+        unsafe {
+            let mut buf = [0u16; 256];
+            let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            if len <= 0 {
+                return None;
+            }
+            Some(String::from_utf16_lossy(&buf[..len as usize]))
+        }
+    }
+
+    /// 判定 HWND 是否属于本应用自己创建的壁纸窗口（Native 渲染表面 / WebView 壁纸窗口）
+    ///
+    /// 壁纸窗口稳态下嵌入在 WorkerW 之下、永远不会成为前台窗口（见 `active_monitor`
+    /// 的设计说明）；但跨 backend 切换销毁旧窗口时，会经历「`SetParent(null)` 解除
+    /// 嵌入 → `DestroyWindow`」之间的瞬时裸露期——解除嵌入后它短暂变回顶层窗口，
+    /// Native 窗口在嵌入时还被清掉过 `WS_EX_NOACTIVATE`，这个窗口期内有极小概率被
+    /// 系统误判为前台应用。按窗口类名（Native 用 `MiniWallpaperNativeRenderer`）
+    /// 和标题（WebView 壁纸窗口固定标题为 `Wallpaper`）排除，避免
+    /// `fullscreen_detector` 在切换瞬间误报全屏。
+    pub fn is_own_wallpaper_window(hwnd: HWND) -> bool {
+        if window_class_name(hwnd).as_deref() == Some("MiniWallpaperNativeRenderer") {
+            return true;
+        }
+        window_title(hwnd).as_deref() == Some("Wallpaper")
     }
 
     /// 获取窗口矩形（屏幕坐标）
@@ -251,8 +283,8 @@ mod imp {
 
 #[cfg(target_os = "windows")]
 pub use imp::{
-    cursor_pos, foreground_window, is_shell_window, monitor_info_from_point,
-    monitor_info_from_window, primary_monitor_info, window_rect,
+    cursor_pos, foreground_window, is_own_wallpaper_window, is_shell_window,
+    monitor_info_from_point, monitor_info_from_window, primary_monitor_info, window_rect,
 };
 
 // ===================== 非 Windows 平台占位 =====================
@@ -295,12 +327,17 @@ mod imp_stub {
     pub fn is_shell_window(_hwnd: HWND) -> bool {
         false
     }
+
+    pub fn is_own_wallpaper_window(_hwnd: HWND) -> bool {
+        false
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 pub use imp_stub::{
-    cursor_pos, foreground_window, is_shell_window, monitor_info_from_point,
-    monitor_info_from_window, primary_monitor_info, window_class_name, window_rect, HWND,
+    cursor_pos, foreground_window, is_own_wallpaper_window, is_shell_window,
+    monitor_info_from_point, monitor_info_from_window, primary_monitor_info, window_class_name,
+    window_rect, HWND,
 };
 
 // ===================== 高阶编排 API =====================

@@ -51,7 +51,7 @@ WorkerW / Progman / SHELLDLL_DefView 的桌面嵌入层**继续复用** `desktop
 | 图片 / 视频 | 一律走 WorkerW + 原生渲染器 | 保持逐屏一致的输入路径 |
 | FFmpeg | ❌ 不引入 | 体积 / 许可 / 构建链成本过高 |
 | 不支持的格式 | 直接报错，不静默降级 | 避免「以为显示成功其实没画面」 |
-| WebView / Native 并存 | ✅ 接受 | 本地验证期间必须 **NativeOnly、零 WebView** |
+| WebView / Native 并存 | ✅ 接受 | M0~M7 验证期间曾要求 **NativeOnly、零 WebView**；M8 接回 Auto fallback 并完成实机验收后，debug / release 已统一默认 `Auto`，不再强制 NativeOnly（见 2.3） |
 | WebView fallback 语义 | **解码前 capability fallback** | 选中 Native 后解码失败只报错，不能当 error fallback |
 | fallback 页面 | 复用现有 `wallpaper.html` + `src/pages/wallpaper/` | 不新建极简 fallback 页，避免第二套前端 |
 | fallback 窗口生命周期 | 非持续存在 | 切回 Native 可支持格式时销毁 |
@@ -106,8 +106,8 @@ pub struct RenderDescriptor {
 
 | 模式 | 生效条件 | 行为 |
 |------|----------|------|
-| `NativeOnly` | `cfg!(debug_assertions)` 恒真；或 release 下 `MINI_WALLPAPER_RENDERER=native` | 绝不创建 WebView；不支持格式直接报错 |
-| `Auto` | release 默认 | 按 capability 自动分流：Native 支持表内的格式走 Native，表外的全部走 WebView fallback |
+| `NativeOnly` | 显式设置 `MINI_WALLPAPER_RENDERER=native`（debug / release 行为一致） | 绝不创建 WebView；不支持格式直接报错 |
+| `Auto` | debug / release 默认（Auto fallback 已完成实机验收，不再在 debug 构建强制 `NativeOnly`） | 按 capability 自动分流：Native 支持表内的格式走 Native，表外的全部走 WebView fallback |
 
 ```rust
 pub fn resolve_backend(
@@ -126,7 +126,7 @@ pub fn resolve_backend(
 
 上面 10 个扩展名来自微软官方 *Supported Media Formats in Media Foundation* 的 File Containers 表（3GP / ASF / AVI / MPEG-4）。声明的是「交给 Media Foundation 的 SourceReader 尝试」，不保证容器内编码一定能解：`.mp4` 里装 HEVC 但系统没装对应 codec 时，SourceReader 打开失败会通过命令 ack 回传 `DecodeFailed`，不静默黑屏、不回退 WebView。
 
-> **WebView 只做解码前的 capability fallback，不是解码失败后的兜底。** 一旦 `resolve_backend` 返回 Native，SourceReader / `decode_frames` 失败都通过 mpsc + oneshot ack 回传协调器，发 `renderer-error`，不会偷偷重建 WebView 窗口。M8 把 Auto 模式的 fallback 接回后这条铁律不变：分流依据是「容器在不在 MF 支持表」，不是「这次解码成不成功」。本地 dev 默认 NativeOnly，仍不出现 WebView2。
+> **WebView 只做解码前的 capability fallback，不是解码失败后的兜底。** 一旦 `resolve_backend` 返回 Native，SourceReader / `decode_frames` 失败都通过 mpsc + oneshot ack 回传协调器，发 `renderer-error`，不会偷偷重建 WebView 窗口。M8 把 Auto 模式的 fallback 接回后这条铁律不变：分流依据是「容器在不在 MF 支持表」，不是「这次解码成不成功」。Auto fallback（WebView 渲染、Native↔WebView 互切、资源释放）已完成实机验收，debug / release 统一默认 `Auto`，不再在 debug 构建强制 `NativeOnly`；只有显式设置 `MINI_WALLPAPER_RENDERER=native` 才会绝不创建 WebView。
 
 ### 2.4 错误上报链路
 

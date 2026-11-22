@@ -30,6 +30,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use sea_orm::DatabaseConnection;
@@ -295,15 +296,23 @@ impl RenderCoordinator {
             })
             .collect();
 
-        // 阶段 1：只切换 backend / 创建或销毁渲染目标，不设置内容
+        // 阶段 1：只建新 backend 的渲染目标，不碰旧 backend；旧的留给阶段 3 延迟销毁。
+        // 顺序很关键：新窗口建好嵌入桌面时已被 Z-order 置顶盖住旧窗口（见
+        // desktop_embedder::embed_in_desktop），此时新内容还没画出来、新窗口是透明的，
+        // 用户透过它看到的仍是旧内容——全程没有一刻会露出系统桌面，不需要 pixel 级 fade。
+        let mut pending_teardown: Vec<(String, RenderBackend)> = Vec::new();
         for mid in &targets {
-            if let Err(e) = self.apply_backend(mid, &descriptor).await {
-                log::warn!("[RenderCoordinator] 壁纸更新失败 {}: {:#}", mid, e);
-                self.report_error(
-                    Some(mid),
-                    Some(wallpaper_id),
-                    &RendererError::new(RendererErrorCode::BackendUnavailable, e.to_string()),
-                );
+            match self.apply_backend(mid, &descriptor).await {
+                Ok(Some(old_backend)) => pending_teardown.push((mid.clone(), old_backend)),
+                Ok(None) => {}
+                Err(e) => {
+                    log::warn!("[RenderCoordinator] 壁纸更新失败 {}: {:#}", mid, e);
+                    self.report_error(
+                        Some(mid),
+                        Some(wallpaper_id),
+                        &RendererError::new(RendererErrorCode::BackendUnavailable, e.to_string()),
+                    );
+                }
             }
         }
 
@@ -348,6 +357,11 @@ impl RenderCoordinator {
                 );
             }
         }
+
+        // 阶段 3：新内容已下发（Native 已排队帧 / WebView 已发送换图事件），
+        // 现在才安全销毁阶段 1 留下的旧 backend。
+        self.teardown_old_backends(pending_teardown, descriptor.backend)
+            .await;
 
         // 无论 backend 都记录当前壁纸：WebView 阶段换图也要更新，才不会在
         // 后续切回 Native 时把「同一张图」误判成跨图 fade。
@@ -599,58 +613,96 @@ impl RenderCoordinator {
         }
     }
 
-    /// 只负责 backend 切换（销毁旧目标 / 建新目标），壁纸内容由调用方组级下发。
+    /// 只负责「建新 backend 的渲染目标」，不在这里销毁旧 backend；壁纸内容由
+    /// 调用方组级下发。同 backend 时不重建目标，避免每次换图都销毁 surface / WebView 窗口。
     ///
-    /// 调用顺序很关键：必须先切 backend、再下发壁纸内容。因为本函数会改写
-    /// `backends`，所以「切换前状态」必须由调用方提前快照，否则 crossfade 判定失真。
-    /// 同 backend 时不重建目标，避免每次换图都销毁 surface / WebView 窗口。
-    async fn apply_backend(&mut self, monitor_id: &str, descriptor: &Descriptor) -> Result<()> {
+    /// 与早期版本（先销毁旧目标再建新目标）相反：现在新 backend 先建好、嵌入桌面，
+    /// 旧 backend 原样留着不动。`desktop_embedder::embed_in_desktop` 嵌入时会把新窗口
+    /// 显式置顶（Z-order HWND_TOP），所以新窗口嵌入的瞬间就已经盖住了旧窗口；此时新
+    /// 内容还没画出来、新窗口是透明的，用户透过它看到的仍是旧窗口内容——全程没有一刻
+    /// 会露出系统桌面背景，因此跨 backend 硬切不需要 pixel 级 fade。
+    ///
+    /// 调用顺序仍然关键：必须先建新 backend、再下发壁纸内容，内容下发完之后调用方才能
+    /// 安全销毁旧 backend（见 `update_wallpaper` 阶段 3）。因为本函数会改写 `backends`，
+    /// 所以「切换前状态」必须由调用方提前快照，否则 crossfade 判定失真。
+    ///
+    /// 返回 `Some(旧 backend)` 表示发生了跨 backend 切换，调用方需要延迟销毁它；
+    /// 同 backend（不切换）或本来就没有旧值（首次创建）时返回 `None`。
+    async fn apply_backend(
+        &mut self,
+        monitor_id: &str,
+        descriptor: &Descriptor,
+    ) -> Result<Option<RenderBackend>> {
         let previous = self.backends.get(monitor_id).copied();
+        if previous == Some(descriptor.backend) {
+            return Ok(None);
+        }
+
+        let rect = self.rects.get(monitor_id).copied().ok_or_else(|| {
+            RendererError::new(
+                RendererErrorCode::BackendUnavailable,
+                format!("monitor {} 缺少几何信息，无法切换渲染 backend", monitor_id),
+            )
+        })?;
 
         match descriptor.backend {
             RenderBackend::Native => {
-                if previous != Some(RenderBackend::Native) {
-                    {
-                        let mut wm = self.window_manager.lock().await;
-                        wm.destroy_window(monitor_id);
-                    }
-                    let rect = self.rects.get(monitor_id).copied().ok_or_else(|| {
-                        RendererError::new(
-                            RendererErrorCode::BackendUnavailable,
-                            format!("monitor {} 缺少几何信息，无法切换原生渲染", monitor_id),
-                        )
-                    })?;
-                    self.renderer
-                        .ensure_monitor(monitor_id.to_string(), rect)
-                        .await?;
-                }
+                self.renderer
+                    .ensure_monitor(monitor_id.to_string(), rect)
+                    .await?;
             }
             RenderBackend::WebView => {
-                if previous != Some(RenderBackend::WebView) {
-                    self.renderer.destroy_monitor(monitor_id.to_string())?;
-                    let rect = self.rects.get(monitor_id).copied().ok_or_else(|| {
-                        RendererError::new(
-                            RendererErrorCode::BackendUnavailable,
-                            format!("monitor {} 缺少几何信息，无法切换 WebView 渲染", monitor_id),
-                        )
-                    })?;
-                    let mut wm = self.window_manager.lock().await;
-                    wm.create_and_show(
-                        monitor_id,
-                        rect.x,
-                        rect.y,
-                        rect.width as u32,
-                        rect.height as u32,
-                    )
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                }
+                let mut wm = self.window_manager.lock().await;
+                wm.create_and_show(
+                    monitor_id,
+                    rect.x,
+                    rect.y,
+                    rect.width as u32,
+                    rect.height as u32,
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
             }
         }
 
         self.backends
             .insert(monitor_id.to_string(), descriptor.backend);
-        Ok(())
+        Ok(previous)
+    }
+
+    /// 延迟销毁跨 backend 切换时留下的旧渲染目标。
+    ///
+    /// 必须在新内容已经下发（Native 排队帧 / WebView 发送换图事件）之后调用；
+    /// 等待时长按新 backend 的绘制路径定——Native 渲染线程每 16ms 一帧，几帧
+    /// 余量就能让首帧真正 Present；WebView 还要走页面导航 + 图片/视频解码，
+    /// 给更宽的余量。多等一点没有副作用：旧窗口此刻已被新窗口盖住，多存活
+    /// 这点时间用户看不出来；等太短才会露底，所以这里宁可偏保守。
+    async fn teardown_old_backends(
+        &mut self,
+        pending: Vec<(String, RenderBackend)>,
+        new_backend: RenderBackend,
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+        let grace = match new_backend {
+            RenderBackend::Native => Duration::from_millis(50),
+            RenderBackend::WebView => Duration::from_millis(300),
+        };
+        tokio::time::sleep(grace).await;
+        for (mid, old_backend) in pending {
+            match old_backend {
+                RenderBackend::Native => {
+                    if let Err(e) = self.renderer.destroy_monitor(mid.clone()) {
+                        log::warn!("[RenderCoordinator] 销毁旧原生表面失败 {}: {}", mid, e);
+                    }
+                }
+                RenderBackend::WebView => {
+                    let mut wm = self.window_manager.lock().await;
+                    wm.destroy_window(&mid);
+                }
+            }
+        }
     }
 
     /// renderer-error 的统一出口。

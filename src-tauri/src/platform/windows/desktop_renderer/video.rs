@@ -753,10 +753,18 @@ struct VideoSession {
     stage_logged: bool,
     blt_error_logged: bool,
     decoder_desc_logged: bool,
+    // 必须最后 drop：先释放 SourceReader / view / texture，再关闭 device manager。
+    gpu: WorkerGpu,
 }
 
 impl VideoSession {
-    fn new(gpu: &WorkerGpu, id: u64, path: &Path, state: Arc<Mutex<SharedState>>) -> Result<Self> {
+    fn new(
+        renderer_device: &ID3D11Device,
+        id: u64,
+        path: &Path,
+        state: Arc<Mutex<SharedState>>,
+    ) -> Result<Self> {
+        let gpu = WorkerGpu::new(renderer_device)?;
         let attributes: IMFAttributes = unsafe {
             let mut value = None;
             MFCreateAttributes(&mut value, 3)?;
@@ -818,6 +826,7 @@ impl VideoSession {
         let mut session = Self {
             id,
             state,
+            gpu,
             reader,
             enumerator: None,
             processor: None,
@@ -838,7 +847,7 @@ impl VideoSession {
             blt_error_logged: false,
             decoder_desc_logged: false,
         };
-        session.ensure_output(gpu, width, height)?;
+        session.ensure_output(width, height)?;
         Ok(session)
     }
 
@@ -846,7 +855,7 @@ impl VideoSession {
         self.shared_info.as_ref().expect("共享纹理信息已就绪")
     }
 
-    fn ensure_output(&mut self, gpu: &WorkerGpu, width: u32, height: u32) -> Result<()> {
+    fn ensure_output(&mut self, width: u32, height: u32) -> Result<()> {
         if self.width == width && self.height == height && self.output_view.is_some() {
             return Ok(());
         }
@@ -874,7 +883,8 @@ impl VideoSession {
         };
         let mut texture: Option<ID3D11Texture2D> = None;
         unsafe {
-            gpu.device
+            self.gpu
+                .device
                 .CreateTexture2D(&desc, Some(&initial_data), Some(&mut texture))?
         };
         let texture = texture.context("共享视频纹理创建失败")?;
@@ -895,7 +905,11 @@ impl VideoSession {
             OutputHeight: height,
             Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
         };
-        let enumerator = unsafe { gpu.video_device.CreateVideoProcessorEnumerator(&content) }?;
+        let enumerator = unsafe {
+            self.gpu
+                .video_device
+                .CreateVideoProcessorEnumerator(&content)
+        }?;
         let format_support = unsafe { enumerator.CheckVideoProcessorFormat(DXGI_FORMAT_NV12)? };
         if format_support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT.0 as u32 == 0 {
             return Err(anyhow::anyhow!(
@@ -903,11 +917,11 @@ impl VideoSession {
                 format_support
             ));
         }
-        let processor = unsafe { gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
+        let processor = unsafe { self.gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
 
         // VideoProcessorBlt 不直接写 shared keyed-mutex texture；写 worker staging texture，
         // 成功后 CopyResource 到 shared texture。staging texture 按分辨率复用。
-        let output_texture = gpu.staging_output_texture(width, height)?;
+        let output_texture = self.gpu.staging_output_texture(width, height)?;
 
         let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
@@ -917,7 +931,7 @@ impl VideoSession {
         };
         let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
         unsafe {
-            gpu.video_device.CreateVideoProcessorOutputView(
+            self.gpu.video_device.CreateVideoProcessorOutputView(
                 &output_texture,
                 &enumerator,
                 &view_desc,
@@ -990,9 +1004,9 @@ impl VideoSession {
         )
     }
 
-    fn process_sample(&mut self, gpu: &WorkerGpu, decoded: &DecodedSample) -> Result<bool> {
+    fn process_sample(&mut self, decoded: &DecodedSample) -> Result<bool> {
         let output_view = self.output_view.clone().context("VideoProcessor 未就绪")?;
-        let output_texture = gpu.staging_output_texture(self.width, self.height)?;
+        let output_texture = self.gpu.staging_output_texture(self.width, self.height)?;
         let processor = self.processor.clone().context("VideoProcessor 未就绪")?;
         let enumerator = self
             .enumerator
@@ -1024,7 +1038,7 @@ impl VideoSession {
             );
         }
 
-        let _ = unsafe { gpu.manager.TestDevice(gpu.manager_handle) };
+        let _ = unsafe { self.gpu.manager.TestDevice(self.gpu.manager_handle) };
 
         let shared_texture = self.shared_texture.clone().context("共享纹理缺失")?;
         let keyed_mutex: IDXGIKeyedMutex = shared_texture.cast()?;
@@ -1049,7 +1063,8 @@ impl VideoSession {
             };
             let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
             unsafe {
-                gpu.video_device
+                self.gpu
+                    .video_device
                     .CreateVideoProcessorInputView(
                         &decoder_texture,
                         &enumerator,
@@ -1086,7 +1101,7 @@ impl VideoSession {
                 log::info!("[VideoHw] session={} 开始首帧 VideoProcessorBlt", self.id);
             }
             let blt_result = unsafe {
-                gpu.video_context.VideoProcessorBlt(
+                self.gpu.video_context.VideoProcessorBlt(
                     &processor,
                     &output_view,
                     0,
@@ -1115,9 +1130,11 @@ impl VideoSession {
             })?;
             unsafe {
                 // Blt 只写 worker 私有纹理；确认 GPU 完成写入后再复制到 shared texture。
-                gpu.context.Flush();
-                gpu.context.CopyResource(&shared_texture, &output_texture);
-                gpu.context.Flush();
+                self.gpu.context.Flush();
+                self.gpu
+                    .context
+                    .CopyResource(&shared_texture, &output_texture);
+                self.gpu.context.Flush();
             }
             Ok(())
         })();
@@ -1139,7 +1156,7 @@ impl VideoSession {
                         self.id,
                         err
                     );
-                    log_d3d11_info_queue(&gpu.device, "VideoProcessorBlt");
+                    log_d3d11_info_queue(&self.gpu.device, "VideoProcessorBlt");
                 }
                 Ok(false)
             }
@@ -1195,7 +1212,7 @@ impl VideoSession {
         }
     }
 
-    fn tick(&mut self, gpu: &WorkerGpu) -> Result<bool> {
+    fn tick(&mut self) -> Result<bool> {
         if self.paused_at.is_some() {
             return Ok(false);
         }
@@ -1231,7 +1248,7 @@ impl VideoSession {
             },
         };
 
-        match self.process_sample(gpu, &sample) {
+        match self.process_sample(&sample) {
             Ok(true) => {
                 let frame_time = self.cycle_base.saturating_add(sample.timestamp);
                 self.note_frame(frame_time, sample.duration, self.cycle_base.is_zero());
@@ -1255,7 +1272,6 @@ fn video_worker_main(
     renderer_device: &ID3D11Device,
     commands: Receiver<WorkerCommand>,
 ) -> Result<()> {
-    let mut gpu: Option<WorkerGpu> = None;
     let mut sessions: HashMap<u64, VideoSession> = HashMap::new();
 
     loop {
@@ -1268,10 +1284,7 @@ fn video_worker_main(
                     ack,
                 } => {
                     let result = (|| -> Result<SharedFrameInfo> {
-                        if gpu.is_none() {
-                            gpu = Some(WorkerGpu::new(renderer_device)?);
-                        }
-                        let session = VideoSession::new(gpu.as_ref().unwrap(), id, &path, state)?;
+                        let session = VideoSession::new(renderer_device, id, &path, state)?;
                         let info = session.shared_frame_info().clone();
                         sessions.insert(id, session);
                         log::info!(
@@ -1316,11 +1329,6 @@ fn video_worker_main(
         }
 
         if sessions.is_empty() {
-            // 没有任何视频 session 时释放 worker 侧 D3D11 / device manager 资源；
-            // Worker 线程保留空闲等待，下一个视频 session 会重新创建 GPU。
-            if gpu.take().is_some() {
-                log::info!("[VideoHw] 视频 session 清零，全局 GPU 资源已释放");
-            }
             thread::sleep(Duration::from_millis(2));
             continue;
         }
@@ -1328,13 +1336,10 @@ fn video_worker_main(
         let ids: Vec<u64> = sessions.keys().copied().collect();
         let mut progressed = false;
         for id in ids {
-            let Some(gpu) = gpu.as_ref() else {
-                break;
-            };
             let Some(session) = sessions.get_mut(&id) else {
                 continue;
             };
-            match session.tick(gpu) {
+            match session.tick() {
                 Ok(done) => progressed |= done,
                 Err(err) => {
                     log::warn!("[VideoHw] session={} 帧处理失败: {:#}", id, err);

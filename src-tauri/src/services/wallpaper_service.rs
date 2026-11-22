@@ -16,7 +16,12 @@ use crate::utils::concurrency::import_concurrency;
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "webp"];
 
 /// 支持的视频扩展名
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov"];
+///
+/// M6：补齐 Media Foundation 原生支持的容器。webm / mkv 仍允许导入（保留未来
+/// WebView fallback 的可能），但当前渲染层会明确报 UnsupportedFormat，不会静默黑屏。
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "m4v", "mov", "avi", "wmv", "asf", "3gp", "3g2", "3gp2", "3gpp", "webm", "mkv",
+];
 
 /// 支持的 GIF 扩展名
 const GIF_EXTENSIONS: &[&str] = &["gif"];

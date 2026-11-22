@@ -143,7 +143,16 @@ impl RenderCoordinator {
 
         match descriptor.backend {
             RenderBackend::Native => {
-                self.renderer.ensure_monitor(monitor_id.to_string(), rect)?;
+                if let Err(e) = self
+                    .renderer
+                    .ensure_monitor(monitor_id.to_string(), rect)
+                    .await
+                {
+                    let error =
+                        RendererError::new(RendererErrorCode::BackendUnavailable, e.to_string());
+                    self.report_error(Some(monitor_id), Some(wallpaper_id), &error);
+                    return Err(error.into());
+                }
             }
             RenderBackend::WebView => {
                 let mut wm = self.window_manager.lock().await;
@@ -169,12 +178,20 @@ impl RenderCoordinator {
             } else {
                 self.native_targets()
             };
-            self.renderer.set_wallpaper(
-                mids,
-                descriptor.file_path.clone(),
-                descriptor.kind,
-                descriptor.fit_mode,
-            )?;
+            if let Err(e) = self
+                .renderer
+                .set_wallpaper(
+                    mids,
+                    descriptor.file_path.clone(),
+                    descriptor.kind,
+                    descriptor.fit_mode,
+                )
+                .await
+            {
+                let error = RendererError::new(RendererErrorCode::DecodeFailed, e.to_string());
+                self.report_error(Some(monitor_id), Some(wallpaper_id), &error);
+                return Err(error.into());
+            }
         }
 
         self.refresh_group_geometry();
@@ -239,17 +256,21 @@ impl RenderCoordinator {
             }
         }
         if !native_mids.is_empty() {
-            if let Err(e) = self.renderer.set_wallpaper(
-                native_mids,
-                descriptor.file_path.clone(),
-                descriptor.kind,
-                descriptor.fit_mode,
-            ) {
+            if let Err(e) = self
+                .renderer
+                .set_wallpaper(
+                    native_mids,
+                    descriptor.file_path.clone(),
+                    descriptor.kind,
+                    descriptor.fit_mode,
+                )
+                .await
+            {
                 log::warn!("[RenderCoordinator] 原生壁纸更新失败: {}", e);
                 self.report_error(
                     Some(&first),
                     Some(wallpaper_id),
-                    &RendererError::new(RendererErrorCode::BackendUnavailable, e.to_string()),
+                    &RendererError::new(RendererErrorCode::DecodeFailed, e.to_string()),
                 );
             }
         }
@@ -511,7 +532,9 @@ impl RenderCoordinator {
                             format!("monitor {} 缺少几何信息，无法切换原生渲染", monitor_id),
                         )
                     })?;
-                    self.renderer.ensure_monitor(monitor_id.to_string(), rect)?;
+                    self.renderer
+                        .ensure_monitor(monitor_id.to_string(), rect)
+                        .await?;
                 }
             }
             RenderBackend::WebView => {

@@ -33,7 +33,7 @@ impl DesktopRenderer {
         Ok(Self)
     }
 
-    pub fn ensure_monitor(&self, _monitor_id: String, _rect: MonitorRect) -> Result<()> {
+    pub async fn ensure_monitor(&self, _monitor_id: String, _rect: MonitorRect) -> Result<()> {
         Ok(())
     }
 
@@ -42,7 +42,7 @@ impl DesktopRenderer {
     }
 
     /// 一组显示器共享同一次解码与同一个帧时钟；independent 时组内只有一个 id。
-    pub fn set_wallpaper(
+    pub async fn set_wallpaper(
         &self,
         _monitor_ids: Vec<String>,
         _path: PathBuf,

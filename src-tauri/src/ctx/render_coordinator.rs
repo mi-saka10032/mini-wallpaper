@@ -100,11 +100,13 @@ impl RenderCoordinator {
         app_handle: AppHandle,
         window_manager: Arc<Mutex<WallpaperWindowManager>>,
     ) -> Result<Self> {
+        // renderer 线程持有 app_handle 用于设备丢失时直接上报事件，故先 clone 再存入自身字段。
+        let renderer = DesktopRenderer::start(app_handle.clone())?;
         Ok(Self {
             db,
             app_handle,
             window_manager,
-            renderer: DesktopRenderer::start()?,
+            renderer,
             selection: default_backend_selection(),
             backends: HashMap::new(),
             wallpaper_ids: HashMap::new(),

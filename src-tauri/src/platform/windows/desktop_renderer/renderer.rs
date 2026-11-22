@@ -20,10 +20,13 @@ use super::video::{
     shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback, PAUSE_FADE,
     PAUSE_FULLSCREEN,
 };
+use crate::events::{RendererErrorPayload, TypedEmit};
 use crate::platform::wallpaper_renderer::frame_cache::{
     cache_key_with_target, CacheKey, FrameCache,
 };
-use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
+use crate::platform::wallpaper_renderer::{
+    ExtendViewport, FitMode, MonitorRect, RendererErrorCode, WallpaperKind,
+};
 
 /// 在途的一次性图片解码：worker 线程完成后，结果经 `decode_tx` 回到渲染线程 attach。
 /// 只活到结果回收；过期 generation 的结果被丢弃，ack 仍回 Ok 避免误报 error。
@@ -48,6 +51,16 @@ fn send_acks(acks: Vec<Ack>, result: Result<(), String>) {
 struct DecodeResult {
     generation: u64,
     result: Result<SharedFrames, String>,
+}
+
+/// 确保共享 device 存在：设备丢失时被 take() 后，下一次正常命令在此惰性重建。
+/// 重建会连带新建 video worker（它持有 device clone，旧的那份已随设备失效）。
+fn ensure_shared(shared: &mut Option<SharedDevice>) -> Result<&SharedDevice> {
+    if shared.is_none() {
+        log::info!("[Renderer] 设备丢失后重建共享 D3D11 上下文");
+        *shared = Some(SharedDevice::new().context("重建共享 D3D11 上下文失败")?);
+    }
+    Ok(shared.as_ref().expect("ensure_shared 刚初始化过"))
 }
 
 /// 把媒体挂到组内每个 surface，并回 ack。命中缓存的同步路径与 worker 回来的
@@ -184,11 +197,12 @@ pub struct DesktopRenderer {
 
 impl DesktopRenderer {
     /// 启动名为 wallpaper-renderer 的单一渲染线程；COM / MF / D3D11 都在该线程内初始化。
-    pub fn start() -> Result<Self> {
+    /// `app_handle` 仅用于设备丢失时直接上报 renderer-error 给前端（无需反向通道）。
+    pub fn start(app_handle: tauri::AppHandle) -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("wallpaper-renderer".to_string())
-            .spawn(move || run(receiver))?;
+            .spawn(move || run(receiver, app_handle))?;
 
         Ok(Self {
             sender,
@@ -307,7 +321,7 @@ impl Drop for DesktopRenderer {
 /// 单次 tick：排空 command → 泵 WM_QUIT → 裁决视频暂停 / 音频资格 →
 /// 推进组级视频时钟与共享帧 → 逐 surface 绘制并结束 fade → 睡眠一帧。
 /// 暂停时跳过绘制但保留 surface 与内容，恢复后无需重新解码。
-fn run(receiver: Receiver<RendererCommand>) {
+fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
     let _com = ComScope::init();
 
     // Media Foundation 的 SourceReader 依赖 MF 平台已启动；失败时图片链路照常工作，
@@ -324,13 +338,14 @@ fn run(receiver: Receiver<RendererCommand>) {
     };
 
     // 所有 surface 共用一个 device；SRV 不能跨 device 绑定，而 extend 组要求同纹理同帧。
-    let shared = match SharedDevice::new() {
+    // Option 是为了设备丢失时整体 drop（连带 video worker join），下次命令再惰性重建。
+    let mut shared = Some(match SharedDevice::new() {
         Ok(device) => device,
         Err(err) => {
             log::error!("共享 D3D11 上下文创建失败: {:#}", err);
             return;
         }
-    };
+    });
 
     let mut surfaces: HashMap<String, RenderSurface> = HashMap::new();
     // 同一张图会因「首次双下发 / 同步模式逐屏下发 / A→B→A 回切」多次到达，
@@ -368,7 +383,7 @@ fn run(receiver: Receiver<RendererCommand>) {
                         }
                         continue;
                     }
-                    match RenderSurface::new(&shared, rect) {
+                    match ensure_shared(&mut shared).and_then(|s| RenderSurface::new(s, rect)) {
                         Ok(surface) => {
                             surfaces.insert(monitor_id, surface);
                             send_ack(ack, Ok(()));
@@ -413,8 +428,8 @@ fn run(receiver: Receiver<RendererCommand>) {
                                 );
                                 Ok(WallpaperMedia::Video(existing))
                             } else {
-                                shared
-                                    .open_video(&path, volume)
+                                ensure_shared(&mut shared)
+                                    .and_then(|s| s.open_video(&path, volume))
                                     .map(WallpaperMedia::Video)
                                     .with_context(|| format!("视频解码失败 {:?}", path))
                             };
@@ -475,7 +490,15 @@ fn run(receiver: Receiver<RendererCommand>) {
                         }
                     }
 
-                    let device = shared.device().clone();
+                    let device = match ensure_shared(&mut shared) {
+                        Ok(s) => s.device().clone(),
+                        Err(err) => {
+                            let message = format!("重建 D3D11 上下文失败: {:#}", err);
+                            log::error!("[Renderer] {}", message);
+                            send_ack(ack, Err(message));
+                            continue;
+                        }
+                    };
                     let worker_path = path.clone();
                     let worker_target = target;
                     let tx = decode_tx.clone();
@@ -632,8 +655,16 @@ fn run(receiver: Receiver<RendererCommand>) {
             // fade 结束时按 Arc 指针去重：组内共享同一播放状态时只 reset 一次，
             // 否则多屏会对同一个 SourceReader 重复 Flush / seek。
             let mut reset_seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+            // 任一 surface 报设备丢失就整组清理；D3D11 device 全局唯一，
+            // 一块屏失效意味着所有屏的 SRV / swapchain 与 video session GPU 同时失效。
+            let mut device_lost = false;
             for (monitor_id, surface) in surfaces.iter_mut() {
-                surface.render(monitor_id, now);
+                if surface.render(monitor_id, now) {
+                    device_lost = true;
+                }
+                if device_lost {
+                    continue;
+                }
                 if surface.finish_transition(now) {
                     // 刚提升为 wallpaper 的就是 fade 的 to。组内共享同一个播放状态，
                     // 只能 reset 一次；否则多屏会重复 Flush / seek 同一个 SourceReader。
@@ -656,6 +687,34 @@ fn run(receiver: Receiver<RendererCommand>) {
             // 若 finish_transition 又启动了 pending 下一段，仍会保持 PAUSE_FADE。
             sync_video_pause(&surfaces, now);
             sync_audio_state(&surfaces, paused);
+
+            if device_lost {
+                // 设备丢失：整组清理失效的 GPU 资源，保留 renderer 线程本身。
+                // 不主动重建——下次 EnsureMonitor / SetWallpaper 命令到达时由
+                // ensure_shared 惰性重建（连带新 video worker）并重挂壁纸。
+                log::error!("[Renderer] 检测到设备丢失，清理全部原生 surface 与共享 device");
+                for (_, mut surface) in surfaces.drain() {
+                    surface.destroy();
+                }
+                // drop SharedDevice 会连带 drop VideoWorkerHost：其内部 Drop 发
+                // Shutdown 并 join worker，避免失效 device 上的线程残留。
+                shared = None;
+                // 缓存里的 SRV 全部指向失效 device，必须一并丢弃。
+                frame_cache.clear();
+                // 在途解码结果持有的 device clone 也随设备失效，但 worker 是一次性的，
+                // 结果回来后 attach 时 surface 已不存在，会被 attach_media 判为无目标；
+                // 这里主动递增 generation 让它们过期，避免在新 device 上挂旧纹理。
+                next_generation += 1;
+                let payload = RendererErrorPayload {
+                    monitor_id: None,
+                    wallpaper_id: None,
+                    code: RendererErrorCode::DeviceLost.as_str().to_string(),
+                    message: "显卡设备丢失，原生壁纸已清理；下次换图将自动恢复".to_string(),
+                };
+                if let Err(err) = app_handle.typed_emit(&payload) {
+                    log::warn!("[Renderer] DeviceLost 事件发送失败: {}", err);
+                }
+            }
         }
 
         thread::sleep(Duration::from_millis(16));

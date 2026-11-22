@@ -103,6 +103,14 @@ impl<T: ByteSize> FrameCache<T> {
         self.insert_inner(key, value);
     }
 
+    /// 清空缓存。设备丢失时缓存里的 D3D11 SRV 全部失效，必须丢弃；
+    /// 持有它们的 surface / Arc 仍可正常 drop（GPU 资源由驱动回收）。
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.bytes = 0;
+    }
+
     /// 命中则复用同一份 Arc（帧时钟也一并复用），未命中才执行 `make`。
     /// key 为 None 时完全绕过缓存，适用于文件元数据不可读的情况。
     pub fn get_or_insert_with<E>(
@@ -342,6 +350,19 @@ mod tests {
         assert_eq!(frames.byte_size(), 126, "超大素材仍要正常返回给调用方");
         assert_eq!(cache.cached_bytes(), 0);
         assert!(!cache.contains(&key("8k")));
+    }
+
+    #[test]
+    fn clear_drops_all_entries_and_bytes() {
+        let mut cache = FrameCache::<Dummy>::with_default_budget();
+        cache.insert_inner(key("a"), Arc::new(Dummy(4)));
+        cache.insert_inner(key("b"), Arc::new(Dummy(8)));
+        assert_eq!(cache.cached_bytes(), 12);
+
+        cache.clear();
+        assert_eq!(cache.cached_bytes(), 0);
+        assert!(!cache.contains(&key("a")));
+        assert!(!cache.contains(&key("b")));
     }
 
     #[test]

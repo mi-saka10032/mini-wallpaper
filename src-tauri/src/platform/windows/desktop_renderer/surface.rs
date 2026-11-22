@@ -187,6 +187,11 @@ impl SharedFrames {
         self.started_at = started_at;
     }
 
+    /// 多帧动图需要按帧时钟持续重绘；单帧静态图不需要。
+    pub(crate) fn is_animated(&self) -> bool {
+        self.frames.len() > 1
+    }
+
     fn current_frame(&self, now: Instant) -> &GpuFrame {
         if self.frames.len() <= 1 {
             return &self.frames[0];
@@ -496,6 +501,15 @@ impl RenderSurface {
     /// 是否处于 fade 中或还有排队项。renderer loop 据此冻结 from / to 的视频时钟。
     pub fn fade_active_or_pending(&self) -> bool {
         self.transition.is_some() || !self.pending.is_empty()
+    }
+
+    /// 该屏是否需要主循环按 16ms 持续出帧。纯静态单帧图不需要，
+    /// 视频 / fade / 动图都需要按帧时钟推进，否则会出现跳帧或 fade 卡顿。
+    pub fn needs_continuous_frames(&self) -> bool {
+        if self.fade_active_or_pending() || !self.video_arcs().is_empty() {
+            return true;
+        }
+        matches!(&self.wallpaper, Some(WallpaperMedia::Frames(frames)) if frames.is_animated())
     }
 
     /// 当前壁纸（fade 期间即 from）的视频播放状态；由 renderer loop 在绘制整组前统一推进。

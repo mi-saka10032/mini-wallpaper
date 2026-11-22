@@ -74,5 +74,9 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    pub fn set_volume(&self, _volume: u32) -> Result<()> {
+        Ok(())
+    }
+
     pub fn shutdown(&mut self) {}
 }

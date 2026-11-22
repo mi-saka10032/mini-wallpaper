@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use image::codecs::gif::GifDecoder;
@@ -17,23 +17,42 @@ pub struct DecodedFrame {
 }
 
 pub fn decode_frames(path: &Path) -> Result<Vec<DecodedFrame>> {
+    let started = Instant::now();
     let ext = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    let label = file_label(path);
 
-    match ext.as_str() {
+    let frames = match ext.as_str() {
         "gif" => {
             let decoder = GifDecoder::new(BufReader::new(File::open(path)?))?;
-            decode_animated(decoder)
+            decode_animated(decoder)?
         }
         "webp" => {
             let decoder = WebPDecoder::new(BufReader::new(File::open(path)?))?;
-            decode_animated(decoder)
+            decode_animated(decoder)?
         }
-        _ => Ok(vec![build_frame(image::open(path)?, Duration::ZERO)]),
-    }
+        _ => {
+            let open_started = Instant::now();
+            let image = image::open(path)?;
+            log::debug!(
+                "[Decode] 静态图 image::open file={} ms={:.1}",
+                label,
+                elapsed_ms(open_started)
+            );
+            vec![build_frame(image, Duration::ZERO)]
+        }
+    };
+
+    log::debug!(
+        "[Decode] 解码完成 file={} frames={} total_ms={:.1}",
+        label,
+        frames.len(),
+        elapsed_ms(started)
+    );
+    Ok(frames)
 }
 
 fn decode_animated<'a, D>(decoder: D) -> Result<Vec<DecodedFrame>>
@@ -71,8 +90,20 @@ fn frame_duration(frame: &Frame) -> Duration {
 fn build_frame(image: DynamicImage, duration: Duration) -> DecodedFrame {
     let width = image.width();
     let height = image.height();
+
+    let rgba_started = Instant::now();
     let rgba = image.to_rgba8().into_raw();
+    let rgba_ms = elapsed_ms(rgba_started);
+
+    let bgra_started = Instant::now();
     let bgra = rgba_to_bgra(&rgba);
+    log::debug!(
+        "[Decode] 像素转换 {}x{} to_rgba8_ms={:.1} rgba_to_bgra_ms={:.1}",
+        width,
+        height,
+        rgba_ms,
+        elapsed_ms(bgra_started)
+    );
 
     DecodedFrame {
         bgra,
@@ -91,6 +122,17 @@ fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
         dst[3] = src[3];
     }
     bgra
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
+
+fn file_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("<unknown>")
+        .to_string()
 }
 
 #[cfg(test)]

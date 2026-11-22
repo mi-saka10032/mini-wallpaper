@@ -37,7 +37,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
-use super::video::VideoPlayback;
+use super::video::{VideoFrameSnapshot, VideoPlayback};
 use super::window::NativeWindow;
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
@@ -81,6 +81,19 @@ float4 ps_main(VS_OUT input) : SV_TARGET {
     color.a = fade_alpha;
     return color;
 }
+
+Texture2D y_plane : register(t0);
+Texture2D uv_plane : register(t1);
+
+float4 ps_nv12(VS_OUT input) : SV_TARGET {
+    // BT.601 limited-range NV12 → RGB，全部在 GPU 侧完成，避免 CPU 逐像素转换。
+    float y = saturate((y_plane.Sample(linear_sampler, input.uv).r - 16.0 / 255.0) * 1.164383);
+    float2 uv = uv_plane.Sample(linear_sampler, input.uv).rg - 0.5;
+    float r = saturate(y + 1.596027 * uv.y);
+    float g = saturate(y - 0.391762 * uv.x - 0.812968 * uv.y);
+    float b = saturate(y + 2.017232 * uv.x);
+    return float4(float3(r, g, b) * fade_alpha, fade_alpha);
+}
 "#;
 
 #[repr(C)]
@@ -119,6 +132,7 @@ const QUAD: [Vertex; 4] = [
 struct QuadPipeline {
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
+    nv12_pixel_shader: ID3D11PixelShader,
     rasterizer_state: ID3D11RasterizerState,
     input_layout: ID3D11InputLayout,
     vertex_buffer: ID3D11Buffer,
@@ -255,14 +269,31 @@ impl SharedDevice {
 
     /// 一次解码 + 一次纹理上传，返回整组共用的帧序列。
     pub fn upload_frames(&self, path: &Path, _kind: WallpaperKind) -> Result<Arc<SharedFrames>> {
+        let started = Instant::now();
+        let decode_started = Instant::now();
         let decoded = decode_frames(path)?;
+        let decode_ms = elapsed_ms(decode_started);
         if decoded.is_empty() {
             anyhow::bail!("解码结果为空: {:?}", path);
         }
+
+        let upload_started = Instant::now();
         let mut frames = Vec::with_capacity(decoded.len());
         for frame in &decoded {
             frames.push(self.upload_frame(frame)?);
         }
+        let upload_ms = elapsed_ms(upload_started);
+        log::info!(
+            "[Upload] 图片就绪 file={} frames={} decode_ms={:.1} upload_ms={:.1} total_ms={:.1}",
+            path.file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("<unknown>"),
+            frames.len(),
+            decode_ms,
+            upload_ms,
+            elapsed_ms(started)
+        );
+
         Ok(Arc::new(SharedFrames {
             frames,
             started_at: Instant::now(),
@@ -271,8 +302,8 @@ impl SharedDevice {
 
     /// 打开一个流式视频播放状态；复用共享 device / context，不进 FrameCache
     /// （视频不缓存全部帧，缓存的是唯一一个正在推进的播放状态）。
-    pub fn open_video(&self, path: &Path) -> Result<Arc<Mutex<VideoPlayback>>> {
-        let playback = VideoPlayback::open(&self.device, &self.context, path)?;
+    pub fn open_video(&self, path: &Path, volume: u32) -> Result<Arc<Mutex<VideoPlayback>>> {
+        let playback = VideoPlayback::open(&self.device, &self.context, path, volume)?;
         Ok(Arc::new(Mutex::new(playback)))
     }
 
@@ -298,19 +329,29 @@ impl SharedDevice {
             SysMemSlicePitch: 0,
         };
 
+        let texture_started = Instant::now();
         let mut texture: Option<ID3D11Texture2D> = None;
         unsafe {
             self.device
                 .CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
         }
+        let texture_ms = elapsed_ms(texture_started);
         let texture = texture.context("D3D11 frame texture 创建失败")?;
 
         // SRV 内部持有 texture 引用，无需在 GpuFrame 里再保存一份
+        let srv_started = Instant::now();
         let mut view: Option<ID3D11ShaderResourceView> = None;
         unsafe {
             self.device
                 .CreateShaderResourceView(&texture, None, Some(&mut view))?;
         }
+        log::debug!(
+            "[Upload] texture {}x{} create_ms={:.1} srv_ms={:.1}",
+            frame.width,
+            frame.height,
+            texture_ms,
+            elapsed_ms(srv_started)
+        );
         let view = view.context("D3D11 frame shader resource view 创建失败")?;
 
         Ok(GpuFrame {
@@ -320,6 +361,10 @@ impl SharedDevice {
             duration: frame.duration,
         })
     }
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 pub struct RenderSurface {
@@ -402,7 +447,8 @@ impl RenderSurface {
     }
 
     /// 挂上一张新壁纸。`crossfade = false`（跨 backend / 首帧）直接替换并丢弃队列；
-    /// `true` 时入 FIFO 队列，当前没有 fade 才立即启动下一段。
+    /// `true` 时保留当前 fade，但排队项只保留最新一张——每个视频都持有独立
+    /// DXVA worker / D3D11 device / SourceReader，FIFO 堆积会让连续切换暴涨内存。
     pub fn queue_wallpaper(
         &mut self,
         media: WallpaperMedia,
@@ -417,6 +463,9 @@ impl RenderSurface {
             self.fit_mode = fit_mode;
             return;
         }
+        // 只保留最新排队项；被丢弃的 Arc 会立即触发 VideoPlayback::Drop，
+        // worker 收到 Exit 后释放 SourceReader / device manager / shared texture。
+        self.pending.clear();
         self.pending.push_back(PendingWallpaper { media, fit_mode });
         if self.transition.is_none() {
             self.start_next_transition(now);
@@ -467,6 +516,26 @@ impl RenderSurface {
             Some(WallpaperMedia::Video(playback)) => Some(playback),
             _ => None,
         }
+    }
+
+    /// 当前 / 过渡中 / 排队中的所有视频播放状态。
+    /// 音量与 fade 冻结必须覆盖 to 与队列里的视频，否则新音频会在 fade 前提前出声。
+    pub fn video_arcs(&self) -> Vec<&Arc<Mutex<VideoPlayback>>> {
+        let mut arcs = Vec::new();
+        if let Some(playback) = self.video() {
+            arcs.push(playback);
+        }
+        if let Some(transition) = &self.transition {
+            if let WallpaperMedia::Video(playback) = &transition.to {
+                arcs.push(playback);
+            }
+        }
+        for pending in &self.pending {
+            if let WallpaperMedia::Video(playback) = &pending.media {
+                arcs.push(playback);
+            }
+        }
+        arcs
     }
 
     pub fn set_extend_viewport(&mut self, viewport: Option<ExtendViewport>) {
@@ -589,26 +658,39 @@ impl RenderSurface {
     fn draw_media(&self, media: &WallpaperMedia, fit_mode: FitMode, alpha: f32, now: Instant) {
         // 先取出 (SRV, 宽, 高)，两条媒体链路在这一步之后完全共用同一套 quad / viewport。
         // VideoPlayback 的时钟由 renderer loop 在绘制整组前统一推进，这里只读当前帧。
-        let current: Option<(ID3D11ShaderResourceView, u32, u32)> = match media {
+        let current: Option<VideoFrameSnapshot> = match media {
             WallpaperMedia::Frames(frames) => {
                 let frame = frames.current_frame(now);
-                Some((frame.view.clone(), frame.width, frame.height))
+                Some(VideoFrameSnapshot::for_static_frame(
+                    frame.view.clone(),
+                    frame.width,
+                    frame.height,
+                ))
             }
             WallpaperMedia::Video(playback) => playback
                 .lock()
                 .ok()
                 .and_then(|guard| guard.frame_snapshot()),
         };
-        let Some((view, frame_width, frame_height)) = current else {
+        let Some(current) = current else {
             return;
         };
+        let view = current.view.clone();
+        let uv_view = current.uv_view.clone();
+        let frame_width = current.width;
+        let frame_height = current.height;
 
         let pipeline = &self.pipeline;
         let vertex_buffers = [Some(pipeline.vertex_buffer.clone())];
         let strides = [std::mem::size_of::<Vertex>() as u32];
         let offsets = [0u32];
         let samplers = [Some(pipeline.sampler.clone())];
-        let views = [Some(view.clone())];
+        let views = [Some(view), uv_view];
+        let pixel_shader = if views[1].is_some() {
+            &pipeline.nv12_pixel_shader
+        } else {
+            &pipeline.pixel_shader
+        };
         let constant_buffers = [Some(pipeline.fade_buffer.clone())];
         // Q1：extend 与 WebView 的 object-fit:fill 语义一致——忽略 fitMode，
         // 整张图拉伸铺满所有显示器的并集，再用负 TopLeftX/Y 把本屏那块裁进 RT。
@@ -672,13 +754,14 @@ impl RenderSurface {
             self.context
                 .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             self.context.VSSetShader(&pipeline.vertex_shader, None);
-            self.context.PSSetShader(&pipeline.pixel_shader, None);
+            self.context.PSSetShader(pixel_shader, None);
             self.context.PSSetSamplers(0, Some(&samplers));
             self.context.PSSetShaderResources(0, Some(&views));
             // QUAD 顶点顺序与 D3D 默认正面绕序相反，不显式关背面剔除会丢掉全部三角形
             self.context.RSSetState(&pipeline.rasterizer_state);
             self.context.RSSetViewports(Some(&[viewport]));
             self.context.Draw(4, 0);
+            // 视频帧来自 renderer 本地副本；keyed mutex 已在帧开始时统一释放。
         }
     }
 
@@ -763,6 +846,11 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
         c"ps_main".as_ptr() as *const u8,
         c"ps_5_0".as_ptr() as *const u8,
     )?;
+    let ps_nv12_bytecode = compile_shader(
+        SHADER_SOURCE,
+        c"ps_nv12".as_ptr() as *const u8,
+        c"ps_5_0".as_ptr() as *const u8,
+    )?;
 
     let elements = [
         D3D11_INPUT_ELEMENT_DESC {
@@ -802,6 +890,12 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
         device.CreatePixelShader(&ps_bytecode, None, Some(&mut pixel_shader))?;
     }
     let pixel_shader = pixel_shader.context("D3D11 pixel shader 创建失败")?;
+
+    let mut nv12_pixel_shader: Option<ID3D11PixelShader> = None;
+    unsafe {
+        device.CreatePixelShader(&ps_nv12_bytecode, None, Some(&mut nv12_pixel_shader))?;
+    }
+    let nv12_pixel_shader = nv12_pixel_shader.context("D3D11 NV12 pixel shader 创建失败")?;
 
     // QUAD 的 TRIANGLESTRIP 绕序与 D3D 默认正面相反，显式关掉背面剔除；
     // 不依赖 RSSetState(NULL) 的隐式默认值，以后换拓扑或改顶点顺序都不会再踩。
@@ -899,6 +993,7 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
     Ok(QuadPipeline {
         vertex_shader,
         pixel_shader,
+        nv12_pixel_shader,
         rasterizer_state,
         input_layout,
         vertex_buffer,

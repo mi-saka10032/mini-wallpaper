@@ -106,6 +106,21 @@ impl RenderCoordinator {
         self.set_display_mode(mode);
     }
 
+    /// 从 app_setting 读取 global_volume；启动时同步一次，避免持久化音量在重启后失效。
+    pub async fn refresh_volume(&mut self) {
+        let volume = match app_setting_service::get(&self.db, setting_keys::GLOBAL_VOLUME).await {
+            Ok(Some(value)) => value.parse::<u32>().unwrap_or(0).min(100),
+            _ => 0,
+        };
+        self.set_volume(volume);
+    }
+
+    pub fn set_volume(&self, volume: u32) {
+        if let Err(err) = self.renderer.set_volume(volume) {
+            log::warn!("[RenderCoordinator] 同步 Native 音量失败: {:#}", err);
+        }
+    }
+
     pub fn set_display_mode(&mut self, mode: DisplayMode) {
         if self.display_mode == mode {
             return;

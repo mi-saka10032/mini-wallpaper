@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::surface::{RenderSurface, SharedDevice, SharedFrames, WallpaperMedia};
-use super::video::{startup as mf_startup, VideoPlayback};
+use super::video::{shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback};
 use crate::platform::wallpaper_renderer::frame_cache::{cache_key, FrameCache};
 use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 
@@ -96,6 +96,9 @@ enum RendererCommand {
     },
     SetPaused {
         paused: bool,
+    },
+    SetVolume {
+        volume: u32,
     },
     Shutdown,
 }
@@ -189,6 +192,13 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    pub fn set_volume(&self, volume: u32) -> Result<()> {
+        self.sender.send(RendererCommand::SetVolume {
+            volume: volume.min(100),
+        })?;
+        Ok(())
+    }
+
     pub fn shutdown(&mut self) {
         if self.sender.send(RendererCommand::Shutdown).is_err() {
             return;
@@ -210,12 +220,16 @@ fn run(receiver: Receiver<RendererCommand>) {
 
     // Media Foundation 的 SourceReader 依赖 MF 平台已启动；失败时图片链路照常工作，
     // 只有视频会打开失败并把错误回传给协调器。
-    if let Err(err) = mf_startup() {
-        log::error!(
-            "[Renderer] Media Foundation 初始化失败，视频壁纸不可用: {:#}",
-            err
-        );
-    }
+    let mf_started = match mf_startup() {
+        Ok(()) => true,
+        Err(err) => {
+            log::error!(
+                "[Renderer] Media Foundation 初始化失败，视频壁纸不可用: {:#}",
+                err
+            );
+            false
+        }
+    };
 
     // 所有 surface 共用一个 device；SRV 不能跨 device 绑定，而 extend 组要求同纹理同帧。
     let shared = match SharedDevice::new() {
@@ -233,6 +247,8 @@ fn run(receiver: Receiver<RendererCommand>) {
     let mut frame_cache = FrameCache::<SharedFrames>::with_default_budget();
     let mut running = true;
     let mut paused = false;
+    // global_volume 默认 0；启动时由 RenderCoordinator 再同步一次 DB 中的值。
+    let mut volume = 0u32;
 
     while running {
         while let Ok(command) = receiver.try_recv() {
@@ -280,10 +296,21 @@ fn run(receiver: Receiver<RendererCommand>) {
                     // 视频走流式：一次打开、组内共享一个 Arc；图片/GIF/WebP 走缓存。
                     // 两条链路都必须先构造出媒体内容，再挂到每个 surface，避免半挂状态。
                     let result: Result<WallpaperMedia> = match kind {
-                        WallpaperKind::Video => shared
-                            .open_video(&path)
-                            .map(WallpaperMedia::Video)
-                            .with_context(|| format!("视频解码失败 {:?}", path)),
+                        WallpaperKind::Video => {
+                            let identity = VideoIdentity::from_path(&path);
+                            if let Some(existing) = find_reusable_video(&surfaces, &identity) {
+                                log::info!(
+                                    "[Renderer] 复用已有视频播放状态 {:?}",
+                                    path.file_name().unwrap_or_default()
+                                );
+                                Ok(WallpaperMedia::Video(existing))
+                            } else {
+                                shared
+                                    .open_video(&path, volume)
+                                    .map(WallpaperMedia::Video)
+                                    .with_context(|| format!("视频解码失败 {:?}", path))
+                            }
+                        }
                         _ => frame_cache
                             .get_or_insert_with(cache_key(&path), || {
                                 shared.upload_frames(&path, kind)
@@ -349,19 +376,32 @@ fn run(receiver: Receiver<RendererCommand>) {
                 }
                 RendererCommand::SetPaused { paused: next } => {
                     paused = next;
-                    // 冻结 / 恢复组内每个视频的播放时钟；不 flush、不重建 SourceReader。
-                    // 按 Arc 指针去重，同一个播放状态只记一次暂停时长。
+                    // 冻结 / 恢复所有视频（含 fade 队列里的 to）的播放时钟与音频；
+                    // 不 flush、不重建 SourceReader。按 Arc 指针去重，避免组内重复记暂停时长。
                     let now = Instant::now();
                     let mut seen = std::collections::HashSet::new();
                     for surface in surfaces.values_mut() {
-                        let Some(playback) = surface.video() else {
-                            continue;
-                        };
-                        if !seen.insert(Arc::as_ptr(playback)) {
-                            continue;
+                        for playback in surface.video_arcs() {
+                            if !seen.insert(Arc::as_ptr(playback)) {
+                                continue;
+                            }
+                            if let Ok(mut guard) = playback.lock() {
+                                guard.set_paused(next, now);
+                            }
                         }
-                        if let Ok(mut guard) = playback.lock() {
-                            guard.set_paused(next, now);
+                    }
+                }
+                RendererCommand::SetVolume { volume: next } => {
+                    volume = next;
+                    let mut seen = std::collections::HashSet::new();
+                    for surface in surfaces.values_mut() {
+                        for playback in surface.video_arcs() {
+                            if !seen.insert(Arc::as_ptr(playback)) {
+                                continue;
+                            }
+                            if let Ok(mut guard) = playback.lock() {
+                                guard.set_audio_volume(volume);
+                            }
                         }
                     }
                 }
@@ -373,11 +413,18 @@ fn run(receiver: Receiver<RendererCommand>) {
             break;
         }
 
+        // 音频播放资格与视频绘制解耦：全屏暂停 / fade 冻结 / pending 队列统一在这里裁决。
+        // 必须在绘制前调用，避免 to 视频在 fade 结束前提前出声，或恢复全屏时 pending 漏音。
+        sync_audio_state(&surfaces, paused);
+
         // 全屏暂停时跳过绘制，但保留 surface 与壁纸内容，恢复后无需重新解码
         if !paused {
             let now = Instant::now();
             // 组级视频时钟推进：同一 Arc 只 advance 一次，避免每屏各推进一次导致快进。
             advance_videos(&mut surfaces, now);
+            // 帧级共享纹理同步：同一 VideoPlayback 每帧只 AcquireSync/CopyResource 一次，
+            // 所有 surface 随后只读 renderer 本地副本，避免双屏抢 keyed mutex 闪烁。
+            begin_video_frames(&surfaces);
             let mut reset_seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
             for (monitor_id, surface) in surfaces.iter_mut() {
                 surface.render(monitor_id, now);
@@ -406,6 +453,90 @@ fn run(receiver: Receiver<RendererCommand>) {
 
     for (_, mut surface) in surfaces {
         surface.destroy();
+    }
+    // 所有 SourceReader / worker 已随 surface 释放；先释放 D3D11，再关闭 MF 平台，
+    // 保证 MFStartup / MFShutdown 成对，且不会从工作队列线程调用 shutdown。
+    drop(frame_cache);
+    drop(shared);
+    if mf_started {
+        if let Err(err) = mf_shutdown() {
+            log::warn!("[Renderer] Media Foundation 关闭失败: {:#}", err);
+        }
+    }
+}
+
+/// 同一份视频在 current / transition / pending 中已经存在时直接复用，不再开新 worker。
+fn find_reusable_video(
+    surfaces: &HashMap<String, RenderSurface>,
+    identity: &VideoIdentity,
+) -> Option<Arc<Mutex<VideoPlayback>>> {
+    let mut seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    for surface in surfaces.values() {
+        for playback in surface.video_arcs() {
+            let ptr = Arc::as_ptr(playback);
+            if !seen.insert(ptr) {
+                continue;
+            }
+            if let Ok(guard) = playback.lock() {
+                if guard.identity() == identity {
+                    return Some(playback.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 每帧对所有唯一 VideoPlayback 做一次共享帧刷新。
+///
+/// Mirror/Extend 多屏共享同一个 Arc<Mutex<VideoPlayback>>；必须按指针去重，
+/// 否则每个 surface 各抢一次 keyed mutex，会出现一块屏拿到帧、另一块屏拿到 key0 的黑屏。
+fn begin_video_frames(surfaces: &HashMap<String, RenderSurface>) {
+    let mut seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    for surface in surfaces.values() {
+        for playback in surface.video_arcs() {
+            let ptr = Arc::as_ptr(playback);
+            if !seen.insert(ptr) {
+                continue;
+            }
+            if let Ok(mut guard) = playback.lock() {
+                guard.begin_frame();
+            }
+        }
+    }
+}
+
+/// 裁决每个视频的音频是否应该出声。
+///
+/// 只有「当前正在显示、且不在 fade / pending 中、且未全屏暂停」的播放状态才播放音频。
+/// 这样 Mirror/Extend 组共享一个 VideoPlayback 时自然只有一份音频；Independent 每屏
+/// 各自持有一个 VideoPlayback，自然按屏叠加。与 WebView 的过渡语义保持一致。
+fn sync_audio_state(surfaces: &HashMap<String, RenderSurface>, paused: bool) {
+    let mut frozen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    let mut active: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+
+    for surface in surfaces.values() {
+        if surface.fade_active_or_pending() {
+            for playback in surface.video_arcs() {
+                frozen.insert(Arc::as_ptr(playback));
+            }
+        } else if let Some(playback) = surface.video() {
+            active.insert(Arc::as_ptr(playback));
+        }
+    }
+
+    let mut seen = HashSet::new();
+    for surface in surfaces.values() {
+        for playback in surface.video_arcs() {
+            let ptr = Arc::as_ptr(playback);
+            if !seen.insert(ptr) {
+                continue;
+            }
+            let should_play = !paused && active.contains(&ptr) && !frozen.contains(&ptr);
+            if let Ok(mut guard) = playback.lock() {
+                guard.set_audio_paused(!should_play);
+            }
+        }
     }
 }
 

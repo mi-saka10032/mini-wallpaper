@@ -7,6 +7,8 @@ use crate::dto::wallpaper_window_dto::{
     CreateWallpaperWindowRequest, DestroyWallpaperWindowRequest,
 };
 use crate::dto::Validated;
+use crate::platform::wallpaper_renderer::MonitorRect;
+use crate::services::monitor_config_service;
 
 use super::error::CommandResult;
 
@@ -19,46 +21,26 @@ pub async fn create_wallpaper_window(
     let req = req.into_inner();
     let app_ctx: &AppContext = ctx.inner();
 
-    // 阶段 1：持锁建窗，拿到嵌入目标后立即释放锁
-    let created = {
-        let mut mgr = app_ctx.window_manager.lock().await;
-        mgr.create_window(
-            &req.monitor_id,
-            req.x,
-            req.y,
-            req.width,
-            req.height,
-            req.extra_query.as_deref(),
-        )?
-    };
+    // 从 config 取当前壁纸，交给协调器决定 backend 并准备渲染目标
+    let wallpaper_id = monitor_config_service::get_by_monitor_id(&app_ctx.db, &req.monitor_id)
+        .await?
+        .and_then(|config| config.wallpaper_id);
 
-    let Some(created) = created else {
+    let Some(wallpaper_id) = wallpaper_id else {
         return Ok(());
     };
 
-    // 阶段 2：锁外把含 1 秒 Win32 调用的嵌入丢到阻塞线程池
-    #[cfg(target_os = "windows")]
-    if let Some(target) = created.embed_target {
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            crate::platform::windows::desktop_embedder::embed_in_desktop(
-                target.hwnd,
-                target.x,
-                target.y,
-                target.width,
-                target.height,
-            )
-        })
-        .await;
-        match result {
-            Ok(Err(e)) => log::error!("桌面嵌入失败: {:#}", e),
-            Err(e) => log::error!("桌面嵌入任务异常: {}", e),
-            Ok(Ok(())) => {}
-        }
-    }
+    let rect = MonitorRect {
+        x: req.x,
+        y: req.y,
+        width: req.width as i32,
+        height: req.height as i32,
+    };
+    let mut coordinator = app_ctx.render_coordinator.lock().await;
+    coordinator
+        .ensure_target(&req.monitor_id, rect, wallpaper_id)
+        .await?;
 
-    // 阶段 3：重新持锁，嵌入完成后才显示窗口
-    let mgr = app_ctx.window_manager.lock().await;
-    mgr.show_window(&created.label);
     Ok(())
 }
 
@@ -70,8 +52,8 @@ pub async fn destroy_wallpaper_window(
 ) -> CommandResult<()> {
     let req = req.into_inner();
     let app_ctx: &AppContext = ctx.inner();
-    let mut mgr = app_ctx.window_manager.lock().await;
-    mgr.destroy_window(&req.monitor_id);
+    let mut coordinator = app_ctx.render_coordinator.lock().await;
+    coordinator.destroy_target(&req.monitor_id).await;
     Ok(())
 }
 
@@ -79,35 +61,38 @@ pub async fn destroy_wallpaper_window(
 #[tauri::command]
 pub async fn destroy_all_wallpaper_windows(ctx: State<'_, AppContext>) -> CommandResult<()> {
     let app_ctx: &AppContext = ctx.inner();
-    let mut mgr = app_ctx.window_manager.lock().await;
-    mgr.destroy_all();
+    let mut coordinator = app_ctx.render_coordinator.lock().await;
+    let mids = coordinator.active_ids().await;
+    for mid in mids {
+        coordinator.destroy_target(&mid).await;
+    }
     Ok(())
 }
 
-/// 隐藏所有壁纸窗口
+/// 隐藏所有壁纸窗口（全屏暂停）
 #[tauri::command]
 pub async fn hide_wallpaper_windows(ctx: State<'_, AppContext>) -> CommandResult<()> {
     let app_ctx: &AppContext = ctx.inner();
-    let mgr = app_ctx.window_manager.lock().await;
-    mgr.hide_all();
+    let coordinator = app_ctx.render_coordinator.lock().await;
+    coordinator.set_paused(true).await;
     Ok(())
 }
 
-/// 显示所有壁纸窗口
+/// 显示所有壁纸窗口（全屏恢复）
 #[tauri::command]
 pub async fn show_wallpaper_windows(ctx: State<'_, AppContext>) -> CommandResult<()> {
     let app_ctx: &AppContext = ctx.inner();
-    let mgr = app_ctx.window_manager.lock().await;
-    mgr.show_all();
+    let coordinator = app_ctx.render_coordinator.lock().await;
+    coordinator.set_paused(false).await;
     Ok(())
 }
 
-/// 获取当前已创建壁纸窗口的 monitor_id 列表
+/// 获取当前已创建渲染目标的 monitor_id 列表（Native + WebView 合并）
 #[tauri::command]
 pub async fn get_active_wallpaper_windows(
     ctx: State<'_, AppContext>,
 ) -> CommandResult<Vec<String>> {
     let app_ctx: &AppContext = ctx.inner();
-    let mgr = app_ctx.window_manager.lock().await;
-    Ok(mgr.get_active_window_ids())
+    let coordinator = app_ctx.render_coordinator.lock().await;
+    Ok(coordinator.active_ids().await)
 }

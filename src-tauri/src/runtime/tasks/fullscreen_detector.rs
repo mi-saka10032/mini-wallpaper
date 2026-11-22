@@ -13,9 +13,11 @@
 use std::time::Duration;
 
 use log::info;
+use tauri::Manager;
 use tokio::task::JoinHandle;
 
 use super::TaskSpawner;
+use crate::ctx::AppContext;
 use crate::events::{FullscreenChangedPayload, TypedEmit};
 
 /// 全屏检测定时器在 Scheduler 中的 key
@@ -45,6 +47,13 @@ impl TaskSpawner for FullscreenDetectionTask {
                     }
 
                     let _ = app.typed_emit(&FullscreenChangedPayload { is_fullscreen });
+
+                    // 同时暂停 / 恢复渲染协调器：Native 停帧，WebView 隐藏窗口。
+                    // 前端的 useFullscreenPause 只负责暂停 video 元素，覆盖不到原生渲染。
+                    let app_ctx: &AppContext = app.state::<AppContext>().inner();
+                    let coordinator = app_ctx.render_coordinator.lock().await;
+                    coordinator.set_paused(is_fullscreen).await;
+
                     was_fullscreen = is_fullscreen;
                 }
 

@@ -65,15 +65,20 @@ pub async fn upsert_monitor_config(
     let mut sched = scheduler_handle.lock().await;
     sched.manage_carousel_timer(&config, need_restart).await;
 
-    // ===== 样式 / 壁纸变更通知壁纸窗口 =====
+    // ===== 样式 / 壁纸变更通知（按 backend 路由） =====
     let is_sync = sched.resolve_is_sync_mode().await;
+    drop(sched);
 
-    let wm = app_ctx.window_manager.lock().await;
+    let mut coordinator = app_ctx.render_coordinator.lock().await;
     if let Some(fit_mode) = fit_mode_changed.as_deref() {
-        wm.notify_fit_mode_update(&config.monitor_id, fit_mode, is_sync);
+        coordinator
+            .set_fit_mode(&config.monitor_id, Some(fit_mode), is_sync)
+            .await;
     }
     if let Some(wid) = wallpaper_changed {
-        wm.notify_wallpaper_update(&config.monitor_id, wid, is_sync);
+        coordinator
+            .update_wallpaper(&config.monitor_id, wid, is_sync)
+            .await;
     }
 
     Ok(config)

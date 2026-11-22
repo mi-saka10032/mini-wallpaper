@@ -13,12 +13,13 @@
 use anyhow::{bail, Result};
 use log::{debug, info, warn};
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, SetParent};
+use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetParent, SetParent};
 
 use super::encode_wide;
 use super::strategy::{EmbedStrategy, MonitorRect};
 use super::wndproc::{register_subclass, subclass_wndproc};
 use super::workerw::find_workerw_classic;
+use super::EmbedPolicy;
 
 // ============================================================
 // NC 偏移测量（仅 ModernStrategy 使用）
@@ -95,12 +96,19 @@ impl EmbedStrategy for ModernStrategy {
         }
     }
 
-    fn embed(&self, hwnd: HWND, workerw: HWND, rect: MonitorRect) -> Result<()> {
+    fn embed(
+        &self,
+        hwnd: HWND,
+        workerw: HWND,
+        rect: MonitorRect,
+        policy: EmbedPolicy,
+    ) -> Result<()> {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, MoveWindow, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE,
             GWL_WNDPROC, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
-            WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_THICKFRAME, WS_VISIBLE,
+            WS_EX_STATICEDGE, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_POPUP, WS_THICKFRAME,
+            WS_VISIBLE,
         };
 
         unsafe {
@@ -120,13 +128,18 @@ impl EmbedStrategy for ModernStrategy {
 
             // 2. 清除窗口样式中的所有边框位
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-            let clean_style = (style
+            let mut clean_style = style
                 & !(WS_CAPTION as isize)
                 & !(WS_THICKFRAME as isize)
                 & !(WS_BORDER as isize)
-                & !(WS_DLGFRAME as isize))
-                | WS_CHILD as isize
-                | WS_VISIBLE as isize;
+                & !(WS_DLGFRAME as isize);
+            if policy == EmbedPolicy::Native {
+                // WS_POPUP 与 WS_CHILD 互斥。原生窗口由我们用 WS_POPUP 创建，
+                // 不清掉这一位 SetParent 只会设 owner，GetParent 仍为 0。
+                // WebView 窗口必须保持原有混合样式，不能走这个分支。
+                clean_style &= !(WS_POPUP as isize);
+            }
+            clean_style |= WS_CHILD as isize | WS_VISIBLE as isize;
             SetWindowLongPtrW(hwnd, GWL_STYLE, clean_style);
 
             // 3. 清除扩展样式边框 + 设置 Transparent（鼠标穿透）
@@ -171,6 +184,12 @@ impl EmbedStrategy for ModernStrategy {
 
             // 8. 定位到目标显示器
             MoveWindow(hwnd, rect.x, rect.y, rect.width, rect.height, 1);
+
+            // 原生路径额外校验父子关系是否真的建立；WebView 路径保持原有语义，
+            // 它的 SetParent 结果本就与 WS_CHILD 子窗口不同，不能用同一标准判失败。
+            if policy == EmbedPolicy::Native && GetParent(hwnd) != workerw {
+                bail!("SetParent 后父窗口不匹配");
+            }
 
             // 9. 验证 NC 偏移
             let nc = measure_nc_offset(hwnd);

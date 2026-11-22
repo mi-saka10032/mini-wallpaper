@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Toolbar from "@/components/layout/Toolbar";
 import Sidebar from "@/components/layout/Sidebar";
 import MainContent from "@/components/layout/MainContent";
-import { Toaster } from "@/components/ui/toast";
+import { toast, Toaster } from "@/components/ui/toast";
 import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useFavoritesStore } from "@/stores/favoritesStore";
@@ -129,6 +129,15 @@ const App: React.FC = () => {
       unlisten.then((fn) => fn());
     };
   }, [applyFavoriteChange]);
+
+  useEffect(() => {
+    const unlisten = listen(EVENTS.RENDERER_ERROR, ({ monitor_id, message }) => {
+      toast.error(monitor_id ? `${message} (${monitor_id})` : message);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // activeId / viewWallpapers 由 wallpaperStore 持有：
   // 视图切换与数据拉取在 store 内完成（含竞态守卫），组件只订阅结果。

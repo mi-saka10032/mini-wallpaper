@@ -11,6 +11,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SetParent;
 
 use super::strategy::{EmbedStrategy, MonitorRect};
 use super::workerw::find_workerw_classic;
+use super::EmbedPolicy;
 
 /// 旧版本嵌入策略
 pub(super) struct LegacyStrategy;
@@ -24,7 +25,13 @@ impl EmbedStrategy for LegacyStrategy {
         find_workerw_classic()
     }
 
-    fn embed(&self, hwnd: HWND, workerw: HWND, rect: MonitorRect) -> Result<()> {
+    fn embed(
+        &self,
+        hwnd: HWND,
+        workerw: HWND,
+        rect: MonitorRect,
+        _policy: EmbedPolicy,
+    ) -> Result<()> {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, MoveWindow, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
         };

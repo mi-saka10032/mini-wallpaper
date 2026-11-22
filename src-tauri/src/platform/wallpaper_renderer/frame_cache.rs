@@ -79,6 +79,20 @@ impl<T: ByteSize> FrameCache<T> {
         Self::new(DEFAULT_MAX_BYTES)
     }
 
+    /// 只查缓存，不触发构造。异步解码链路用它把「查」和「存」拆到两个时机：
+    /// 命令到达时查，worker 完成后存；命中时仍复用同一份 Arc（帧时钟一并复用）。
+    pub fn get(&mut self, key: &CacheKey) -> Option<Arc<T>> {
+        let frames = self.entries.get(key).cloned()?;
+        self.touch(key);
+        Some(frames)
+    }
+
+    /// 把异步解码完成的结果放入缓存；超预算 / key 异常时静默跳过，不影响显示。
+    /// `get_or_insert_with` 保持同步调用方的既有语义，其内部继续复用本方法。
+    pub fn insert(&mut self, key: CacheKey, value: Arc<T>) {
+        self.insert_inner(key, value);
+    }
+
     /// 命中则复用同一份 Arc（帧时钟也一并复用），未命中才执行 `make`。
     /// key 为 None 时完全绕过缓存，适用于文件元数据不可读的情况。
     pub fn get_or_insert_with<E>(
@@ -98,7 +112,7 @@ impl<T: ByteSize> FrameCache<T> {
         let frames = make()?;
 
         if let Some(key) = key {
-            self.insert(key, frames.clone());
+            self.insert_inner(key, frames.clone());
         }
         Ok(frames)
     }
@@ -111,7 +125,7 @@ impl<T: ByteSize> FrameCache<T> {
         }
     }
 
-    fn insert(&mut self, key: CacheKey, frames: Arc<T>) {
+    fn insert_inner(&mut self, key: CacheKey, frames: Arc<T>) {
         let size = frames.byte_size();
         // 单份就超预算时不入缓存：立刻把自己淘汰掉没有意义。
         // 多帧 GIF / 8K 素材属于这一类，交给 surface 的 Arc 自行持有。

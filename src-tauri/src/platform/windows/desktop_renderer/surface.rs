@@ -15,14 +15,13 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11BlendState, ID3D11Buffer, ID3D11DepthStencilView, ID3D11Device,
     ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState,
     ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
-    ID3D11VertexShader, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE,
-    D3D11_BLEND_OP_ADD, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_COMPARISON_ALWAYS,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CULL_NONE, D3D11_FILL_SOLID,
-    D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA,
-    D3D11_RASTERIZER_DESC, D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION,
-    D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT,
-    D3D11_VIEWPORT,
+    ID3D11VertexShader, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC,
+    D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD, D3D11_BUFFER_DESC,
+    D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_COMPARISON_ALWAYS, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_CULL_NONE, D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_INPUT_ELEMENT_DESC,
+    D3D11_INPUT_PER_VERTEX_DATA, D3D11_RASTERIZER_DESC, D3D11_RENDER_TARGET_BLEND_DESC,
+    D3D11_SAMPLER_DESC, D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE_ADDRESS_CLAMP,
+    D3D11_USAGE_DEFAULT, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
@@ -39,11 +38,10 @@ use windows::Win32::Graphics::Dxgi::{
 
 use super::video::{VideoFrameSnapshot, VideoPlayback, VideoWorkerHost};
 use super::window::NativeWindow;
-use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
 use crate::platform::wallpaper_renderer::frame_cache::ByteSize;
 use crate::platform::wallpaper_renderer::{
-    crossfade_progress, ExtendViewport, FitMode, MonitorRect, WallpaperKind, CROSSFADE_DURATION,
+    crossfade_progress, ExtendViewport, FitMode, MonitorRect, CROSSFADE_DURATION,
 };
 use crate::platform::windows::desktop_embedder::EmbedPolicy;
 
@@ -156,11 +154,11 @@ struct CompositionSwapChain {
 }
 
 /// 一张已上传 GPU 的帧：`view` 是 SRV（内部持有纹理引用），duration 供动图取模选帧。
-struct GpuFrame {
-    view: ID3D11ShaderResourceView,
-    width: u32,
-    height: u32,
-    duration: Duration,
+pub(crate) struct GpuFrame {
+    pub(crate) view: ID3D11ShaderResourceView,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) duration: Duration,
 }
 
 /// 一组显示器共享的帧序列与帧时钟。
@@ -174,6 +172,21 @@ pub struct SharedFrames {
 }
 
 impl SharedFrames {
+    /// 由 image worker 组装帧序列；帧时钟起点在 attach 到 surface 时才由
+    /// renderer 线程通过 `reset_clock` 对齐，这里给一个占位起点。
+    pub(crate) fn new(frames: Vec<GpuFrame>) -> Self {
+        Self {
+            frames,
+            started_at: Instant::now(),
+        }
+    }
+
+    /// 把帧时钟起点对齐到真正 attach 的时刻，保证 GIF 从第一帧开始、
+    /// 组内所有屏共享同一条时间线。
+    pub(crate) fn reset_clock(&mut self, started_at: Instant) {
+        self.started_at = started_at;
+    }
+
     fn current_frame(&self, now: Instant) -> &GpuFrame {
         if self.frames.len() <= 1 {
             return &self.frames[0];
@@ -256,6 +269,12 @@ pub struct SharedDevice {
 }
 
 impl SharedDevice {
+    /// 暴露 device 供 image worker 在渲染线程之外上传纹理；SRV 不能跨 device 使用，
+    /// 故 worker 必须克隆这同一个 device，不能自建。
+    pub(crate) fn device(&self) -> &ID3D11Device {
+        &self.device
+    }
+
     pub fn new() -> Result<Self> {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
@@ -284,39 +303,6 @@ impl SharedDevice {
         })
     }
 
-    /// 一次解码 + 一次纹理上传，返回整组共用的帧序列。
-    pub fn upload_frames(&self, path: &Path, _kind: WallpaperKind) -> Result<Arc<SharedFrames>> {
-        let started = Instant::now();
-        let decode_started = Instant::now();
-        let decoded = decode_frames(path)?;
-        let decode_ms = elapsed_ms(decode_started);
-        if decoded.is_empty() {
-            anyhow::bail!("解码结果为空: {:?}", path);
-        }
-
-        let upload_started = Instant::now();
-        let mut frames = Vec::with_capacity(decoded.len());
-        for frame in &decoded {
-            frames.push(self.upload_frame(frame)?);
-        }
-        let upload_ms = elapsed_ms(upload_started);
-        log::info!(
-            "[Upload] 图片就绪 file={} frames={} decode_ms={:.1} upload_ms={:.1} total_ms={:.1}",
-            path.file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or("<unknown>"),
-            frames.len(),
-            decode_ms,
-            upload_ms,
-            elapsed_ms(started)
-        );
-
-        Ok(Arc::new(SharedFrames {
-            frames,
-            started_at: Instant::now(),
-        }))
-    }
-
     /// 打开一个流式视频播放状态；复用共享 device / context，不进 FrameCache
     /// （视频不缓存全部帧，缓存的是唯一一个正在推进的播放状态）。
     pub fn open_video(&self, path: &Path, volume: u32) -> Result<Arc<Mutex<VideoPlayback>>> {
@@ -329,67 +315,6 @@ impl SharedDevice {
         )?;
         Ok(Arc::new(Mutex::new(playback)))
     }
-
-    /// 单帧解码结果上传显存：建 DEFAULT 纹理并以初始数据填充，再建 SRV。
-    /// 纹理只由 SRV 持有（见 GpuFrame），这里不重复存一份以简化引用管理。
-    fn upload_frame(&self, frame: &DecodedFrame) -> Result<GpuFrame> {
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: frame.width,
-            Height: frame.height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let data = D3D11_SUBRESOURCE_DATA {
-            pSysMem: frame.bgra.as_ptr() as *const c_void,
-            SysMemPitch: frame.width * 4,
-            SysMemSlicePitch: 0,
-        };
-
-        let texture_started = Instant::now();
-        let mut texture: Option<ID3D11Texture2D> = None;
-        unsafe {
-            self.device
-                .CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
-        }
-        let texture_ms = elapsed_ms(texture_started);
-        let texture = texture.context("D3D11 frame texture 创建失败")?;
-
-        // SRV 内部持有 texture 引用，无需在 GpuFrame 里再保存一份
-        let srv_started = Instant::now();
-        let mut view: Option<ID3D11ShaderResourceView> = None;
-        unsafe {
-            self.device
-                .CreateShaderResourceView(&texture, None, Some(&mut view))?;
-        }
-        log::debug!(
-            "[Upload] texture {}x{} create_ms={:.1} srv_ms={:.1}",
-            frame.width,
-            frame.height,
-            texture_ms,
-            elapsed_ms(srv_started)
-        );
-        let view = view.context("D3D11 frame shader resource view 创建失败")?;
-
-        Ok(GpuFrame {
-            view,
-            width: frame.width,
-            height: frame.height,
-            duration: frame.duration,
-        })
-    }
-}
-
-fn elapsed_ms(started: Instant) -> f64 {
-    started.elapsed().as_secs_f64() * 1000.0
 }
 
 /// 单屏壁纸渲染状态：自有窗口 / swapchain / RTV，但共享 device / pipeline / video worker。

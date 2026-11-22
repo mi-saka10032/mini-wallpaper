@@ -23,11 +23,12 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_SRV_DIMENSION_TEXTURE2D};
 use windows::Win32::Graphics::Direct3D10::ID3D10Multithread;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
-    ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
-    ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11InfoQueue,
+    ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
+    ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
+    ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+    D3D11_MESSAGE, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SDK_VERSION,
     D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
     D3D11_TEX2D_SRV, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
@@ -45,10 +46,14 @@ use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaType, IMFSample, IMFSourceReader,
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType, MFCreateSourceReaderFromURL,
     MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER,
-    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_VIDEO_NOMINAL_RANGE,
+    MF_MT_YUV_MATRIX, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED, MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READERF_ERROR, MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED,
+    MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_DISABLE_DXVA,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE, MF_VERSION,
 };
+use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToUInt64};
 
 use super::audio::AudioPlayback;
 
@@ -502,6 +507,8 @@ struct WorkerGpu {
     video_context: ID3D11VideoContext,
     manager: IMFDXGIDeviceManager,
     manager_handle: HANDLE,
+    /// VP Blt 的目标 staging texture 按分辨率复用，避免每个 session 各持一份 NV12。
+    staging_output: std::sync::Mutex<HashMap<(u32, u32), ID3D11Texture2D>>,
 }
 
 impl Drop for WorkerGpu {
@@ -518,18 +525,58 @@ impl WorkerGpu {
         let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
+        let base_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+        // D3D11 debug layer 会为对象生命周期跟踪持有内部引用，长期运行的 dev 构建里
+        // 会让“已释放资源”仍计入内存；默认关闭，需要时用环境变量显式打开。
+        let debug_layer = std::env::var("MINI_WALLPAPER_D3D11_DEBUG")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let flags = if debug_layer {
+            base_flags | D3D11_CREATE_DEVICE_DEBUG
+        } else {
+            base_flags
+        };
         unsafe {
-            D3D11CreateDevice(
+            match D3D11CreateDevice(
                 Some(&adapter),
                 D3D_DRIVER_TYPE_UNKNOWN,
                 windows::Win32::Foundation::HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                flags,
                 None,
                 D3D11_SDK_VERSION,
                 Some(&mut device),
                 None,
                 Some(&mut context),
-            )?;
+            ) {
+                Ok(()) => {
+                    if debug_layer {
+                        log::warn!("[VideoHw] D3D11 debug layer 已启用");
+                    }
+                }
+                Err(err) => {
+                    if !debug_layer {
+                        return Err(err.into());
+                    }
+                    // Debug layer 未安装时不能阻断正常运行；回退到无 debug 的普通 device。
+                    log::warn!(
+                        "[VideoHw] D3D11 debug layer 不可用，回退普通 device: {:#}",
+                        err
+                    );
+                    device = None;
+                    context = None;
+                    D3D11CreateDevice(
+                        Some(&adapter),
+                        D3D_DRIVER_TYPE_UNKNOWN,
+                        windows::Win32::Foundation::HMODULE::default(),
+                        base_flags,
+                        None,
+                        D3D11_SDK_VERSION,
+                        Some(&mut device),
+                        None,
+                        Some(&mut context),
+                    )?;
+                }
+            }
         }
         let device = device.context("DXVA worker device 创建失败")?;
         let context = context.context("DXVA worker context 创建失败")?;
@@ -575,7 +622,94 @@ impl WorkerGpu {
             video_context,
             manager,
             manager_handle,
+            staging_output: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn staging_output_texture(&self, width: u32, height: u32) -> Result<ID3D11Texture2D> {
+        let key = (width, height);
+        if let Some(texture) = self.staging_output.lock().unwrap().get(&key) {
+            return Ok(texture.clone());
+        }
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut texture: Option<ID3D11Texture2D> = None;
+        unsafe {
+            self.device
+                .CreateTexture2D(&desc, None, Some(&mut texture))?
+        };
+        let texture = texture.context("VideoProcessor staging texture 创建失败")?;
+        self.staging_output
+            .lock()
+            .unwrap()
+            .insert(key, texture.clone());
+        Ok(texture)
+    }
+}
+
+/// 只在失败时读取 D3D11 debug layer 的 info queue，不改变设备状态。
+fn log_d3d11_info_queue(device: &ID3D11Device, stage: &str) {
+    let Ok(queue) = device.cast::<ID3D11InfoQueue>() else {
+        return;
+    };
+    unsafe {
+        let count = queue.GetNumStoredMessages();
+        if count == 0 {
+            log::warn!("[VideoHw] D3D11 info queue {} 为空", stage);
+            return;
+        }
+        let start = count.saturating_sub(8);
+        for index in start..count {
+            let mut byte_length = 0usize;
+            if queue.GetMessage(index, None, &mut byte_length).is_err() || byte_length == 0 {
+                continue;
+            }
+
+            // GetMessage 写入的是 D3D11_MESSAGE + 变长 description，必须传入
+            // 一整段足够大的对齐缓冲区；直接传栈上 D3D11_MESSAGE 会造成越界写。
+            let mut words = vec![0usize; byte_length.div_ceil(std::mem::size_of::<usize>())];
+            let message_ptr = words.as_mut_ptr() as *mut D3D11_MESSAGE;
+            if queue
+                .GetMessage(index, Some(message_ptr), &mut byte_length)
+                .is_err()
+            {
+                continue;
+            }
+            let message = &*message_ptr;
+            let description =
+                if message.pDescription.is_null() || message.DescriptionByteLength == 0 {
+                    String::new()
+                } else {
+                    let len = message.DescriptionByteLength.min(byte_length);
+                    String::from_utf8_lossy(std::slice::from_raw_parts(message.pDescription, len))
+                        .trim_end_matches('\0')
+                        .to_string()
+                };
+            log::warn!(
+                "[VideoHw] D3D11 info queue {} #{}/{} category={:?} severity={:?} id={:?} {}",
+                stage,
+                index + 1,
+                count,
+                message.Category,
+                message.Severity,
+                message.ID,
+                description
+            );
+        }
+        queue.ClearStoredMessages();
     }
 }
 
@@ -583,14 +717,16 @@ struct DecodedSample {
     sample: IMFSample,
     timestamp: Duration,
     duration: Duration,
+    flags: u32,
 }
 
 impl DecodedSample {
-    fn new(sample: IMFSample, timestamp: i64, duration: i64) -> Self {
+    fn new(sample: IMFSample, timestamp: i64, duration: i64, flags: u32) -> Self {
         Self {
             sample,
             timestamp: hns_to_duration(timestamp.max(0) as u64),
             duration: normalize_duration(hns_to_duration(duration.max(0) as u64)),
+            flags,
         }
     }
 }
@@ -607,6 +743,7 @@ struct VideoSession {
     width: u32,
     height: u32,
     loop_duration: Duration,
+    presentation_duration: Duration,
     started: Instant,
     paused_total: Duration,
     paused_at: Option<Instant>,
@@ -615,6 +752,7 @@ struct VideoSession {
     first_frame_logged: bool,
     stage_logged: bool,
     blt_error_logged: bool,
+    decoder_desc_logged: bool,
 }
 
 impl VideoSession {
@@ -663,6 +801,20 @@ impl VideoSession {
             return Err(anyhow::anyhow!("视频尺寸无效 {}x{}", width, height));
         }
 
+        let presentation_duration = read_presentation_duration(&reader).unwrap_or(Duration::ZERO);
+        if presentation_duration.is_zero() {
+            log::warn!(
+                "[VideoHw] session={} MF_PD_DURATION 不可用，改用最大帧时间推断循环时长",
+                id
+            );
+        } else {
+            log::info!(
+                "[VideoHw] session={} 视频时长 {:.3}s",
+                id,
+                presentation_duration.as_secs_f64()
+            );
+        }
+
         let mut session = Self {
             id,
             state,
@@ -674,7 +826,8 @@ impl VideoSession {
             output_view: None,
             width: 0,
             height: 0,
-            loop_duration: Duration::ZERO,
+            loop_duration: presentation_duration,
+            presentation_duration,
             started: Instant::now(),
             paused_total: Duration::ZERO,
             paused_at: None,
@@ -683,6 +836,7 @@ impl VideoSession {
             first_frame_logged: false,
             stage_logged: false,
             blt_error_logged: false,
+            decoder_desc_logged: false,
         };
         session.ensure_output(gpu, width, height)?;
         Ok(session)
@@ -750,6 +904,11 @@ impl VideoSession {
             ));
         }
         let processor = unsafe { gpu.video_device.CreateVideoProcessor(&enumerator, 0) }?;
+
+        // VideoProcessorBlt 不直接写 shared keyed-mutex texture；写 worker staging texture，
+        // 成功后 CopyResource 到 shared texture。staging texture 按分辨率复用。
+        let output_texture = gpu.staging_output_texture(width, height)?;
+
         let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
             Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
@@ -759,7 +918,7 @@ impl VideoSession {
         let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
         unsafe {
             gpu.video_device.CreateVideoProcessorOutputView(
-                &texture,
+                &output_texture,
                 &enumerator,
                 &view_desc,
                 Some(&mut output_view),
@@ -810,11 +969,30 @@ impl VideoSession {
         }
         let sample = sample.context("SourceReader 返回空 sample")?;
         let duration = unsafe { sample.GetSampleDuration() }.unwrap_or(0);
-        Ok(Some(DecodedSample::new(sample, timestamp, duration)))
+        Ok(Some(DecodedSample::new(sample, timestamp, duration, flags)))
+    }
+
+    fn media_type_diag(&self) -> String {
+        let Ok(media_type) = (unsafe {
+            self.reader
+                .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+        }) else {
+            return "media_type=unavailable".to_string();
+        };
+        let interlace = unsafe { media_type.GetUINT32(&MF_MT_INTERLACE_MODE) }.unwrap_or(u32::MAX);
+        let matrix = unsafe { media_type.GetUINT32(&MF_MT_YUV_MATRIX) }.unwrap_or(u32::MAX);
+        let nominal =
+            unsafe { media_type.GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE) }.unwrap_or(u32::MAX);
+        let frame_size = unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(u64::MAX);
+        format!(
+            "media_type interlace={} matrix={} nominal={} frame_size=0x{:x}",
+            interlace, matrix, nominal, frame_size
+        )
     }
 
     fn process_sample(&mut self, gpu: &WorkerGpu, decoded: &DecodedSample) -> Result<bool> {
         let output_view = self.output_view.clone().context("VideoProcessor 未就绪")?;
+        let output_texture = gpu.staging_output_texture(self.width, self.height)?;
         let processor = self.processor.clone().context("VideoProcessor 未就绪")?;
         let enumerator = self
             .enumerator
@@ -828,6 +1006,23 @@ impl VideoSession {
         let raw = NonNull::new(raw).context("DXVA sample 返回空 texture")?;
         let decoder_texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
         let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
+        // 只读诊断：区分 E_INVALIDARG 来自 input view 还是 Blt；不改变任何处理流程。
+        let mut decoder_desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { decoder_texture.GetDesc(&mut decoder_desc) };
+        if !self.decoder_desc_logged {
+            self.decoder_desc_logged = true;
+            log::info!(
+                "[VideoHw] session={} decoder texture {}x{} fmt={:?} bind={} array={} mip={} subresource={}",
+                self.id,
+                decoder_desc.Width,
+                decoder_desc.Height,
+                decoder_desc.Format,
+                decoder_desc.BindFlags,
+                decoder_desc.ArraySize,
+                decoder_desc.MipLevels,
+                subresource
+            );
+        }
 
         let _ = unsafe { gpu.manager.TestDevice(gpu.manager_handle) };
 
@@ -854,12 +1049,32 @@ impl VideoSession {
             };
             let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
             unsafe {
-                gpu.video_device.CreateVideoProcessorInputView(
-                    &decoder_texture,
-                    &enumerator,
-                    &input_desc,
-                    Some(&mut input_view),
-                )?;
+                gpu.video_device
+                    .CreateVideoProcessorInputView(
+                        &decoder_texture,
+                        &enumerator,
+                        &input_desc,
+                        Some(&mut input_view),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "CreateVideoProcessorInputView 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={} flags=0x{:x} type_changed={} native_changed={} error_flag={} {}",
+                            subresource,
+                            self.width,
+                            self.height,
+                            decoder_desc.Width,
+                            decoder_desc.Height,
+                            decoder_desc.Format,
+                            decoder_desc.BindFlags,
+                            decoder_desc.ArraySize,
+                            decoder_desc.MipLevels,
+                            decoded.flags,
+                            (decoded.flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32) != 0,
+                            (decoded.flags & MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED.0 as u32) != 0,
+                            (decoded.flags & MF_SOURCE_READERF_ERROR.0 as u32) != 0,
+                            self.media_type_diag()
+                        )
+                    })?;
             }
             let input_view = input_view.context("VideoProcessor input view 创建失败")?;
             let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
@@ -879,8 +1094,31 @@ impl VideoSession {
                 )
             };
             unsafe { ManuallyDrop::drop(&mut stream.pInputSurface) };
-            blt_result?;
-            unsafe { gpu.context.Flush() };
+            blt_result.with_context(|| {
+                format!(
+                    "VideoProcessorBlt 失败 subresource={} out={}x{} decoder={}x{} fmt={:?} bind={} array={} mip={} flags=0x{:x} type_changed={} native_changed={} error_flag={} {}",
+                    subresource,
+                    self.width,
+                    self.height,
+                    decoder_desc.Width,
+                    decoder_desc.Height,
+                    decoder_desc.Format,
+                    decoder_desc.BindFlags,
+                    decoder_desc.ArraySize,
+                    decoder_desc.MipLevels,
+                    decoded.flags,
+                    (decoded.flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32) != 0,
+                    (decoded.flags & MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED.0 as u32) != 0,
+                    (decoded.flags & MF_SOURCE_READERF_ERROR.0 as u32) != 0,
+                    self.media_type_diag()
+                )
+            })?;
+            unsafe {
+                // Blt 只写 worker 私有纹理；确认 GPU 完成写入后再复制到 shared texture。
+                gpu.context.Flush();
+                gpu.context.CopyResource(&shared_texture, &output_texture);
+                gpu.context.Flush();
+            }
             Ok(())
         })();
         let release_key = if result.is_ok() { 1 } else { 0 };
@@ -901,6 +1139,7 @@ impl VideoSession {
                         self.id,
                         err
                     );
+                    log_d3d11_info_queue(&gpu.device, "VideoProcessorBlt");
                 }
                 Ok(false)
             }
@@ -908,8 +1147,10 @@ impl VideoSession {
     }
 
     fn note_frame(&mut self, frame_time: Duration, duration: Duration, first_cycle: bool) {
-        if first_cycle && self.loop_duration.is_zero() {
-            self.loop_duration = frame_time.saturating_add(duration);
+        if first_cycle {
+            // 第一圈持续用最大帧结束时间修正 loop_duration；不能用第一帧的 33ms，
+            // 否则下一次 EOF 只推进几十毫秒，墙钟 target 远大于 frame_time，全速追赶。
+            self.loop_duration = self.loop_duration.max(frame_time.saturating_add(duration));
         }
     }
 
@@ -925,7 +1166,7 @@ impl VideoSession {
     }
 
     fn reset(&mut self, now: Instant) -> Result<()> {
-        self.loop_duration = Duration::ZERO;
+        self.loop_duration = self.presentation_duration;
         self.seek_zero()?;
         self.started = now;
         self.paused_total = Duration::ZERO;
@@ -935,7 +1176,7 @@ impl VideoSession {
         let mut shared = self.state.lock().unwrap();
         shared.frame_time = Duration::ZERO;
         shared.frame_duration = Duration::from_millis(40);
-        shared.loop_duration = Duration::ZERO;
+        shared.loop_duration = self.loop_duration;
         shared.generation = shared.generation.wrapping_add(1);
         shared.ready = false;
         Ok(())
@@ -971,7 +1212,19 @@ impl VideoSession {
             None => match self.read_sample()? {
                 Some(sample) => sample,
                 None => {
-                    self.cycle_base = self.cycle_base.saturating_add(self.loop_duration);
+                    let completed = if self.loop_duration.is_zero() {
+                        target
+                    } else {
+                        self.loop_duration
+                    };
+                    self.loop_duration = completed;
+                    self.cycle_base = self.cycle_base.saturating_add(completed);
+                    {
+                        let mut shared = self.state.lock().unwrap();
+                        shared.frame_time = self.cycle_base;
+                        shared.frame_duration = Duration::from_millis(40);
+                        shared.loop_duration = self.loop_duration;
+                    }
                     self.seek_zero()?;
                     return Ok(true);
                 }
@@ -1021,13 +1274,25 @@ fn video_worker_main(
                         let session = VideoSession::new(gpu.as_ref().unwrap(), id, &path, state)?;
                         let info = session.shared_frame_info().clone();
                         sessions.insert(id, session);
+                        log::info!(
+                            "[VideoHw] session={} 已打开 active_sessions={} file={}",
+                            id,
+                            sessions.len(),
+                            path.file_name()
+                                .and_then(|v| v.to_str())
+                                .unwrap_or("<unknown>")
+                        );
                         Ok(info)
                     })();
                     let _ = ack.send(result);
                 }
                 WorkerCommand::CloseSession { id } => {
                     if sessions.remove(&id).is_some() {
-                        log::info!("[VideoHw] session={} 已关闭", id);
+                        log::info!(
+                            "[VideoHw] session={} 已关闭 active_sessions={}",
+                            id,
+                            sessions.len()
+                        );
                     }
                 }
                 WorkerCommand::Pause { id, paused, now } => {
@@ -1100,6 +1365,19 @@ fn seek_zero_position() -> windows::Win32::System::Com::StructuredStorage::PROPV
             }),
         },
     }
+}
+
+fn read_presentation_duration(reader: &IMFSourceReader) -> Option<Duration> {
+    let mut variant = unsafe {
+        reader.GetPresentationAttribute(
+            MF_SOURCE_READER_MEDIASOURCE.0 as u32,
+            &MF_PD_DURATION as *const GUID,
+        )
+    }
+    .ok()?;
+    let hns = unsafe { PropVariantToUInt64(&variant) }.ok();
+    unsafe { PropVariantClear(&mut variant) }.ok()?;
+    hns.filter(|value| *value > 0).map(hns_to_duration)
 }
 
 fn hns_to_duration(hns: u64) -> Duration {

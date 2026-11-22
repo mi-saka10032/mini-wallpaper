@@ -37,7 +37,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
-use super::video::{VideoFrameSnapshot, VideoPlayback};
+use super::video::{VideoFrameSnapshot, VideoPlayback, VideoWorkerHost};
 use super::window::NativeWindow;
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
@@ -238,6 +238,7 @@ pub struct SharedDevice {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     pipeline: QuadPipeline,
+    video_worker: VideoWorkerHost,
 }
 
 impl SharedDevice {
@@ -260,10 +261,12 @@ impl SharedDevice {
         let device = device.context("D3D11 device 创建失败")?;
         let context = context.context("D3D11 context 创建失败")?;
         let pipeline = create_pipeline(&device)?;
+        let video_worker = VideoWorkerHost::start(&device)?;
         Ok(Self {
             device,
             context,
             pipeline,
+            video_worker,
         })
     }
 
@@ -303,7 +306,13 @@ impl SharedDevice {
     /// 打开一个流式视频播放状态；复用共享 device / context，不进 FrameCache
     /// （视频不缓存全部帧，缓存的是唯一一个正在推进的播放状态）。
     pub fn open_video(&self, path: &Path, volume: u32) -> Result<Arc<Mutex<VideoPlayback>>> {
-        let playback = VideoPlayback::open(&self.device, &self.context, path, volume)?;
+        let playback = VideoPlayback::open(
+            &self.device,
+            &self.context,
+            &self.video_worker,
+            path,
+            volume,
+        )?;
         Ok(Arc::new(Mutex::new(playback)))
     }
 

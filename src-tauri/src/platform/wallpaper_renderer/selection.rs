@@ -8,6 +8,7 @@ use super::contracts::{
 // Media Foundation 原生支持的容器扩展名（见微软官方 Supported Media Formats in Media Foundation）。
 // 这里声明的是「交给 Native 解码器尝试」，不保证容器内编码一定能解；编码不兼容时
 // 渲染线程会回传 DecodeFailed，不回退 WebView。
+// 表外格式属于 capability 不支持，Auto 下走 WebView（见 resolve_backend）。
 const NATIVE_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "m4v", "mov", "avi", "wmv", "asf", "3gp", "3g2", "3gp2", "3gpp",
 ];
@@ -44,13 +45,16 @@ pub fn resolve_backend(
         return Ok(RenderBackend::Native);
     }
 
-    // M6 起视频不再走 WebView fallback：mkv / webm 等容器在当前阶段明确报错。
-    // selection 参数保留给后续 M8 的动态 backend 切换，避免现在把接口收死。
-    let _ = selection;
-    Err(RendererError::new(
-        RendererErrorCode::UnsupportedFormat,
-        format!("unsupported video format: .{}", ext),
-    ))
+    // M8：WebView 只做「解码前」的 capability fallback。容器表之外的格式在
+    // Auto 下交给 wallpaper.html 播放；NativeOnly 下明确报错。
+    // 一旦选定 Native，解码失败只回传 DecodeFailed，不二次回退 WebView。
+    match selection {
+        BackendSelection::Auto => Ok(RenderBackend::WebView),
+        BackendSelection::NativeOnly => Err(RendererError::new(
+            RendererErrorCode::UnsupportedFormat,
+            format!("unsupported video format: .{}", ext),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -65,22 +69,16 @@ mod tests {
 
     #[test]
     fn image_and_gif_always_use_native() {
-        assert_eq!(
-            resolve_backend(
-                WallpaperKind::Image,
-                &path("webp"),
-                BackendSelection::NativeOnly
-            ),
-            Ok(RenderBackend::Native)
-        );
-        assert_eq!(
-            resolve_backend(
-                WallpaperKind::Gif,
-                &path("gif"),
-                BackendSelection::NativeOnly
-            ),
-            Ok(RenderBackend::Native)
-        );
+        for selection in [BackendSelection::NativeOnly, BackendSelection::Auto] {
+            assert_eq!(
+                resolve_backend(WallpaperKind::Image, &path("webp"), selection),
+                Ok(RenderBackend::Native)
+            );
+            assert_eq!(
+                resolve_backend(WallpaperKind::Gif, &path("gif"), selection),
+                Ok(RenderBackend::Native)
+            );
+        }
     }
 
     #[test]
@@ -100,30 +98,27 @@ mod tests {
     }
 
     #[test]
-    fn webm_and_mkv_are_rejected_without_webview_fallback() {
-        for ext in ["webm", "mkv"] {
-            for selection in [BackendSelection::NativeOnly, BackendSelection::Auto] {
-                assert_eq!(
-                    resolve_backend(WallpaperKind::Video, &path(ext), selection),
-                    Err(RendererError::new(
-                        RendererErrorCode::UnsupportedFormat,
-                        format!("unsupported video format: .{}", ext)
-                    )),
-                    ".{} 当前阶段应明确报错而非回退 WebView",
-                    ext
-                );
-            }
+    fn unsupported_video_falls_back_only_in_auto() {
+        for ext in ["webm", "mkv", "flv"] {
+            assert_eq!(
+                resolve_backend(WallpaperKind::Video, &path(ext), BackendSelection::Auto),
+                Ok(RenderBackend::WebView),
+                ".{} 应由 WebView 作为 capability fallback",
+                ext
+            );
+            assert_eq!(
+                resolve_backend(
+                    WallpaperKind::Video,
+                    &path(ext),
+                    BackendSelection::NativeOnly
+                ),
+                Err(RendererError::new(
+                    RendererErrorCode::UnsupportedFormat,
+                    format!("unsupported video format: .{}", ext)
+                )),
+                ".{} 在 NativeOnly 下应明确报错",
+                ext
+            );
         }
-    }
-
-    #[test]
-    fn unknown_video_extension_is_rejected() {
-        assert_eq!(
-            resolve_backend(WallpaperKind::Video, &path("flv"), BackendSelection::Auto),
-            Err(RendererError::new(
-                RendererErrorCode::UnsupportedFormat,
-                "unsupported video format: .flv"
-            ))
-        );
     }
 }

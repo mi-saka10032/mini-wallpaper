@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -11,14 +12,17 @@ use windows::Win32::Graphics::Direct3D::{
     ID3DBlob, ID3DInclude, D3D_DRIVER_TYPE_HARDWARE, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Buffer, ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceContext,
-    ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState, ID3D11RenderTargetView,
-    ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_VERTEX_BUFFER, D3D11_BUFFER_DESC,
-    D3D11_COMPARISON_ALWAYS, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CULL_NONE, D3D11_FILL_SOLID,
+    D3D11CreateDevice, ID3D11BlendState, ID3D11Buffer, ID3D11DepthStencilView, ID3D11Device,
+    ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState,
+    ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
+    ID3D11VertexShader, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_BIND_VERTEX_BUFFER, D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE,
+    D3D11_BLEND_OP_ADD, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_COMPARISON_ALWAYS,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CULL_NONE, D3D11_FILL_SOLID,
     D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA,
-    D3D11_RASTERIZER_DESC, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA,
-    D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT, D3D11_VIEWPORT,
+    D3D11_RASTERIZER_DESC, D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION,
+    D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT,
+    D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
@@ -38,7 +42,9 @@ use super::window::NativeWindow;
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
 use crate::platform::wallpaper_renderer::frame_cache::ByteSize;
-use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
+use crate::platform::wallpaper_renderer::{
+    crossfade_progress, ExtendViewport, FitMode, MonitorRect, WallpaperKind, CROSSFADE_DURATION,
+};
 use crate::platform::windows::desktop_embedder::EmbedPolicy;
 
 const SHADER_SOURCE: &str = r#"
@@ -62,9 +68,17 @@ VS_OUT vs_main(VS_IN input) {
 Texture2D wallpaper : register(t0);
 SamplerState linear_sampler : register(s0);
 
+cbuffer Fade : register(b0) {
+    float fade_alpha;
+    float3 _pad;
+};
+
 float4 ps_main(VS_OUT input) : SV_TARGET {
     float4 color = wallpaper.Sample(linear_sampler, input.uv);
-    color.a = 1.0;
+    // swapchain 声明为 premultiplied alpha，输出必须预乘；否则两 pass 混合会
+    // 把 RT 的 alpha 拉到 <1，桌面合成阶段整屏变暗。
+    color.rgb *= fade_alpha;
+    color.a = fade_alpha;
     return color;
 }
 "#;
@@ -73,6 +87,13 @@ float4 ps_main(VS_OUT input) : SV_TARGET {
 struct Vertex {
     position: [f32; 2],
     texcoord: [f32; 2],
+}
+
+/// cbuffer 最小分配粒度是 16 bytes，单 float 必须补齐。
+#[repr(C)]
+struct FadeConstants {
+    alpha: f32,
+    pad: [f32; 3],
 }
 
 const QUAD: [Vertex; 4] = [
@@ -102,6 +123,8 @@ struct QuadPipeline {
     input_layout: ID3D11InputLayout,
     vertex_buffer: ID3D11Buffer,
     sampler: ID3D11SamplerState,
+    blend_state: ID3D11BlendState,
+    fade_buffer: ID3D11Buffer,
 }
 
 struct CompositionSwapChain {
@@ -168,11 +191,28 @@ impl ByteSize for SharedFrames {
 /// 图片 / GIF / 动态 WebP 用预解码的 `SharedFrames`（按 started_at 取模选帧）；
 /// 视频用流式 `VideoPlayback`（每帧由 renderer loop 推进一次）。两条链路共用
 /// 同一个 device / pipeline 与全屏 quad，但帧时钟机制不同，故用枚举分开。
+#[derive(Clone)]
 pub enum WallpaperMedia {
     Frames(Arc<SharedFrames>),
     /// Mutex 只用于让 renderer loop 在绘制前推进时钟；所有访问都在同一渲染线程，
     /// 实际不会产生锁竞争，但避免用 unsafe 把 Arc 转成 &mut。
     Video(Arc<Mutex<VideoPlayback>>),
+}
+
+/// 正在进行的淡入淡出：`wallpaper` 仍是 from，to 单独持有。
+///
+/// 不把 to 直接挂到 `wallpaper`：transition 期间 renderer loop 必须能区分
+/// from / to 并冻结两侧视频时钟，结束后才把 to 提升为当前壁纸。
+struct Transition {
+    to: WallpaperMedia,
+    to_fit_mode: FitMode,
+    started_at: Instant,
+}
+
+/// 排队等待的换图。连续切换不覆盖旧 fade：A→B 跑完才启动 B→C。
+struct PendingWallpaper {
+    media: WallpaperMedia,
+    fit_mode: FitMode,
 }
 
 /// 渲染线程独有的共享 D3D11 上下文。
@@ -302,6 +342,8 @@ pub struct RenderSurface {
     extend_viewport: Option<ExtendViewport>,
     embedded: bool,
     wallpaper: Option<WallpaperMedia>,
+    transition: Option<Transition>,
+    pending: VecDeque<PendingWallpaper>,
     // Present / backbuffer 错误只记录一次，避免每帧刷屏
     present_error_logged: bool,
     backbuffer_error_logged: bool,
@@ -350,6 +392,8 @@ impl RenderSurface {
             extend_viewport: None,
             embedded: true,
             wallpaper: None,
+            transition: None,
+            pending: VecDeque::new(),
             present_error_logged: false,
             backbuffer_error_logged: false,
         };
@@ -357,19 +401,67 @@ impl RenderSurface {
         Ok(surface)
     }
 
-    /// 由渲染线程把同一份解码结果挂到组内每屏，帧时钟因此天然一致。
-    pub fn set_frames(&mut self, frames: Arc<SharedFrames>, fit_mode: FitMode) {
-        self.fit_mode = fit_mode;
-        self.wallpaper = Some(WallpaperMedia::Frames(frames));
+    /// 挂上一张新壁纸。`crossfade = false`（跨 backend / 首帧）直接替换并丢弃队列；
+    /// `true` 时入 FIFO 队列，当前没有 fade 才立即启动下一段。
+    pub fn queue_wallpaper(
+        &mut self,
+        media: WallpaperMedia,
+        fit_mode: FitMode,
+        crossfade: bool,
+        now: Instant,
+    ) {
+        if !crossfade || self.wallpaper.is_none() {
+            self.transition = None;
+            self.pending.clear();
+            self.wallpaper = Some(media);
+            self.fit_mode = fit_mode;
+            return;
+        }
+        self.pending.push_back(PendingWallpaper { media, fit_mode });
+        if self.transition.is_none() {
+            self.start_next_transition(now);
+        }
     }
 
-    /// 组内所有屏挂同一个视频播放状态；renderer loop 每帧只 advance 一次。
-    pub fn set_video(&mut self, playback: Arc<Mutex<VideoPlayback>>, fit_mode: FitMode) {
-        self.fit_mode = fit_mode;
-        self.wallpaper = Some(WallpaperMedia::Video(playback));
+    fn start_next_transition(&mut self, now: Instant) {
+        let Some(next) = self.pending.pop_front() else {
+            return;
+        };
+        self.transition = Some(Transition {
+            to: next.media,
+            to_fit_mode: next.fit_mode,
+            started_at: now,
+        });
     }
 
-    /// 当前壁纸的视频播放状态；由 renderer loop 在绘制整组前统一推进时钟。
+    /// fade 结束：把 to 提升为当前壁纸，返回是否刚结束一段。
+    /// 视频时钟的重置由 renderer loop 按 Arc 指针去重执行——组内多屏共享同一个
+    /// `VideoPlayback`，在每块屏上各 reset 会重复 Flush / seek 同一个 SourceReader。
+    pub fn finish_transition(&mut self, now: Instant) -> bool {
+        let done = self
+            .transition
+            .as_ref()
+            .map(|t| now.saturating_duration_since(t.started_at) >= CROSSFADE_DURATION)
+            .unwrap_or(false);
+        if !done {
+            return false;
+        }
+        let Some(transition) = self.transition.take() else {
+            return false;
+        };
+        self.wallpaper = Some(transition.to);
+        self.fit_mode = transition.to_fit_mode;
+        // 用同一个 now 续接下一段，组内所有 surface 的 fade 时间线保持一致。
+        self.start_next_transition(now);
+        true
+    }
+
+    /// 是否处于 fade 中或还有排队项。renderer loop 据此冻结 from / to 的视频时钟。
+    pub fn fade_active_or_pending(&self) -> bool {
+        self.transition.is_some() || !self.pending.is_empty()
+    }
+
+    /// 当前壁纸（fade 期间即 from）的视频播放状态；由 renderer loop 在绘制整组前统一推进。
     pub fn video(&self) -> Option<&Arc<Mutex<VideoPlayback>>> {
         match &self.wallpaper {
             Some(WallpaperMedia::Video(playback)) => Some(playback),
@@ -387,6 +479,8 @@ impl RenderSurface {
 
     pub fn clear_wallpaper(&mut self) {
         self.wallpaper = None;
+        self.transition = None;
+        self.pending.clear();
     }
 
     /// 显示器几何变化时同步原生窗口、swapchain 与 render target，不重建整张 surface。
@@ -443,7 +537,7 @@ impl RenderSurface {
         Ok(())
     }
 
-    pub fn render(&mut self, monitor_id: &str) {
+    pub fn render(&mut self, monitor_id: &str, now: Instant) {
         if let Err(err) = self.bind_current_backbuffer() {
             if !self.backbuffer_error_logged {
                 log::error!(
@@ -466,81 +560,19 @@ impl RenderSurface {
                 .ClearRenderTargetView(render_target, &[0.08, 0.12, 0.18, 1.0]);
         }
 
-        // 先取出 (SRV, 宽, 高)，两条媒体链路在这一步之后完全共用同一套 quad / viewport。
-        // VideoPlayback 的时钟由 renderer loop 在绘制整组前统一推进，这里只读当前帧。
-        let current: Option<(ID3D11ShaderResourceView, u32, u32)> = match &self.wallpaper {
-            Some(WallpaperMedia::Frames(frames)) => {
-                let frame = frames.current_frame(Instant::now());
-                Some((frame.view.clone(), frame.width, frame.height))
+        if let Some(transition) = &self.transition {
+            let progress = crossfade_progress(
+                now.saturating_duration_since(transition.started_at),
+                CROSSFADE_DURATION,
+            );
+            // from 先以 alpha=1 铺满 RT，to 再用 progress 混合一次即可。
+            // 两侧都带 alpha 会让 from 被衰减两次，出现中段发暗。
+            if let Some(from) = &self.wallpaper {
+                self.draw_media(from, self.fit_mode, 1.0, now);
             }
-            Some(WallpaperMedia::Video(playback)) => playback
-                .lock()
-                .ok()
-                .and_then(|guard| guard.frame_snapshot()),
-            None => None,
-        };
-
-        if let Some((view, frame_width, frame_height)) = current {
-            let pipeline = &self.pipeline;
-            let vertex_buffers = [Some(pipeline.vertex_buffer.clone())];
-            let strides = [std::mem::size_of::<Vertex>() as u32];
-            let offsets = [0u32];
-            let samplers = [Some(pipeline.sampler.clone())];
-            let views = [Some(view.clone())];
-            // Q1：extend 与 WebView 的 object-fit:fill 语义一致——忽略 fitMode，
-            // 整张图拉伸铺满所有显示器的并集，再用负 TopLeftX/Y 把本屏那块裁进 RT。
-            // 负 viewport 允许存在，超出 RT 的部分由光栅化裁掉，quad / shader 不用改。
-            let (target_w, target_h, fit, offset_x, offset_y) = match self.extend_viewport {
-                Some(v) => (
-                    v.total_width as u32,
-                    v.total_height as u32,
-                    FitMode::Fill,
-                    v.offset_x as f32,
-                    v.offset_y as f32,
-                ),
-                None => (
-                    self.rect.width as u32,
-                    self.rect.height as u32,
-                    self.fit_mode,
-                    0.0,
-                    0.0,
-                ),
-            };
-            let FitRect {
-                x,
-                y,
-                width,
-                height,
-            } = fit_rect(fit, frame_width, frame_height, target_w, target_h);
-            let viewport = D3D11_VIEWPORT {
-                TopLeftX: x - offset_x,
-                TopLeftY: y - offset_y,
-                Width: width,
-                Height: height,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-
-            unsafe {
-                self.context.IASetInputLayout(&pipeline.input_layout);
-                self.context.IASetVertexBuffers(
-                    0,
-                    1,
-                    Some(vertex_buffers.as_ptr()),
-                    Some(strides.as_ptr()),
-                    Some(offsets.as_ptr()),
-                );
-                self.context
-                    .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-                self.context.VSSetShader(&pipeline.vertex_shader, None);
-                self.context.PSSetShader(&pipeline.pixel_shader, None);
-                self.context.PSSetSamplers(0, Some(&samplers));
-                self.context.PSSetShaderResources(0, Some(&views));
-                // QUAD 顶点顺序与 D3D 默认正面绕序相反，不显式关背面剔除会丢掉全部三角形
-                self.context.RSSetState(&pipeline.rasterizer_state);
-                self.context.RSSetViewports(Some(&[viewport]));
-                self.context.Draw(4, 0);
-            }
+            self.draw_media(&transition.to, transition.to_fit_mode, progress, now);
+        } else if let Some(wallpaper) = &self.wallpaper {
+            self.draw_media(wallpaper, self.fit_mode, 1.0, now);
         }
 
         let present = unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) };
@@ -552,8 +584,108 @@ impl RenderSurface {
         }
     }
 
+    /// 一次全屏 quad 绘制。帧来源、fit / extend 视口推导在两条媒体链路间完全共用；
+    /// fade 只改变写入 cbuffer 的 alpha，因此不会引入第二套绘制路径。
+    fn draw_media(&self, media: &WallpaperMedia, fit_mode: FitMode, alpha: f32, now: Instant) {
+        // 先取出 (SRV, 宽, 高)，两条媒体链路在这一步之后完全共用同一套 quad / viewport。
+        // VideoPlayback 的时钟由 renderer loop 在绘制整组前统一推进，这里只读当前帧。
+        let current: Option<(ID3D11ShaderResourceView, u32, u32)> = match media {
+            WallpaperMedia::Frames(frames) => {
+                let frame = frames.current_frame(now);
+                Some((frame.view.clone(), frame.width, frame.height))
+            }
+            WallpaperMedia::Video(playback) => playback
+                .lock()
+                .ok()
+                .and_then(|guard| guard.frame_snapshot()),
+        };
+        let Some((view, frame_width, frame_height)) = current else {
+            return;
+        };
+
+        let pipeline = &self.pipeline;
+        let vertex_buffers = [Some(pipeline.vertex_buffer.clone())];
+        let strides = [std::mem::size_of::<Vertex>() as u32];
+        let offsets = [0u32];
+        let samplers = [Some(pipeline.sampler.clone())];
+        let views = [Some(view.clone())];
+        let constant_buffers = [Some(pipeline.fade_buffer.clone())];
+        // Q1：extend 与 WebView 的 object-fit:fill 语义一致——忽略 fitMode，
+        // 整张图拉伸铺满所有显示器的并集，再用负 TopLeftX/Y 把本屏那块裁进 RT。
+        // 负 viewport 允许存在，超出 RT 的部分由光栅化裁掉，quad / shader 不用改。
+        let (target_w, target_h, fit, offset_x, offset_y) = match self.extend_viewport {
+            Some(v) => (
+                v.total_width as u32,
+                v.total_height as u32,
+                FitMode::Fill,
+                v.offset_x as f32,
+                v.offset_y as f32,
+            ),
+            None => (
+                self.rect.width as u32,
+                self.rect.height as u32,
+                fit_mode,
+                0.0,
+                0.0,
+            ),
+        };
+        let FitRect {
+            x,
+            y,
+            width,
+            height,
+        } = fit_rect(fit, frame_width, frame_height, target_w, target_h);
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: x - offset_x,
+            TopLeftY: y - offset_y,
+            Width: width,
+            Height: height,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let fade = FadeConstants {
+            alpha,
+            pad: [0.0; 3],
+        };
+
+        unsafe {
+            self.context
+                .OMSetBlendState(&pipeline.blend_state, None, u32::MAX);
+            self.context.UpdateSubresource(
+                &pipeline.fade_buffer,
+                0,
+                None,
+                &fade as *const FadeConstants as *const c_void,
+                0,
+                0,
+            );
+            self.context
+                .PSSetConstantBuffers(0, Some(&constant_buffers));
+            self.context.IASetInputLayout(&pipeline.input_layout);
+            self.context.IASetVertexBuffers(
+                0,
+                1,
+                Some(vertex_buffers.as_ptr()),
+                Some(strides.as_ptr()),
+                Some(offsets.as_ptr()),
+            );
+            self.context
+                .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            self.context.VSSetShader(&pipeline.vertex_shader, None);
+            self.context.PSSetShader(&pipeline.pixel_shader, None);
+            self.context.PSSetSamplers(0, Some(&samplers));
+            self.context.PSSetShaderResources(0, Some(&views));
+            // QUAD 顶点顺序与 D3D 默认正面绕序相反，不显式关背面剔除会丢掉全部三角形
+            self.context.RSSetState(&pipeline.rasterizer_state);
+            self.context.RSSetViewports(Some(&[viewport]));
+            self.context.Draw(4, 0);
+        }
+    }
+
     pub fn destroy(&mut self) {
         self.wallpaper = None;
+        self.transition = None;
+        self.pending.clear();
         if self.embedded {
             crate::platform::windows::desktop_embedder::unembed_from_desktop(
                 self.window.hwnd().0 as isize,
@@ -728,6 +860,42 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
     }
     let sampler = sampler.context("D3D11 sampler 创建失败")?;
 
+    // shader 输出预乘色，blend 用 ONE / INV_SRC_ALPHA：pass1(alpha=1) 把 from
+    // 完整写入 RT，pass2(alpha=t) 得到 to*t + from*(1-t)，alpha 通道仍收敛到 1。
+    let blend_desc = D3D11_BLEND_DESC {
+        AlphaToCoverageEnable: FALSE,
+        IndependentBlendEnable: FALSE,
+        RenderTarget: [D3D11_RENDER_TARGET_BLEND_DESC {
+            BlendEnable: BOOL(1),
+            SrcBlend: D3D11_BLEND_ONE,
+            DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
+            BlendOp: D3D11_BLEND_OP_ADD,
+            SrcBlendAlpha: D3D11_BLEND_ONE,
+            DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
+            BlendOpAlpha: D3D11_BLEND_OP_ADD,
+            RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+        }; 8],
+    };
+    let mut blend_state: Option<ID3D11BlendState> = None;
+    unsafe {
+        device.CreateBlendState(&blend_desc, Some(&mut blend_state))?;
+    }
+    let blend_state = blend_state.context("D3D11 blend state 创建失败")?;
+
+    let fade_desc = D3D11_BUFFER_DESC {
+        ByteWidth: std::mem::size_of::<FadeConstants>() as u32,
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+        StructureByteStride: 0,
+    };
+    let mut fade_buffer: Option<ID3D11Buffer> = None;
+    unsafe {
+        device.CreateBuffer(&fade_desc, None, Some(&mut fade_buffer))?;
+    }
+    let fade_buffer = fade_buffer.context("D3D11 fade cbuffer 创建失败")?;
+
     Ok(QuadPipeline {
         vertex_shader,
         pixel_shader,
@@ -735,6 +903,8 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
         input_layout,
         vertex_buffer,
         sampler,
+        blend_state,
+        fade_buffer,
     })
 }
 

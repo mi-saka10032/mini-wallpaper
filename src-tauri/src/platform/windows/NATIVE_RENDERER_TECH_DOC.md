@@ -1119,7 +1119,7 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 |--------|------|------|
 | ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态；表外格式的 WebView fallback 见 M8（3.15） |
 | ~~**P1**~~ | ~~WebView fallback 接线（M8）~~ | **已完成（3.15）**：Auto 下表外格式回 WebView，NativeOnly 下报错；页面与事件链原样复用 |
-| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast；**M7 新增**：四种 crossfade 组合、extend 接缝明暗一致、连续切换队列每段跑满 350ms；**M8 新增**：Auto 下 webm/mkv 回退 WebView 后能否实际播放、切回 Native 可支持格式时 WebView 窗口销毁、混合 backend 的 D2 降级提示；**控制链路新增**：Mirror/Extend 切换时副屏是否立刻跟随（含 M7 的 350ms crossfade 延迟）、切回 Independent 后从屏 fitMode 是否正确；**音频新增**：默认 0 不突发有声、音量即时生效、Independent 多屏叠加 / Mirror-Extend 单份输出、无音轨视频静音正常、crossfade 冻结结束后从 0、5s 校准无音画漂移、全屏暂停音频同步停止 |
+| ~~**P0**~~ | ~~剩余实机验收项~~ | **已全部实机验收通过（用户确认，2026-11-22）**：静态图（GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔 union 重算、显存单份、WebView fallback 不回归、D2 toast 只弹一次）、视频（跨屏同帧、暂停恢复、循环 seek、解码失败 toast）、crossfade（四种组合、接缝明暗一致、连续切换 350ms）、Auto fallback（表外格式回退可播、切回 Native 时 WebView 窗口销毁、混合 backend D2 提示）、控制链路（副屏跟随、切回 Independent 的 fitMode）与音频全项（默认静音、音量即时、共享模型、无音轨、fade 冻结 / reset、5s 校准、全屏暂停）均已确认。验收中暴露的跨 backend 硬切露底、WebView→Native 视频闪烁、fullscreen_detector 误报三个问题已修复并复验通过 |
 | **P1** | 按目标分辨率降采样解码 | 当前 `upload_frames` 按原始尺寸建纹理，8K 图在 1080p 屏上仍上传 126MB。用 WIC / 更快的解码器在解码阶段就按目标尺寸取样，是**唯一能真正削减单次 ~75ms（4K JPEG）** 的路；改动最大，需 Windows 实机验证 |
 | **P1** | 解码移出渲染线程 + 保留旧帧 | `upload_frames` 现在同步跑在 `try_recv` 分支，解码期间所有 surface 停帧。改为专用解码线程、新帧就绪前保留上一张，可让切换不再顿；需处理连点取消与命令去重 |
 | P1 | 超大素材的连续命令合并 | 单份 >192MiB 不进缓存（见 5.3），同步模式下仍会重复解码；可在 renderer loop 内把一批连续同 key 的 `SetWallpaper` 合并成一次，无需常驻显存 |
@@ -1133,3 +1133,5 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 | P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |
 | P3 | 契约生成 | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
 | P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 50 passed），renderer 编排与桌面嵌入仍零覆盖 |
+
+**P0 收尾结论**：截至 2026-11-22，上表 P0 项（含 M6~M8 新增项及控制链路 / 音频项）全部实机验收通过，Native 方案进入交付状态；剩余均为 P1 / P2 / P3 优化 backlog，不阻塞交付。

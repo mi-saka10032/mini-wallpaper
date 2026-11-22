@@ -5,8 +5,12 @@ use super::contracts::{
     BackendSelection, RenderBackend, RendererError, RendererErrorCode, WallpaperKind,
 };
 
-const NATIVE_VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v"];
-const WEBVIEW_VIDEO_EXTENSIONS: &[&str] = &["webm", "mkv", "avi", "mov"];
+// Media Foundation 原生支持的容器扩展名（见微软官方 Supported Media Formats in Media Foundation）。
+// 这里声明的是「交给 Native 解码器尝试」，不保证容器内编码一定能解；编码不兼容时
+// 渲染线程会回传 DecodeFailed，不回退 WebView。
+const NATIVE_VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "m4v", "mov", "avi", "wmv", "asf", "3gp", "3g2", "3gp2", "3gpp",
+];
 
 pub fn default_backend_selection() -> BackendSelection {
     if cfg!(debug_assertions) {
@@ -40,20 +44,9 @@ pub fn resolve_backend(
         return Ok(RenderBackend::Native);
     }
 
-    if matches!(selection, BackendSelection::NativeOnly) {
-        return Err(RendererError::new(
-            RendererErrorCode::UnsupportedFormat,
-            format!(
-                "native renderer does not support .{} video in NativeOnly mode",
-                ext
-            ),
-        ));
-    }
-
-    if WEBVIEW_VIDEO_EXTENSIONS.contains(&ext.as_str()) {
-        return Ok(RenderBackend::WebView);
-    }
-
+    // M6 起视频不再走 WebView fallback：mkv / webm 等容器在当前阶段明确报错。
+    // selection 参数保留给后续 M8 的动态 backend 切换，避免现在把接口收死。
+    let _ = selection;
     Err(RendererError::new(
         RendererErrorCode::UnsupportedFormat,
         format!("unsupported video format: .{}", ext),
@@ -91,38 +84,36 @@ mod tests {
     }
 
     #[test]
-    fn mp4_uses_native_in_both_modes() {
-        assert_eq!(
-            resolve_backend(
-                WallpaperKind::Video,
-                &path("mp4"),
-                BackendSelection::NativeOnly
-            ),
-            Ok(RenderBackend::Native)
-        );
-        assert_eq!(
-            resolve_backend(WallpaperKind::Video, &path("m4v"), BackendSelection::Auto),
-            Ok(RenderBackend::Native)
-        );
+    fn media_foundation_video_extensions_use_native_in_both_modes() {
+        for ext in [
+            "mp4", "m4v", "mov", "avi", "wmv", "asf", "3gp", "3g2", "3gp2", "3gpp",
+        ] {
+            for selection in [BackendSelection::NativeOnly, BackendSelection::Auto] {
+                assert_eq!(
+                    resolve_backend(WallpaperKind::Video, &path(ext), selection),
+                    Ok(RenderBackend::Native),
+                    ".{} 应由 Media Foundation 原生解码",
+                    ext
+                );
+            }
+        }
     }
 
     #[test]
-    fn fallback_video_only_exists_in_auto_mode() {
-        assert_eq!(
-            resolve_backend(WallpaperKind::Video, &path("webm"), BackendSelection::Auto),
-            Ok(RenderBackend::WebView)
-        );
-        assert_eq!(
-            resolve_backend(
-                WallpaperKind::Video,
-                &path("mkv"),
-                BackendSelection::NativeOnly
-            ),
-            Err(RendererError::new(
-                RendererErrorCode::UnsupportedFormat,
-                "native renderer does not support .mkv video in NativeOnly mode"
-            ))
-        );
+    fn webm_and_mkv_are_rejected_without_webview_fallback() {
+        for ext in ["webm", "mkv"] {
+            for selection in [BackendSelection::NativeOnly, BackendSelection::Auto] {
+                assert_eq!(
+                    resolve_backend(WallpaperKind::Video, &path(ext), selection),
+                    Err(RendererError::new(
+                        RendererErrorCode::UnsupportedFormat,
+                        format!("unsupported video format: .{}", ext)
+                    )),
+                    ".{} 当前阶段应明确报错而非回退 WebView",
+                    ext
+                );
+            }
+        }
     }
 
     #[test]

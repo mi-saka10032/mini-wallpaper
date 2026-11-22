@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -33,6 +33,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
+use super::video::VideoPlayback;
 use super::window::NativeWindow;
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
@@ -162,6 +163,18 @@ impl ByteSize for SharedFrames {
     }
 }
 
+/// 一张壁纸在 surface 上的两种来源。
+///
+/// 图片 / GIF / 动态 WebP 用预解码的 `SharedFrames`（按 started_at 取模选帧）；
+/// 视频用流式 `VideoPlayback`（每帧由 renderer loop 推进一次）。两条链路共用
+/// 同一个 device / pipeline 与全屏 quad，但帧时钟机制不同，故用枚举分开。
+pub enum WallpaperMedia {
+    Frames(Arc<SharedFrames>),
+    /// Mutex 只用于让 renderer loop 在绘制前推进时钟；所有访问都在同一渲染线程，
+    /// 实际不会产生锁竞争，但避免用 unsafe 把 Arc 转成 &mut。
+    Video(Arc<Mutex<VideoPlayback>>),
+}
+
 /// 渲染线程独有的共享 D3D11 上下文。
 ///
 /// SRV 不能跨 device 使用，而 extend / mirror 组内所有 surface 必须绑定同一份纹理，
@@ -214,6 +227,13 @@ impl SharedDevice {
             frames,
             started_at: Instant::now(),
         }))
+    }
+
+    /// 打开一个流式视频播放状态；复用共享 device / context，不进 FrameCache
+    /// （视频不缓存全部帧，缓存的是唯一一个正在推进的播放状态）。
+    pub fn open_video(&self, path: &Path) -> Result<Arc<Mutex<VideoPlayback>>> {
+        let playback = VideoPlayback::open(&self.device, &self.context, path)?;
+        Ok(Arc::new(Mutex::new(playback)))
     }
 
     fn upload_frame(&self, frame: &DecodedFrame) -> Result<GpuFrame> {
@@ -281,7 +301,7 @@ pub struct RenderSurface {
     /// Some 表示该屏参与 extend 拼接；None 表示按本屏尺寸独立 fit。
     extend_viewport: Option<ExtendViewport>,
     embedded: bool,
-    wallpaper: Option<Arc<SharedFrames>>,
+    wallpaper: Option<WallpaperMedia>,
     // Present / backbuffer 错误只记录一次，避免每帧刷屏
     present_error_logged: bool,
     backbuffer_error_logged: bool,
@@ -340,7 +360,21 @@ impl RenderSurface {
     /// 由渲染线程把同一份解码结果挂到组内每屏，帧时钟因此天然一致。
     pub fn set_frames(&mut self, frames: Arc<SharedFrames>, fit_mode: FitMode) {
         self.fit_mode = fit_mode;
-        self.wallpaper = Some(frames);
+        self.wallpaper = Some(WallpaperMedia::Frames(frames));
+    }
+
+    /// 组内所有屏挂同一个视频播放状态；renderer loop 每帧只 advance 一次。
+    pub fn set_video(&mut self, playback: Arc<Mutex<VideoPlayback>>, fit_mode: FitMode) {
+        self.fit_mode = fit_mode;
+        self.wallpaper = Some(WallpaperMedia::Video(playback));
+    }
+
+    /// 当前壁纸的视频播放状态；由 renderer loop 在绘制整组前统一推进时钟。
+    pub fn video(&self) -> Option<&Arc<Mutex<VideoPlayback>>> {
+        match &self.wallpaper {
+            Some(WallpaperMedia::Video(playback)) => Some(playback),
+            _ => None,
+        }
     }
 
     pub fn set_extend_viewport(&mut self, viewport: Option<ExtendViewport>) {
@@ -432,14 +466,27 @@ impl RenderSurface {
                 .ClearRenderTargetView(render_target, &[0.08, 0.12, 0.18, 1.0]);
         }
 
-        if let Some(wallpaper) = &self.wallpaper {
-            let frame = wallpaper.current_frame(Instant::now());
+        // 先取出 (SRV, 宽, 高)，两条媒体链路在这一步之后完全共用同一套 quad / viewport。
+        // VideoPlayback 的时钟由 renderer loop 在绘制整组前统一推进，这里只读当前帧。
+        let current: Option<(ID3D11ShaderResourceView, u32, u32)> = match &self.wallpaper {
+            Some(WallpaperMedia::Frames(frames)) => {
+                let frame = frames.current_frame(Instant::now());
+                Some((frame.view.clone(), frame.width, frame.height))
+            }
+            Some(WallpaperMedia::Video(playback)) => playback
+                .lock()
+                .ok()
+                .and_then(|guard| guard.frame_snapshot()),
+            None => None,
+        };
+
+        if let Some((view, frame_width, frame_height)) = current {
             let pipeline = &self.pipeline;
             let vertex_buffers = [Some(pipeline.vertex_buffer.clone())];
             let strides = [std::mem::size_of::<Vertex>() as u32];
             let offsets = [0u32];
             let samplers = [Some(pipeline.sampler.clone())];
-            let views = [Some(frame.view.clone())];
+            let views = [Some(view.clone())];
             // Q1：extend 与 WebView 的 object-fit:fill 语义一致——忽略 fitMode，
             // 整张图拉伸铺满所有显示器的并集，再用负 TopLeftX/Y 把本屏那块裁进 RT。
             // 负 viewport 允许存在，超出 RT 的部分由光栅化裁掉，quad / shader 不用改。
@@ -464,7 +511,7 @@ impl RenderSurface {
                 y,
                 width,
                 height,
-            } = fit_rect(fit, frame.width, frame.height, target_w, target_h);
+            } = fit_rect(fit, frame_width, frame_height, target_w, target_h);
             let viewport = D3D11_VIEWPORT {
                 TopLeftX: x - offset_x,
                 TopLeftY: y - offset_y,

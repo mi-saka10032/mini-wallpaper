@@ -69,6 +69,8 @@ impl Scheduler {
     ///
     /// 执行顺序：
     /// 1. 以 monitor_id 为基准，同步配置到所有从属 monitor（mirror/extend 模式）
+    /// 1.5 Native 侧整组重下发壁纸 / fitMode：renderer 不会像 WebView 页面那样
+    ///     收到 display-mode-changed 后重读 DB，DB 同步后必须显式推一次
     /// 2. 通知所有壁纸窗口切换渲染模式（wallpaper_manager 广播 display-mode-changed）
     /// 3. 管理定时器：主 monitor 保持/启动定时器，从属 monitor 停止定时器
     async fn apply_display_mode_side_effect(
@@ -108,6 +110,19 @@ impl Scheduler {
                 {
                     let mgr = wm.lock().await;
                     mgr.broadcast_display_mode_changed("independent");
+                }
+
+                // 与 mirror/extend 的整组重下发对称：WebView 页面靠 loadConfig 重读
+                // fitMode，Native surface 在同步模式下被 sync_config_from 改过 DB 却
+                // 没收到通知，切回独立后必须按最新 config 重下发，否则保留旧 fitMode。
+                {
+                    let coordinator = self.render_coordinator();
+                    let mut guard = coordinator.lock().await;
+                    for config in &active_configs {
+                        guard
+                            .set_fit_mode(&config.monitor_id, Some(config.fit_mode.as_str()), false)
+                            .await;
+                    }
                 }
 
                 // 恢复所有满足条件的定时器
@@ -156,6 +171,18 @@ impl Scheduler {
                         {
                             warn!("[Scheduler] 同步配置到 {} 失败: {}", config.monitor_id, e);
                         }
+                    }
+
+                    // 步骤 1.5：Native 侧整组重下发，补上 backend 复刻缺失的一步。
+                    // WebView 页面收到 display-mode-changed 会自己 loadConfig 重读 DB，
+                    // 而 renderer 只收到 viewport 更新：sync_config_from 改了从屏 DB 的
+                    // wallpaper_id，surface 却仍挂着旧壁纸，切模式时从屏就不会立刻跟随。
+                    // is_sync=true 让 resolve_targets 覆盖整组，一次下发即可。
+                    let coordinator = self.render_coordinator();
+                    let mut guard = coordinator.lock().await;
+                    match source.wallpaper_id {
+                        Some(wid) => guard.update_wallpaper(primary_mid, wid, true).await,
+                        None => guard.clear_wallpaper(primary_mid, true).await,
                     }
                 }
 

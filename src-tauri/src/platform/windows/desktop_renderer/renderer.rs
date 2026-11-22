@@ -717,7 +717,19 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
             }
         }
 
-        thread::sleep(Duration::from_millis(16));
+        // 帧率自适应：纯静态壁纸没有逐帧变化，降到低频唤醒即可；
+        // 视频 / fade / 动图仍按 16ms 推进，保证帧时钟与淡入淡出平滑。
+        // 命令响应最差等于 STALE_TICK_MS，静态场景换图的 decode 成本远大于此。
+        const STALE_TICK_MS: u64 = 100;
+        let has_motion = !paused
+            && surfaces
+                .values()
+                .any(RenderSurface::needs_continuous_frames);
+        thread::sleep(Duration::from_millis(if has_motion {
+            16
+        } else {
+            STALE_TICK_MS
+        }));
     }
 
     for (_, mut surface) in surfaces {

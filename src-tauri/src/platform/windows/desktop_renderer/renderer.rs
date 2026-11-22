@@ -11,8 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
 
-use super::surface::RenderSurface;
-use crate::platform::wallpaper_renderer::{FitMode, MonitorRect, WallpaperKind};
+use super::surface::{RenderSurface, SharedDevice};
+use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 
 /// DirectComposition 是 COM API，renderer thread 必须自己初始化/反初始化 COM。
 struct ComScope {
@@ -58,11 +58,16 @@ enum RendererCommand {
     DestroyMonitor {
         monitor_id: String,
     },
+    /// 组级换图：一次解码 + 一次纹理上传，组内所有屏共享同一个帧时钟。
     SetWallpaper {
-        monitor_id: String,
+        monitor_ids: Vec<String>,
         path: PathBuf,
         kind: WallpaperKind,
         fit_mode: FitMode,
+    },
+    /// 全组更新 extend 裁剪参数；None 表示该屏退回各自渲染（M4 语义 / D2 降级）。
+    SetGroupGeometry {
+        viewports: Vec<(String, Option<ExtendViewport>)>,
     },
     SetFitMode {
         monitor_id: String,
@@ -107,19 +112,29 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    /// independent 时组内只有一个 id；mirror / extend 时一次覆盖整组。
     pub fn set_wallpaper(
         &self,
-        monitor_id: String,
+        monitor_ids: Vec<String>,
         path: PathBuf,
         kind: WallpaperKind,
         fit_mode: FitMode,
     ) -> Result<()> {
         self.sender.send(RendererCommand::SetWallpaper {
-            monitor_id,
+            monitor_ids,
             path,
             kind,
             fit_mode,
         })?;
+        Ok(())
+    }
+
+    pub fn set_group_geometry(
+        &self,
+        viewports: Vec<(String, Option<ExtendViewport>)>,
+    ) -> Result<()> {
+        self.sender
+            .send(RendererCommand::SetGroupGeometry { viewports })?;
         Ok(())
     }
 
@@ -160,6 +175,16 @@ impl Drop for DesktopRenderer {
 
 fn run(receiver: Receiver<RendererCommand>) {
     let _com = ComScope::init();
+
+    // 所有 surface 共用一个 device；SRV 不能跨 device 绑定，而 extend 组要求同纹理同帧。
+    let shared = match SharedDevice::new() {
+        Ok(device) => device,
+        Err(err) => {
+            log::error!("共享 D3D11 上下文创建失败: {:#}", err);
+            return;
+        }
+    };
+
     let mut surfaces: HashMap<String, RenderSurface> = HashMap::new();
     let mut running = true;
     let mut paused = false;
@@ -174,7 +199,7 @@ fn run(receiver: Receiver<RendererCommand>) {
                         }
                         continue;
                     }
-                    match RenderSurface::new(rect) {
+                    match RenderSurface::new(&shared, rect) {
                         Ok(surface) => {
                             surfaces.insert(monitor_id, surface);
                         }
@@ -187,17 +212,27 @@ fn run(receiver: Receiver<RendererCommand>) {
                     }
                 }
                 RendererCommand::SetWallpaper {
-                    monitor_id,
+                    monitor_ids,
                     path,
                     kind,
                     fit_mode,
-                } => {
-                    if let Some(surface) = surfaces.get_mut(&monitor_id) {
-                        if let Err(err) = surface.set_wallpaper(&path, kind, fit_mode) {
-                            log::error!("原生壁纸解码失败 {:?}: {:#}", path, err);
+                } => match shared.upload_frames(&path, kind) {
+                    Ok(frames) => {
+                        for monitor_id in monitor_ids {
+                            if let Some(surface) = surfaces.get_mut(&monitor_id) {
+                                surface.set_frames(frames.clone(), fit_mode);
+                            } else {
+                                log::warn!("[Renderer] {} 组换图时原生表面不存在", monitor_id);
+                            }
                         }
-                    } else {
-                        log::warn!("[Renderer] {} 壁纸更新时原生表面不存在", monitor_id);
+                    }
+                    Err(err) => log::error!("原生壁纸解码失败 {:?}: {:#}", path, err),
+                },
+                RendererCommand::SetGroupGeometry { viewports } => {
+                    for (monitor_id, viewport) in viewports {
+                        if let Some(surface) = surfaces.get_mut(&monitor_id) {
+                            surface.set_extend_viewport(viewport);
+                        }
                     }
                 }
                 RendererCommand::SetFitMode {

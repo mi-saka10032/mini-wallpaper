@@ -21,22 +21,26 @@ pub async fn create_wallpaper_window(
     let req = req.into_inner();
     let app_ctx: &AppContext = ctx.inner();
 
-    // 从 config 取当前壁纸，交给协调器决定 backend 并准备渲染目标
-    let wallpaper_id = monitor_config_service::get_by_monitor_id(&app_ctx.db, &req.monitor_id)
-        .await?
-        .and_then(|config| config.wallpaper_id);
-
-    let Some(wallpaper_id) = wallpaper_id else {
-        return Ok(());
-    };
-
     let rect = MonitorRect {
         x: req.x,
         y: req.y,
         width: req.width as i32,
         height: req.height as i32,
     };
+
+    // 从 config 取当前壁纸，交给协调器决定 backend 并准备渲染目标
+    let wallpaper_id = monitor_config_service::get_by_monitor_id(&app_ctx.db, &req.monitor_id)
+        .await?
+        .and_then(|config| config.wallpaper_id);
+
     let mut coordinator = app_ctx.render_coordinator.lock().await;
+    // 先登记几何再判断有没有壁纸：没有壁纸的屏也必须进入 extend 的 union，
+    // 否则虚拟桌面画布会缺一块，接缝位置算错。
+    coordinator.register_monitor(&req.monitor_id, rect);
+
+    let Some(wallpaper_id) = wallpaper_id else {
+        return Ok(());
+    };
     coordinator
         .ensure_target(&req.monitor_id, rect, wallpaper_id)
         .await?;

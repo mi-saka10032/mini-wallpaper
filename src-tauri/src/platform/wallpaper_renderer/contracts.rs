@@ -122,6 +122,12 @@ pub struct MonitorRect {
     pub height: i32,
 }
 
+/// extend 模式下单个显示器的裁剪参数。
+///
+/// 单位统一为**物理像素的虚拟桌面坐标**，与 `MonitorRect` / `CreateWindowExW` 一致；
+/// `offset_x/y` 相对所有显示器并集的左上角，不是相对主屏，因此负坐标布局同样成立。
+/// 渲染时令 viewport 为 `(0, 0, total_width, total_height) − (offset_x, offset_y)`，
+/// 等价于 WebView 侧 `object-fit: fill` 的全图容器叠加 `left/top: -offset`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtendViewport {
@@ -129,6 +135,9 @@ pub struct ExtendViewport {
     pub offset_y: i32,
     pub total_width: i32,
     pub total_height: i32,
+    /// 本屏尺寸，用于裁剪结果自检；前端 `useExtendViewport` 的 myWidth/myHeight
+    pub monitor_width: i32,
+    pub monitor_height: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

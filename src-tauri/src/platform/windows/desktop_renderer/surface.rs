@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -35,7 +36,7 @@ use windows::Win32::Graphics::Dxgi::{
 use super::window::NativeWindow;
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
-use crate::platform::wallpaper_renderer::{FitMode, MonitorRect, WallpaperKind};
+use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 use crate::platform::windows::desktop_embedder::EmbedPolicy;
 
 const SHADER_SOURCE: &str = r#"
@@ -91,6 +92,7 @@ const QUAD: [Vertex; 4] = [
     },
 ];
 
+#[derive(Clone)]
 struct QuadPipeline {
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
@@ -114,12 +116,16 @@ struct GpuFrame {
     duration: Duration,
 }
 
-struct ActiveWallpaper {
+/// 一组显示器共享的帧序列与帧时钟。
+///
+/// extend / mirror 组内所有 surface 持有同一个 Arc，天然选到同一帧；每屏各自
+/// `Instant::now()` 会让跨屏接缝出现不同帧，正是 WebView 侧 useVideoSync 想解决的问题。
+pub struct SharedFrames {
     frames: Vec<GpuFrame>,
     started_at: Instant,
 }
 
-impl ActiveWallpaper {
+impl SharedFrames {
     fn current_frame(&self, now: Instant) -> &GpuFrame {
         if self.frames.len() <= 1 {
             return &self.frames[0];
@@ -144,48 +150,19 @@ impl ActiveWallpaper {
     }
 }
 
-pub struct RenderSurface {
-    window: NativeWindow,
+/// 渲染线程独有的共享 D3D11 上下文。
+///
+/// SRV 不能跨 device 使用，而 extend / mirror 组内所有 surface 必须绑定同一份纹理，
+/// 因此 device / context / pipeline 全局只能有一份。所有 surface 都在同一渲染线程上
+/// 绘制，即时上下文的非线程安全约束自动满足。
+pub struct SharedDevice {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    swap_chain: IDXGISwapChain1,
-    // DirectComposition COM 对象必须活到 RenderSurface 析构；字段只用于持有引用，不直接读取。
-    #[allow(dead_code)]
-    composition_device: IDCompositionDevice,
-    #[allow(dead_code)]
-    composition_target: IDCompositionTarget,
-    #[allow(dead_code)]
-    composition_visual: IDCompositionVisual,
-    render_target: Option<ID3D11RenderTargetView>,
     pipeline: QuadPipeline,
-    rect: MonitorRect,
-    fit_mode: FitMode,
-    embedded: bool,
-    wallpaper: Option<ActiveWallpaper>,
-    // Present / backbuffer 错误只记录一次，避免每帧刷屏
-    present_error_logged: bool,
-    backbuffer_error_logged: bool,
 }
 
-impl RenderSurface {
-    pub fn new(rect: MonitorRect) -> Result<Self> {
-        let window = NativeWindow::new(rect)?;
-        let hwnd = window.hwnd();
-
-        // DirectComposition target 必须绑定嵌入后的最终 HWND，且窗口创建期就要带
-        // WS_EX_NOREDIRECTIONBITMAP；否则 HWND bitblt swapchain 不会被 24H2 桌面合成树采样。
-        crate::platform::windows::desktop_embedder::embed_in_desktop(
-            hwnd.0 as isize,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            EmbedPolicy::Native,
-        )
-        .context("原生壁纸窗口嵌入桌面失败")?;
-        window.show();
-        window.normalize_native_ex_style()?;
-
+impl SharedDevice {
+    pub fn new() -> Result<Self> {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
         unsafe {
@@ -204,21 +181,141 @@ impl RenderSurface {
         let device = device.context("D3D11 device 创建失败")?;
         let context = context.context("D3D11 context 创建失败")?;
         let pipeline = create_pipeline(&device)?;
-        let composition =
-            create_composition_swap_chain(&device, hwnd, rect.width as u32, rect.height as u32)?;
+        Ok(Self {
+            device,
+            context,
+            pipeline,
+        })
+    }
+
+    /// 一次解码 + 一次纹理上传，返回整组共用的帧序列。
+    pub fn upload_frames(&self, path: &Path, _kind: WallpaperKind) -> Result<Arc<SharedFrames>> {
+        let decoded = decode_frames(path)?;
+        if decoded.is_empty() {
+            anyhow::bail!("解码结果为空: {:?}", path);
+        }
+        let mut frames = Vec::with_capacity(decoded.len());
+        for frame in &decoded {
+            frames.push(self.upload_frame(frame)?);
+        }
+        Ok(Arc::new(SharedFrames {
+            frames,
+            started_at: Instant::now(),
+        }))
+    }
+
+    fn upload_frame(&self, frame: &DecodedFrame) -> Result<GpuFrame> {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: frame.width,
+            Height: frame.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: frame.bgra.as_ptr() as *const c_void,
+            SysMemPitch: frame.width * 4,
+            SysMemSlicePitch: 0,
+        };
+
+        let mut texture: Option<ID3D11Texture2D> = None;
+        unsafe {
+            self.device
+                .CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
+        }
+        let texture = texture.context("D3D11 frame texture 创建失败")?;
+
+        // SRV 内部持有 texture 引用，无需在 GpuFrame 里再保存一份
+        let mut view: Option<ID3D11ShaderResourceView> = None;
+        unsafe {
+            self.device
+                .CreateShaderResourceView(&texture, None, Some(&mut view))?;
+        }
+        let view = view.context("D3D11 frame shader resource view 创建失败")?;
+
+        Ok(GpuFrame {
+            view,
+            width: frame.width,
+            height: frame.height,
+            duration: frame.duration,
+        })
+    }
+}
+
+pub struct RenderSurface {
+    window: NativeWindow,
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    swap_chain: IDXGISwapChain1,
+    // DirectComposition COM 对象必须活到 RenderSurface 析构；字段只用于持有引用，不直接读取。
+    #[allow(dead_code)]
+    composition_device: IDCompositionDevice,
+    #[allow(dead_code)]
+    composition_target: IDCompositionTarget,
+    #[allow(dead_code)]
+    composition_visual: IDCompositionVisual,
+    render_target: Option<ID3D11RenderTargetView>,
+    pipeline: QuadPipeline,
+    rect: MonitorRect,
+    fit_mode: FitMode,
+    /// Some 表示该屏参与 extend 拼接；None 表示按本屏尺寸独立 fit。
+    extend_viewport: Option<ExtendViewport>,
+    embedded: bool,
+    wallpaper: Option<Arc<SharedFrames>>,
+    // Present / backbuffer 错误只记录一次，避免每帧刷屏
+    present_error_logged: bool,
+    backbuffer_error_logged: bool,
+}
+
+impl RenderSurface {
+    pub fn new(shared: &SharedDevice, rect: MonitorRect) -> Result<Self> {
+        let window = NativeWindow::new(rect)?;
+        let hwnd = window.hwnd();
+
+        // DirectComposition target 必须绑定嵌入后的最终 HWND，且窗口创建期就要带
+        // WS_EX_NOREDIRECTIONBITMAP；否则 HWND bitblt swapchain 不会被 24H2 桌面合成树采样。
+        crate::platform::windows::desktop_embedder::embed_in_desktop(
+            hwnd.0 as isize,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            EmbedPolicy::Native,
+        )
+        .context("原生壁纸窗口嵌入桌面失败")?;
+        window.show();
+        window.normalize_native_ex_style()?;
+
+        // 每屏仍要有自己的 swapchain / target，但 device 与 pipeline 必须来自共享层：
+        // extend 组内所有 surface 要绑定同一份 SRV。
+        let composition = create_composition_swap_chain(
+            &shared.device,
+            hwnd,
+            rect.width as u32,
+            rect.height as u32,
+        )?;
 
         let mut surface = Self {
             window,
-            device,
-            context,
+            device: shared.device.clone(),
+            context: shared.context.clone(),
             swap_chain: composition.swap_chain,
             composition_device: composition.device,
             composition_target: composition.target,
             composition_visual: composition.visual,
             render_target: None,
-            pipeline,
+            pipeline: shared.pipeline.clone(),
             rect,
             fit_mode: FitMode::Cover,
+            extend_viewport: None,
             embedded: true,
             wallpaper: None,
             present_error_logged: false,
@@ -228,24 +325,14 @@ impl RenderSurface {
         Ok(surface)
     }
 
-    pub fn set_wallpaper(
-        &mut self,
-        path: &Path,
-        _kind: WallpaperKind,
-        fit_mode: FitMode,
-    ) -> Result<()> {
-        let decoded = decode_frames(path)?;
-        let mut frames = Vec::with_capacity(decoded.len());
-        for frame in decoded {
-            frames.push(self.upload_frame(&frame)?);
-        }
-
-        self.wallpaper = Some(ActiveWallpaper {
-            frames,
-            started_at: Instant::now(),
-        });
+    /// 由渲染线程把同一份解码结果挂到组内每屏，帧时钟因此天然一致。
+    pub fn set_frames(&mut self, frames: Arc<SharedFrames>, fit_mode: FitMode) {
         self.fit_mode = fit_mode;
-        Ok(())
+        self.wallpaper = Some(frames);
+    }
+
+    pub fn set_extend_viewport(&mut self, viewport: Option<ExtendViewport>) {
+        self.extend_viewport = viewport;
     }
 
     pub fn set_fit_mode(&mut self, fit_mode: FitMode) {
@@ -341,21 +428,34 @@ impl RenderSurface {
             let offsets = [0u32];
             let samplers = [Some(pipeline.sampler.clone())];
             let views = [Some(frame.view.clone())];
+            // Q1：extend 与 WebView 的 object-fit:fill 语义一致——忽略 fitMode，
+            // 整张图拉伸铺满所有显示器的并集，再用负 TopLeftX/Y 把本屏那块裁进 RT。
+            // 负 viewport 允许存在，超出 RT 的部分由光栅化裁掉，quad / shader 不用改。
+            let (target_w, target_h, fit, offset_x, offset_y) = match self.extend_viewport {
+                Some(v) => (
+                    v.total_width as u32,
+                    v.total_height as u32,
+                    FitMode::Fill,
+                    v.offset_x as f32,
+                    v.offset_y as f32,
+                ),
+                None => (
+                    self.rect.width as u32,
+                    self.rect.height as u32,
+                    self.fit_mode,
+                    0.0,
+                    0.0,
+                ),
+            };
             let FitRect {
                 x,
                 y,
                 width,
                 height,
-            } = fit_rect(
-                self.fit_mode,
-                frame.width,
-                frame.height,
-                self.rect.width as u32,
-                self.rect.height as u32,
-            );
+            } = fit_rect(fit, frame.width, frame.height, target_w, target_h);
             let viewport = D3D11_VIEWPORT {
-                TopLeftX: x,
-                TopLeftY: y,
+                TopLeftX: x - offset_x,
+                TopLeftY: y - offset_y,
                 Width: width,
                 Height: height,
                 MinDepth: 0.0,
@@ -401,51 +501,6 @@ impl RenderSurface {
             );
             self.embedded = false;
         }
-    }
-
-    fn upload_frame(&self, frame: &DecodedFrame) -> Result<GpuFrame> {
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: frame.width,
-            Height: frame.height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let data = D3D11_SUBRESOURCE_DATA {
-            pSysMem: frame.bgra.as_ptr() as *const c_void,
-            SysMemPitch: frame.width * 4,
-            SysMemSlicePitch: 0,
-        };
-
-        let mut texture: Option<ID3D11Texture2D> = None;
-        unsafe {
-            self.device
-                .CreateTexture2D(&desc, Some(&data), Some(&mut texture))?;
-        }
-        let texture = texture.context("D3D11 frame texture 创建失败")?;
-
-        // SRV 内部持有 texture 引用，无需在 GpuFrame 里再保存一份
-        let mut view: Option<ID3D11ShaderResourceView> = None;
-        unsafe {
-            self.device
-                .CreateShaderResourceView(&texture, None, Some(&mut view))?;
-        }
-        let view = view.context("D3D11 frame shader resource view 创建失败")?;
-
-        Ok(GpuFrame {
-            view,
-            width: frame.width,
-            height: frame.height,
-            duration: frame.duration,
-        })
     }
 }
 

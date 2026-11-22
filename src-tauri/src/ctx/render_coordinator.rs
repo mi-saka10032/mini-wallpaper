@@ -16,6 +16,16 @@
 //! - Native 可支持的格式（图片 / GIF / WebP / mp4 / m4v）一律走原生渲染
 //! - 仅当原生不支持时才回退 WebView（Auto 模式；NativeOnly 下直接报错）
 //! - backend 在 `ensure_target` / `update_wallpaper` 时按当前壁纸重新决策
+//!
+//! ## M5：跨屏组编排
+//!
+//! `rects` 覆盖所有 active 显示器（即使该屏暂时没有壁纸），其并集即 extend 的
+//! 虚拟桌面画布。同步模式下的换图只查库一次、只解码一次，整组 surface 共享同一个
+//! `Arc<SharedFrames>`，因此帧时钟天然一致。任一屏几何 / backend / display_mode
+//! 变化都会触发 `refresh_group_geometry()` 重算全组视口——只更新单屏会让接缝错位。
+//!
+//! D2：extend 组内 backend 不全是 Native 时降级为 M4 的逐屏独立渲染并提示一次，
+//! 避免 Rust 侧几何与 WebView 侧 `useExtendViewport` 两套坐标在接缝处对不上。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,19 +37,24 @@ use tauri::AppHandle;
 use tokio::sync::Mutex;
 
 use super::window_manager::WallpaperWindowManager;
+use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::wallpaper;
 use crate::events::{RendererErrorPayload, ThumbnailChangedPayload, TypedEmit};
 use crate::platform::wallpaper_renderer::{
-    default_backend_selection, resolve_backend, BackendSelection, DesktopRenderer, FitMode,
-    MonitorRect, RenderBackend, RendererError, RendererErrorCode, WallpaperKind,
+    default_backend_selection, group_viewports, resolve_backend, BackendSelection, DesktopRenderer,
+    DisplayMode, ExtendViewport, FitMode, MonitorRect, RenderBackend, RendererError,
+    RendererErrorCode, WallpaperKind,
 };
-use crate::services::{monitor_config_service, wallpaper_service};
+use crate::services::{app_setting_service, monitor_config_service, wallpaper_service};
 
 /// 批量通知指令，供数据库阶段收集、短锁内一次性派发
 pub enum RenderNotification {
     Updated(String, i32, bool),
     Cleared(String, bool),
 }
+
+/// extend 组降级时使用的 code；前端据此改用 warning 级 toast。
+const CODE_EXTEND_DEGRADED: &str = "ExtendDegraded";
 
 /// 渲染协调器：壁纸渲染链路的唯一入口
 pub struct RenderCoordinator {
@@ -50,8 +65,11 @@ pub struct RenderCoordinator {
     selection: BackendSelection,
     /// monitor_id -> 当前 active backend
     backends: HashMap<String, RenderBackend>,
-    /// monitor_id -> 显示器几何，供 backend 切换时重建 surface / 窗口
+    /// monitor_id -> 显示器几何；extend 的 union 由整张表算出
     rects: HashMap<String, MonitorRect>,
+    display_mode: DisplayMode,
+    /// 降级提示只发一次，恢复为全 Native 时重置
+    degraded_logged: bool,
 }
 
 impl RenderCoordinator {
@@ -68,10 +86,40 @@ impl RenderCoordinator {
             selection: default_backend_selection(),
             backends: HashMap::new(),
             rects: HashMap::new(),
+            display_mode: DisplayMode::Independent,
+            degraded_logged: false,
         })
     }
 
     // ==================== 公共入口 ====================
+
+    /// 从 app_setting 读取 display_mode；启动时与设置变更后各调用一次。
+    pub async fn refresh_display_mode(&mut self) {
+        let mode = match app_setting_service::get(&self.db, setting_keys::DISPLAY_MODE).await {
+            Ok(Some(value)) => DisplayMode::parse(&value).unwrap_or(DisplayMode::Independent),
+            _ => DisplayMode::Independent,
+        };
+        self.set_display_mode(mode);
+    }
+
+    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+        if self.display_mode == mode {
+            return;
+        }
+        self.display_mode = mode;
+        self.degraded_logged = false;
+        self.refresh_group_geometry();
+    }
+
+    /// 登记显示器几何。必须在判断「有没有壁纸」之前调用，否则没有壁纸的屏
+    /// 不会进入 union，extend 画布会缺一块。
+    pub fn register_monitor(&mut self, monitor_id: &str, rect: MonitorRect) {
+        if self.rects.get(monitor_id).copied() == Some(rect) {
+            return;
+        }
+        self.rects.insert(monitor_id.to_string(), rect);
+        self.refresh_group_geometry();
+    }
 
     /// 为显示器准备渲染目标（首帧）。
     ///
@@ -83,6 +131,8 @@ impl RenderCoordinator {
         rect: MonitorRect,
         wallpaper_id: i32,
     ) -> Result<RenderBackend> {
+        self.rects.insert(monitor_id.to_string(), rect);
+
         let descriptor = match self.build_descriptor(monitor_id, wallpaper_id).await {
             Ok(d) => d,
             Err(e) => {
@@ -94,12 +144,6 @@ impl RenderCoordinator {
         match descriptor.backend {
             RenderBackend::Native => {
                 self.renderer.ensure_monitor(monitor_id.to_string(), rect)?;
-                self.renderer.set_wallpaper(
-                    monitor_id.to_string(),
-                    descriptor.file_path,
-                    descriptor.kind,
-                    descriptor.fit_mode,
-                )?;
             }
             RenderBackend::WebView => {
                 let mut wm = self.window_manager.lock().await;
@@ -114,10 +158,26 @@ impl RenderCoordinator {
                 .map_err(anyhow::Error::msg)?;
             }
         }
-
-        self.rects.insert(monitor_id.to_string(), rect);
         self.backends
             .insert(monitor_id.to_string(), descriptor.backend);
+
+        if descriptor.backend == RenderBackend::Native {
+            // 同步模式下每建好一屏就重发整组：最后一次下发的 Arc 覆盖全组，
+            // 保证所有屏共享同一帧时钟，而不是各自留存一份。
+            let mids = if self.display_mode == DisplayMode::Independent {
+                vec![monitor_id.to_string()]
+            } else {
+                self.native_targets()
+            };
+            self.renderer.set_wallpaper(
+                mids,
+                descriptor.file_path.clone(),
+                descriptor.kind,
+                descriptor.fit_mode,
+            )?;
+        }
+
+        self.refresh_group_geometry();
         Ok(descriptor.backend)
     }
 
@@ -136,31 +196,66 @@ impl RenderCoordinator {
                 wm.destroy_window(monitor_id);
             }
         }
+        self.refresh_group_geometry();
     }
 
-    /// 壁纸变更：按新壁纸重新决策 backend，需要时切换渲染链路
+    /// 壁纸变更：整组只查库一次，Native 侧一次解码共享给所有屏
     pub async fn update_wallpaper(&mut self, monitor_id: &str, wallpaper_id: i32, is_sync: bool) {
         let targets = self.resolve_targets(monitor_id, is_sync);
-        for mid in targets {
-            let descriptor = match self.build_descriptor(&mid, wallpaper_id).await {
-                Ok(d) => d,
-                Err(e) => {
-                    self.report_error(Some(&mid), Some(wallpaper_id), &e);
-                    continue;
-                }
-            };
+        let Some(first) = targets.first().cloned() else {
+            return;
+        };
+        let descriptor = match self.build_descriptor(&first, wallpaper_id).await {
+            Ok(d) => d,
+            Err(e) => {
+                self.report_error(Some(&first), Some(wallpaper_id), &e);
+                return;
+            }
+        };
 
-            if let Err(e) = self.apply_backend(&mid, wallpaper_id, &descriptor).await {
+        // 阶段 1：只切换 backend / 创建或销毁渲染目标，不设置内容
+        for mid in &targets {
+            if let Err(e) = self.apply_backend(mid, &descriptor).await {
                 log::warn!("[RenderCoordinator] 壁纸更新失败 {}: {:#}", mid, e);
                 self.report_error(
-                    Some(&mid),
+                    Some(mid),
                     Some(wallpaper_id),
                     &RendererError::new(RendererErrorCode::BackendUnavailable, e.to_string()),
                 );
-                continue;
             }
+        }
 
-            // 主窗口缩略图与 backend 无关，始终通知刷新
+        // 阶段 2：Native 组一次解码共享帧时钟；WebView 逐屏走既有事件链
+        let mut native_mids = Vec::new();
+        for mid in &targets {
+            match self.backends.get(mid).copied() {
+                Some(RenderBackend::Native) => native_mids.push(mid.clone()),
+                _ => {
+                    let wm = self.window_manager.lock().await;
+                    if let Err(e) = wm.update_window(mid, wallpaper_id) {
+                        log::warn!("[RenderCoordinator] 壁纸更新失败 {}: {}", mid, e);
+                    }
+                }
+            }
+        }
+        if !native_mids.is_empty() {
+            if let Err(e) = self.renderer.set_wallpaper(
+                native_mids,
+                descriptor.file_path.clone(),
+                descriptor.kind,
+                descriptor.fit_mode,
+            ) {
+                log::warn!("[RenderCoordinator] 原生壁纸更新失败: {}", e);
+                self.report_error(
+                    Some(&first),
+                    Some(wallpaper_id),
+                    &RendererError::new(RendererErrorCode::BackendUnavailable, e.to_string()),
+                );
+            }
+        }
+
+        // 主窗口缩略图与 backend 无关，始终通知刷新
+        for mid in &targets {
             if let Err(e) = self.app_handle.typed_emit(&ThumbnailChangedPayload {
                 monitor_id: mid.clone(),
                 wallpaper_id,
@@ -172,6 +267,8 @@ impl RenderCoordinator {
                 );
             }
         }
+
+        self.refresh_group_geometry();
     }
 
     /// 清空壁纸：Native 走 renderer，WebView 走现有事件
@@ -198,6 +295,9 @@ impl RenderCoordinator {
     }
 
     /// fitMode 变更：Native 走 renderer，WebView 走现有事件
+    ///
+    /// Q1：extend 下 Native 渲染固定用 Fill 语义、WebView 页面的 extend 分支也忽略
+    /// fitMode，两侧的视觉保持一致；这里仍保存 fitMode，切回 independent 时立即生效。
     pub async fn set_fit_mode(&self, monitor_id: &str, fit_mode: Option<&str>, is_sync: bool) {
         let Some(fit_mode) = fit_mode.and_then(FitMode::parse) else {
             return;
@@ -270,12 +370,84 @@ impl RenderCoordinator {
 
     // ==================== 内部辅助 ====================
 
-    /// 壁纸变更的目标集合：同步模式取所有已建目标，独立模式仅指定显示器
+    /// 壁纸变更的目标集合：同步模式取所有已登记显示器，独立模式仅指定显示器
     fn resolve_targets(&self, monitor_id: &str, is_sync: bool) -> Vec<String> {
         if !is_sync {
             return vec![monitor_id.to_string()];
         }
-        self.backends.keys().cloned().collect()
+        let mut ids: Vec<String> = self.rects.keys().cloned().collect();
+        for id in self.backends.keys() {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        ids.sort();
+        ids
+    }
+
+    fn native_targets(&self) -> Vec<String> {
+        self.backends
+            .iter()
+            .filter(|(_, backend)| **backend == RenderBackend::Native)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// 重算整组 extend 视口。任何一屏几何 / backend / display_mode 变化都必须调用，
+    /// 因为 union 是全组共享的，只更新变化那一屏会让其它屏沿用旧 offset。
+    fn refresh_group_geometry(&mut self) {
+        let monitors: Vec<(String, MonitorRect)> = self
+            .rects
+            .iter()
+            .map(|(id, rect)| (id.clone(), *rect))
+            .collect();
+
+        let ready = !self.backends.is_empty();
+        let all_native = ready
+            && self
+                .backends
+                .values()
+                .all(|backend| *backend == RenderBackend::Native);
+        let extend_active = self.display_mode == DisplayMode::Extend && all_native;
+
+        let viewports: Vec<(String, Option<ExtendViewport>)> = if extend_active {
+            match group_viewports(&monitors) {
+                Some(group) => {
+                    self.degraded_logged = false;
+                    group
+                        .into_iter()
+                        .map(|(id, viewport)| (id, Some(viewport)))
+                        .collect()
+                }
+                None => monitors.iter().map(|(id, _)| (id.clone(), None)).collect(),
+            }
+        } else {
+            // D2：组内混有 WebView backend 时降级为逐屏独立渲染，避免两套几何在接缝冲突
+            if self.display_mode == DisplayMode::Extend && ready && !self.degraded_logged {
+                log::warn!(
+                    "[RenderCoordinator] extend 组内存在非原生渲染目标，已降级为逐屏独立显示"
+                );
+                self.report_degraded();
+                self.degraded_logged = true;
+            }
+            monitors.iter().map(|(id, _)| (id.clone(), None)).collect()
+        };
+
+        if let Err(e) = self.renderer.set_group_geometry(viewports) {
+            log::warn!("[RenderCoordinator] 全组几何更新失败: {}", e);
+        }
+    }
+
+    fn report_degraded(&self) {
+        let payload = RendererErrorPayload {
+            monitor_id: None,
+            wallpaper_id: None,
+            code: CODE_EXTEND_DEGRADED.to_string(),
+            message: "跨屏拼接需要整组使用原生渲染，当前已降级为逐屏独立显示".to_string(),
+        };
+        if let Err(e) = self.app_handle.typed_emit(&payload) {
+            log::warn!("[RenderCoordinator] 降级提示发送失败: {}", e);
+        }
     }
 
     /// 组装渲染描述：查壁纸 + config，解析 backend 与 fit_mode
@@ -322,19 +494,13 @@ impl RenderCoordinator {
         }
     }
 
-    /// 按 backend 应用壁纸；跨 backend 切换时先销毁旧目标再建新目标
-    async fn apply_backend(
-        &mut self,
-        monitor_id: &str,
-        wallpaper_id: i32,
-        descriptor: &Descriptor,
-    ) -> Result<()> {
+    /// 只负责 backend 切换（销毁旧目标 / 建新目标），壁纸内容由调用方组级下发。
+    async fn apply_backend(&mut self, monitor_id: &str, descriptor: &Descriptor) -> Result<()> {
         let previous = self.backends.get(monitor_id).copied();
 
         match descriptor.backend {
             RenderBackend::Native => {
                 if previous != Some(RenderBackend::Native) {
-                    // 从 WebView 切到 Native：先销毁 WebView 窗口，再建原生 surface
                     {
                         let mut wm = self.window_manager.lock().await;
                         wm.destroy_window(monitor_id);
@@ -347,16 +513,9 @@ impl RenderCoordinator {
                     })?;
                     self.renderer.ensure_monitor(monitor_id.to_string(), rect)?;
                 }
-                self.renderer.set_wallpaper(
-                    monitor_id.to_string(),
-                    descriptor.file_path.clone(),
-                    descriptor.kind,
-                    descriptor.fit_mode,
-                )?;
             }
             RenderBackend::WebView => {
                 if previous != Some(RenderBackend::WebView) {
-                    // 从 Native 切回 WebView：销毁原生 surface，重建壁纸窗口
                     self.renderer.destroy_monitor(monitor_id.to_string())?;
                     let rect = self.rects.get(monitor_id).copied().ok_or_else(|| {
                         RendererError::new(
@@ -374,13 +533,6 @@ impl RenderCoordinator {
                     )
                     .await
                     .map_err(anyhow::Error::msg)?;
-                    // 新建窗口后需要发一次 wallpaper-changed 让前端加载壁纸
-                    wm.update_window(monitor_id, wallpaper_id)
-                        .map_err(anyhow::Error::msg)?;
-                } else {
-                    let wm = self.window_manager.lock().await;
-                    wm.update_window(monitor_id, wallpaper_id)
-                        .map_err(anyhow::Error::msg)?;
                 }
             }
         }

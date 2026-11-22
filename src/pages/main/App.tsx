@@ -131,8 +131,14 @@ const App: React.FC = () => {
   }, [applyFavoriteChange]);
 
   useEffect(() => {
-    const unlisten = listen(EVENTS.RENDERER_ERROR, ({ monitor_id, message }) => {
-      toast.error(monitor_id ? `${message} (${monitor_id})` : message);
+    const unlisten = listen(EVENTS.RENDERER_ERROR, ({ monitor_id, message, code }) => {
+      const text = monitor_id ? `${message} (${monitor_id})` : message;
+      // extend 组降级是可用的退让而非故障，用 warning 与真正的渲染错误区分
+      if (code === "ExtendDegraded") {
+        toast.warning(text);
+      } else {
+        toast.error(text);
+      }
     });
     return () => {
       unlisten.then((fn) => fn());

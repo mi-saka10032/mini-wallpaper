@@ -11,6 +11,7 @@ use log::{info, warn};
 use super::Scheduler;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::events::VolumeChangedPayload;
+use crate::platform::wallpaper_renderer::DisplayMode;
 use crate::runtime::tasks::carousel::{carousel_key, CarouselTask};
 use crate::runtime::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
 use crate::services::{collection_service, monitor_config_service};
@@ -80,6 +81,14 @@ impl Scheduler {
         let db = self.db();
         let wm = self.window_manager();
 
+        // M5：display_mode 必须同步给渲染协调器，否则 Native 侧切到 extend
+        // 只是 DB 里改了个字符串，视口仍按 independent 逐屏渲染。
+        if let Some(mode) = DisplayMode::parse(display_mode) {
+            let coordinator = self.render_coordinator();
+            let mut guard = coordinator.lock().await;
+            guard.set_display_mode(mode);
+        }
+
         let configs = match monitor_config_service::get_all(&db).await {
             Ok(c) => c,
             Err(e) => {
@@ -95,19 +104,10 @@ impl Scheduler {
 
         match display_mode {
             "independent" => {
-                // 通知所有壁纸窗口切换到 independent
+                // 只通知实际存在的 WebView 壁纸窗口；纯 Native 组没有 label
                 {
                     let mgr = wm.lock().await;
-                    for config in &active_configs {
-                        if let Err(e) =
-                            mgr.notify_display_mode_changed(&config.monitor_id, "independent")
-                        {
-                            warn!(
-                                "[Scheduler] 发送 display-mode-changed 失败 {}: {}",
-                                config.monitor_id, e
-                            );
-                        }
-                    }
+                    mgr.broadcast_display_mode_changed("independent");
                 }
 
                 // 恢复所有满足条件的定时器
@@ -159,19 +159,11 @@ impl Scheduler {
                     }
                 }
 
-                // 步骤 2: 通知所有壁纸窗口切换渲染模式
+                // 步骤 2: 只通知实际存在的 WebView 壁纸窗口切换渲染模式。
+                // Native 侧的视口已由上面的 set_display_mode 重算。
                 {
                     let mgr = wm.lock().await;
-                    for config in &active_configs {
-                        if let Err(e) =
-                            mgr.notify_display_mode_changed(&config.monitor_id, display_mode)
-                        {
-                            warn!(
-                                "[Scheduler] 发送 display-mode-changed 失败 {}: {}",
-                                config.monitor_id, e
-                            );
-                        }
-                    }
+                    mgr.broadcast_display_mode_changed(display_mode);
                 }
 
                 // 步骤 3: 定时器管理 — 仅保留主 monitor 的定时器，停止所有从属定时器

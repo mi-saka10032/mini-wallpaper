@@ -20,7 +20,9 @@ use super::video::{
     shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback, PAUSE_FADE,
     PAUSE_FULLSCREEN,
 };
-use crate::platform::wallpaper_renderer::frame_cache::{cache_key, CacheKey, FrameCache};
+use crate::platform::wallpaper_renderer::frame_cache::{
+    cache_key_with_target, CacheKey, FrameCache,
+};
 use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 
 /// 在途的一次性图片解码：worker 线程完成后，结果经 `decode_tx` 回到渲染线程 attach。
@@ -144,6 +146,10 @@ enum RendererCommand {
         path: PathBuf,
         kind: WallpaperKind,
         fit_mode: FitMode,
+        /// 解码目标尺寸：independent/mirror 为单屏，extend 为整组 union。
+        /// 交给 turbojpeg 做 DCT 缩放，避免高分辨率图全量 IDCT。
+        target_width: u32,
+        target_height: u32,
         /// Native↔Native 且 wid 变化才为 true；跨 backend / 首帧硬切。
         crossfade: bool,
         ack: Option<Ack>,
@@ -218,6 +224,8 @@ impl DesktopRenderer {
         path: PathBuf,
         kind: WallpaperKind,
         fit_mode: FitMode,
+        target_width: u32,
+        target_height: u32,
         crossfade: bool,
     ) -> Result<()> {
         let (ack, rx) = oneshot::channel();
@@ -226,6 +234,8 @@ impl DesktopRenderer {
             path,
             kind,
             fit_mode,
+            target_width,
+            target_height,
             crossfade,
             ack: Some(ack),
         })?;
@@ -382,6 +392,8 @@ fn run(receiver: Receiver<RendererCommand>) {
                     path,
                     kind,
                     fit_mode,
+                    target_width,
+                    target_height,
                     crossfade,
                     ack,
                 } => {
@@ -427,7 +439,8 @@ fn run(receiver: Receiver<RendererCommand>) {
 
                     // 图片：缓存命中直接 attach（复用同一份 Arc 与帧时钟）；
                     // miss 才 spawn 一次性 worker，渲染线程立即继续下一帧，不冻结旧画面。
-                    let key = cache_key(&path);
+                    let target = Some((target_width, target_height));
+                    let key = cache_key_with_target(&path, target);
                     if let Some(frames) = key.as_ref().and_then(|key| frame_cache.get(key)) {
                         attach_media(
                             &mut surfaces,
@@ -464,10 +477,10 @@ fn run(receiver: Receiver<RendererCommand>) {
 
                     let device = shared.device().clone();
                     let worker_path = path.clone();
-                    let worker_kind = kind;
+                    let worker_target = target;
                     let tx = decode_tx.clone();
                     let handle = thread::spawn(move || {
-                        let result = image::decode_and_upload(&device, &worker_path, worker_kind)
+                        let result = image::decode_and_upload(&device, &worker_path, worker_target)
                             .map_err(|err| format!("{:#}", err));
                         let _ = tx.send(DecodeResult { generation, result });
                     });

@@ -46,6 +46,9 @@ urlencoding = "2"
 tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# JPEG 解码期 DCT 缩放（M/8 档位）：高分辨率图按目标尺寸直接解码，避免全量 IDCT。
+# cmake feature 会 vendored 编译 libjpeg-turbo，不依赖系统库；nasm 加速需构建机安装。
+turbojpeg = "1.5.1"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",

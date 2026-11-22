@@ -23,6 +23,7 @@ export const EVENTS = {
   ACTION_TOAST: "action-toast",
   /** 收藏归属变更事件（壁纸被加入/移出内置「我喜欢」收藏夹时发送） */
   FAVORITES_CHANGED: "favorites-changed",
+  RENDERER_ERROR: "renderer-error",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -91,6 +92,13 @@ export interface FavoritesChangedPayload {
   favorited: boolean;
 }
 
+export interface RendererErrorPayload {
+  monitor_id: string | null;
+  wallpaper_id: number | null;
+  code: string;
+  message: string;
+}
+
 /** 事件 → payload 类型映射 */
 export interface EventMap {
   [EVENTS.WALLPAPER_CHANGED]: WallpaperChangedPayload;
@@ -105,6 +113,7 @@ export interface EventMap {
   [EVENTS.MONITOR_CONFIG_REFRESHED]: Record<string, never>;
   [EVENTS.ACTION_TOAST]: ActionToastPayload;
   [EVENTS.FAVORITES_CHANGED]: FavoritesChangedPayload;
+  [EVENTS.RENDERER_ERROR]: RendererErrorPayload;
 }
 
 /**

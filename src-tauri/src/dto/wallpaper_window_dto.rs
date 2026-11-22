@@ -20,8 +20,9 @@ pub struct CreateWallpaperWindowRequest {
     /// 窗口高度
     #[garde(range(min = 1))]
     pub height: u32,
-    /// 额外查询参数
+    /// 额外查询参数（前端兼容保留，渲染路由收口后后端不再消费）
     #[garde(skip)]
+    #[allow(dead_code)]
     pub extra_query: Option<String>,
 }
 

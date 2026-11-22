@@ -9,6 +9,7 @@ use windows_sys::Win32::Foundation::HWND;
 use super::legacy::LegacyStrategy;
 use super::modern::ModernStrategy;
 use super::version::is_win11_24h2_or_later;
+use super::EmbedPolicy;
 
 /// 桌面嵌入策略接口
 ///
@@ -22,7 +23,13 @@ pub(crate) trait EmbedStrategy {
     fn find_workerw(&self, progman: HWND) -> Result<HWND>;
 
     /// 执行嵌入操作（SetParent + 平台特定的样式修复）
-    fn embed(&self, hwnd: HWND, workerw: HWND, rect: MonitorRect) -> Result<()>;
+    fn embed(
+        &self,
+        hwnd: HWND,
+        workerw: HWND,
+        rect: MonitorRect,
+        policy: EmbedPolicy,
+    ) -> Result<()>;
 }
 
 /// 显示器矩形区域（虚拟桌面坐标 + 物理分辨率）

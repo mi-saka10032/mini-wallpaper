@@ -12,19 +12,12 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(target_os = "windows")]
-use crate::platform::windows::desktop_embedder;
+use crate::platform::windows::desktop_embedder::{self, EmbedPolicy};
 
 use crate::events::{
     DisplayModeChangedPayload, EventPayload, FitModeChangedPayload, MonitorConfigRefreshedPayload,
-    ThumbnailChangedPayload, TypedEmit, TypedEmitTo, WallpaperChangedPayload,
-    WallpaperClearedPayload,
+    TypedEmit, TypedEmitTo, WallpaperChangedPayload, WallpaperClearedPayload,
 };
-
-/// 批量壁纸窗口通知指令，供调用方在锁外收集、短锁内一次性派发
-pub enum WmNotification {
-    Updated(String, i32, bool),
-    Cleared(String, bool),
-}
 
 /// 建窗结果，供调用方在锁外完成嵌入、再回锁显示窗口
 pub struct CreatedWindow {
@@ -146,6 +139,46 @@ impl WallpaperWindowManager {
         }
     }
 
+    /// 完整建窗流程：建窗 → 锁外嵌入桌面 → 显示。
+    ///
+    /// 供 RenderCoordinator 在 WebView backend 与跨 backend 切换时复用，
+    /// 避免调用方重复编排三段式流程。
+    pub async fn create_and_show(
+        &mut self,
+        monitor_id: &str,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        let created = self
+            .create_window(monitor_id, x, y, width, height, None)?
+            .ok_or_else(|| format!("壁纸窗口 {} 已存在，跳过创建", monitor_id))?;
+
+        #[cfg(target_os = "windows")]
+        if let Some(target) = created.embed_target {
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                desktop_embedder::embed_in_desktop(
+                    target.hwnd,
+                    target.x,
+                    target.y,
+                    target.width,
+                    target.height,
+                    EmbedPolicy::WebView,
+                )
+            })
+            .await;
+            match result {
+                Ok(Err(e)) => log::error!("桌面嵌入失败: {:#}", e),
+                Err(e) => log::error!("桌面嵌入任务异常: {}", e),
+                Ok(Ok(())) => {}
+            }
+        }
+
+        self.show_window(&created.label);
+        Ok(())
+    }
+
     /// 销毁指定显示器的壁纸窗口
     pub fn destroy_window(&mut self, monitor_id: &str) {
         if let Some(label) = self.windows.remove(monitor_id) {
@@ -159,14 +192,6 @@ impl WallpaperWindowManager {
                 let _ = window.close();
             }
             info!("壁纸窗口已销毁: monitor='{}'", monitor_id);
-        }
-    }
-
-    /// 销毁所有壁纸窗口
-    pub fn destroy_all(&mut self) {
-        let monitor_ids: Vec<String> = self.windows.keys().cloned().collect();
-        for monitor_id in monitor_ids {
-            self.destroy_window(&monitor_id);
         }
     }
 
@@ -247,91 +272,6 @@ impl WallpaperWindowManager {
         );
 
         Ok(())
-    }
-
-    /// 更新壁纸并同步通知主窗口缩略图
-    ///
-    /// 合并了两个绑定的操作：
-    /// 1. 向壁纸窗口发送 wallpaper-changed 事件
-    /// 2. 向主窗口发送 thumbnail-changed 事件
-    ///
-    /// 避免调用方遗漏其中一个 emit，确保壁纸窗口与主窗口缩略图始终同步。
-    pub fn update_wallpaper(&self, monitor_id: &str, wallpaper_id: i32) -> Result<(), String> {
-        // 1. 通知壁纸窗口
-        self.update_window(monitor_id, wallpaper_id)?;
-
-        // 2. 通知主窗口更新缩略图
-        let thumbnail_payload = ThumbnailChangedPayload {
-            monitor_id: monitor_id.to_string(),
-            wallpaper_id,
-        };
-        if let Err(e) = self.app_handle.typed_emit(&thumbnail_payload) {
-            log::warn!(
-                "[WallpaperWindowManager] 发送 thumbnail-changed 失败: monitor='{}', err={}",
-                monitor_id,
-                e
-            );
-        }
-
-        Ok(())
-    }
-
-    /// display_mode 感知的壁纸更新通知
-    ///
-    /// 根据 is_sync_mode 决定广播或单播：
-    /// - 同步模式（mirror/extend）：通知所有壁纸窗口 + 主窗口缩略图
-    /// - 独立模式（independent）：仅通知指定 monitor 的壁纸窗口 + 主窗口缩略图
-    ///
-    /// 封装了 display_mode 判断逻辑，command 层无需感知同步策略。
-    pub fn notify_wallpaper_update(&self, monitor_id: &str, wallpaper_id: i32, is_sync_mode: bool) {
-        if is_sync_mode {
-            for mid in self.windows.keys() {
-                if let Err(e) = self.update_wallpaper(mid, wallpaper_id) {
-                    log::warn!(
-                        "[WallpaperWindowManager] 同步模式壁纸更新失败 {}: {}",
-                        mid,
-                        e
-                    );
-                }
-            }
-        } else {
-            if let Err(e) = self.update_wallpaper(monitor_id, wallpaper_id) {
-                log::warn!(
-                    "[WallpaperWindowManager] 壁纸更新失败 {}: {}",
-                    monitor_id,
-                    e
-                );
-            }
-        }
-    }
-
-    /// display_mode 感知的 fitMode 变更通知
-    ///
-    /// 根据 is_sync_mode 决定广播或单播：
-    /// - 同步模式（mirror/extend）：通知所有壁纸窗口
-    /// - 独立模式（independent）：仅通知指定 monitor 的壁纸窗口
-    ///
-    /// 封装了 display_mode 判断逻辑，command 层无需感知同步策略。
-    pub fn notify_fit_mode_update(&self, monitor_id: &str, fit_mode: &str, is_sync_mode: bool) {
-        if is_sync_mode {
-            for mid in self.windows.keys() {
-                if let Err(e) = self.notify_fit_mode_changed(mid, fit_mode) {
-                    log::warn!(
-                        "[WallpaperWindowManager] 同步模式 fit-mode 更新失败 {}: {}",
-                        mid,
-                        e
-                    );
-                }
-            }
-        } else {
-            if let Err(e) = self.notify_fit_mode_changed(monitor_id, fit_mode) {
-                log::warn!(
-                    "[WallpaperWindowManager] fit-mode 更新失败 {}: {}",
-                    monitor_id,
-                    e
-                );
-            }
-        }
     }
 
     /// 通知指定显示器的壁纸窗口 fitMode 变更
@@ -448,20 +388,6 @@ impl WallpaperWindowManager {
                 "[WallpaperWindowManager] 发送 monitor-config-refreshed 失败: {}",
                 e
             );
-        }
-    }
-
-    /// 批量派发已收集的通知指令，锁的持有范围由调用方收窄
-    pub fn dispatch_notifications(&self, notifications: Vec<WmNotification>) {
-        for n in notifications {
-            match n {
-                WmNotification::Updated(mid, wid, is_sync) => {
-                    self.notify_wallpaper_update(&mid, wid, is_sync);
-                }
-                WmNotification::Cleared(mid, is_sync) => {
-                    self.notify_wallpaper_cleared(&mid, is_sync);
-                }
-            }
         }
     }
 }

@@ -44,7 +44,7 @@ impl TaskSpawner for CarouselTask {
             let ctx = app.state::<AppContext>();
             let app_ctx: &AppContext = ctx.inner();
             let db = app_ctx.db.clone();
-            let window_manager = app_ctx.window_manager.clone();
+            let render_coordinator = app_ctx.render_coordinator.clone();
 
             // 查询 config 获取轮播参数
             let config = match monitor_config_service::get_by_monitor_id(&db, &mid).await {
@@ -149,10 +149,10 @@ impl TaskSpawner for CarouselTask {
                             }
                         }
 
-                        // 3. 通知壁纸窗口 + 主窗口缩略图（display_mode 感知逻辑已内聚在 WallpaperWindowManager）
+                        // 3. 按 backend 路由通知（Native 渲染 / WebView 事件），同步策略内聚在协调器
                         {
-                            let wm_guard = window_manager.lock().await;
-                            wm_guard.notify_wallpaper_update(&mid, new_wid, is_sync);
+                            let mut coordinator = render_coordinator.lock().await;
+                            coordinator.update_wallpaper(&mid, new_wid, is_sync).await;
                         }
                     }
                     Ok(None) => {

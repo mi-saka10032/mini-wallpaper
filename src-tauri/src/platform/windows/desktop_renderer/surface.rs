@@ -843,20 +843,36 @@ impl Drop for RenderSurface {
     }
 }
 
+/// 从两类错误中提取 HRESULT：bind_current_backbuffer 经 anyhow 包装（可能多层 Context），
+/// Present 直接返回 windows 原生错误。统一成一个 trait，让 is_device_lost 泛型处理两者。
+trait DeviceLostHResult {
+    fn lost_hresult(&self) -> Option<windows::core::HRESULT>;
+}
+
+impl DeviceLostHResult for anyhow::Error {
+    fn lost_hresult(&self) -> Option<windows::core::HRESULT> {
+        // 沿 anyhow 错误链找 windows::core::Error，避免依赖具体被哪层 Context 包装。
+        self.chain().find_map(|cause| {
+            cause
+                .downcast_ref::<windows::core::Error>()
+                .map(|err| err.code())
+        })
+    }
+}
+
+impl DeviceLostHResult for windows::core::Error {
+    fn lost_hresult(&self) -> Option<windows::core::HRESULT> {
+        Some(self.code())
+    }
+}
+
 /// 判断 D3D11 / DXGI 错误是否属于设备丢失。设备丢失时整块 device 上的所有资源
 /// 同时失效，必须整组清理 surface 与 SharedDevice，不能只重试单屏。
-fn is_device_lost(err: &anyhow::Error) -> bool {
-    // windows crate 的错误链末端是 windows::core::Error，其 code() 是 HRESULT。
-    // 用 chain 逐层找，避免依赖具体错误被哪一层 Context 包装。
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<windows::core::Error>()
-            .is_some_and(|hresult| {
-                let code = hresult.code();
-                code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED
-                    || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_RESET
-                    || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DRIVER_INTERNAL_ERROR
-            })
+fn is_device_lost<E: DeviceLostHResult>(err: &E) -> bool {
+    err.lost_hresult().is_some_and(|code| {
+        code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED
+            || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_RESET
+            || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DRIVER_INTERNAL_ERROR
     })
 }
 

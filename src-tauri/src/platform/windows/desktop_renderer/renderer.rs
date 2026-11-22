@@ -14,7 +14,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::surface::{RenderSurface, SharedDevice, SharedFrames, WallpaperMedia};
-use super::video::{shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback};
+use super::video::{
+    shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback, PAUSE_FADE,
+    PAUSE_FULLSCREEN,
+};
 use crate::platform::wallpaper_renderer::frame_cache::{cache_key, FrameCache};
 use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 
@@ -386,7 +389,7 @@ fn run(receiver: Receiver<RendererCommand>) {
                                 continue;
                             }
                             if let Ok(mut guard) = playback.lock() {
-                                guard.set_paused(next, now);
+                                guard.set_pause_reason(PAUSE_FULLSCREEN, next, now);
                             }
                         }
                     }
@@ -415,6 +418,7 @@ fn run(receiver: Receiver<RendererCommand>) {
 
         // 音频播放资格与视频绘制解耦：全屏暂停 / fade 冻结 / pending 队列统一在这里裁决。
         // 必须在绘制前调用，避免 to 视频在 fade 结束前提前出声，或恢复全屏时 pending 漏音。
+        sync_video_pause(&surfaces, Instant::now());
         sync_audio_state(&surfaces, paused);
 
         // 全屏暂停时跳过绘制，但保留 surface 与壁纸内容，恢复后无需重新解码
@@ -446,6 +450,10 @@ fn run(receiver: Receiver<RendererCommand>) {
                     }
                 }
             }
+            // fade 已在上面结束；立即同步一次，让新 wallpaper 恢复播放。
+            // 若 finish_transition 又启动了 pending 下一段，仍会保持 PAUSE_FADE。
+            sync_video_pause(&surfaces, now);
+            sync_audio_state(&surfaces, paused);
         }
 
         thread::sleep(Duration::from_millis(16));
@@ -501,6 +509,32 @@ fn begin_video_frames(surfaces: &HashMap<String, RenderSurface>) {
             }
             if let Ok(mut guard) = playback.lock() {
                 guard.begin_frame();
+            }
+        }
+    }
+}
+
+/// fade / pending 期间暂停所有进程的视频源；fade 结束后恢复仍在正常显示的状态。
+/// 与全屏暂停按 pause reason 合并，避免一方解除时误恢复另一方。
+fn sync_video_pause(surfaces: &HashMap<String, RenderSurface>, now: Instant) {
+    let mut fade_frozen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    for surface in surfaces.values() {
+        if surface.fade_active_or_pending() {
+            for playback in surface.video_arcs() {
+                fade_frozen.insert(Arc::as_ptr(playback));
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    for surface in surfaces.values() {
+        for playback in surface.video_arcs() {
+            let ptr = Arc::as_ptr(playback);
+            if !seen.insert(ptr) {
+                continue;
+            }
+            if let Ok(mut guard) = playback.lock() {
+                guard.set_pause_reason(PAUSE_FADE, fade_frozen.contains(&ptr), now);
             }
         }
     }

@@ -205,11 +205,10 @@ fn audio_loop(
     configure_audio_format(&reader, &wasapi.format, wasapi.ieee_float)
         .context("音频 PCM 格式协商失败")?;
     log::info!("[Audio] 音频 PCM 格式协商完成");
-    unsafe { wasapi.client.Start()? };
-    log::info!("[Audio] 音频输出已启动 file={}", path.display());
-
+    // 控制面 AudioPlayback.paused 初始为 true；audio 线程必须也以 paused 启动，
+    // 否则新视频在 open() 后就已经出声，而后续 set_audio_paused(true) 因状态相同不会发 Pause。
     let mut ring: VecDeque<u8> = VecDeque::new();
-    let mut paused = false;
+    let mut paused = true;
     let mut pause_position = Duration::ZERO;
 
     loop {

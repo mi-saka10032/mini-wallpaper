@@ -358,7 +358,7 @@ Windows 实机确认：**图片 extend 与 mirror 均可正常渲染**。这一�
 
 **因此 shader 侧 UV 裁剪备选方案不需要实施**，`QUAD` / `ps_main` / 顶点缓冲维持 M4 原样。方案 A（共享 device + 共享帧时钟）在静态图路径上已被实机确认可行。
 
-尚未实测：GIF / 动态 WebP 的接缝同帧（共享帧时钟的实际效果）、不重启切换模式、热插拔后 union 重算、显存只占一份、WebView fallback 回归、D2 降级 toast。见第九节。
+上列各项 + GIF / 动态 WebP 接缝同帧（共享帧时钟实际效果）、不重启切换模式、热插拔后 union 重算、显存只占一份、WebView fallback 回归、D2 降级 toast，均已实机验收通过（用户确认，2026-11-22），见第九节收尾结论。
 
 ### 3.12 切换延迟：解码缓存与 dev 构建优化（2026-11-20）
 
@@ -547,7 +547,7 @@ shader 因此改成输出预乘色（`color.rgb *= fade_alpha; color.a = fade_al
 - `render_coordinator.rs` / `ctx/mod.rs` / `setting_effects.rs`：音量持久化同步与双 backend 路由。
 - `Cargo.toml`：新增 `Win32_Media_Audio` feature；未引入新的第三方媒体运行时。
 
-**验证**：`cargo fmt --all -- --check`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning、`pnpm exec tsc --noEmit`、`pnpm exec oxlint src` 0 warning / 0 error。实机项按统一策略留到最终验收。
+**验证**：`cargo fmt --all -- --check`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning、`pnpm exec tsc --noEmit`、`pnpm exec oxlint src` 0 warning / 0 error。实机项（音量即时生效、Independent 多屏叠加 / Mirror-Extend 单份、无音轨静音、全屏暂停音频同步停止）已于 2026-11-22 实机验收通过（用户确认）。
 
 ### 3.18 M9 前置：图片 / 视频链路计时埋点
 
@@ -564,7 +564,7 @@ M9 不先假设「异步解码」「DCT 缩放」「DYNAMIC 纹理」哪个是�
 
 当前静态图上传不是 `D3D11_USAGE_STAGING + Map/Unmap`，也不是逐行 `UpdateSubresource`；它是 `D3D11_USAGE_DEFAULT + CreateTexture2D(initial data)`。逐行 `UpdateSubresource` 只存在于视频链路。因此 M9 必须先通过计时确认阻塞究竟在解码、CPU 格式转换、纹理创建/上传，还是视频逐帧上传，再决定优化方案。
 
-**验证**：`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。实机计时按统一策略留到最终验收。
+**验证**：`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。实机计时数据已随最终验收一并收集；该阶段是诊断埋点，不作为独立 pass/fail 验收项。
 
 ### 3.19 DXVA 硬解稳定链路与全局 VideoWorker
 
@@ -894,11 +894,11 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **WebView / Native 坐标系差异** | 物理像素（Native）vs 逻辑像素（WebView CSS，除以 `scaleFactor()`）；`WebviewWindowBuilder` 直接接收物理值存在既有 DPI 偏差 | Q2 决定 M5 只保证 Native 内部统一，WebView 侧 DPI 另立条目；D2 保证同一组不会混用两套坐标 |
 | **混合 backend 时 extend 降级** | D2：组内出现非 Native backend 时整组退回逐屏独立渲染 | 若未来要求混合组也拼接，需先统一两套几何与帧时钟；17:27 决策明确不重写 WebView 侧行为 |
 | **selection 仍固定在启动阶段** | M8 已让 `apply_backend` 按每次壁纸的 capability 跨 backend 切换；但 `selection` 本身在 `RenderCoordinator::new` 时固定 | 用户确认方案 A：不新增设置项，不做运行时切 NativeOnly/Auto |
-| **WebView fallback 可播性依赖 Chromium** | Auto 下 MF 容器表外的格式回退到 `wallpaper.html`；WebM（VP8/VP9）通常可用，MKV 支持有限 | 回退成功 ≠ 一定能播；仍只是 capability fallback，不是解码失败兜底，列最终实机验收 |
+| **WebView fallback 可播性依赖 Chromium** | Auto 下 MF 容器表外的格式回退到 `wallpaper.html`；WebM（VP8/VP9）通常可用，MKV 支持有限 | 回退成功 ≠ 一定能播；仍只是 capability fallback，不是解码失败兜底。Auto fallback 已实机验收通过（用户确认，2026-11-22）：WebView 可正常播放、可与 Native 双向切换且资源正常释放 |
 | **音频只做低频校准** | 音频线程在 EOF 自行 seek 0，renderer 每 5s 校准漂移，阈值 100ms | 不引入统一 Presentation Clock；用户确认低频校准即可，见 3.17 |
 | **无 HTML 网页壁纸** | 产品边界决策 | 见 1.3 |
 | **DWM 圆角 ~1px** | 继承自 `desktop_embedder`，选择接受 | 见关联文档 |
-| **动画帧同步仅在代码层保证** | `Arc<SharedFrames>` 让组内共用一个 `started_at`，但 GIF / 动态 WebP 的接缝同帧尚未实机确认 | 静态图 extend / mirror 已实测通过（3.11）；动画路径待补验 |
+| **动画帧同步** | `Arc<SharedFrames>` 让组内共用一个 `started_at`，保证 GIF / 动态 WebP 接缝同帧 | 静态图 extend / mirror（3.11）、GIF / 动态 WebP 接缝同帧均已实机验收通过（用户确认，2026-11-22） |
 | **旧版本 Windows 未实测** | DirectComposition 链路只在 24H2 / 25H2 实机验证 | legacy 嵌入路径沿用社区成熟方案，未实测 |
 | **单次解码仍未削减** | A+B 只消除**重复**解码；release 下 4K JPEG 的 ~75ms `image::open`、8K 的成倍成本依然存在 | 唯一能真正削减它的路是按目标分辨率降采样解码（WIC / 换解码器），见第九节；当前 `upload_frames` 仍按原始尺寸建纹理 |
 | **超大素材不进缓存** | 单份 >192MiB（8K / 多帧 GIF）直接不入缓存，避免显存爆炸 | mirror/extend 下这类素材仍会重复解码；可用「连续同 key 命令合并」补，无需常驻缓存 |
@@ -1093,9 +1093,9 @@ HEAD    docs: finalize native renderer architecture and validation
 
 M7 阶段回归：`cargo fmt --all --check`、`cargo test --lib` **51 passed**（`crossfade_progress` 边界单测）、`tsc --noEmit`、`oxlint`（118 文件）0 warning / 0 error。probe 同步 blend state / cbuffer / transition 队列后跑 Windows target `cargo check`，0 error / 0 warning；期间抓到一个类型陷阱：`D3D11_COLOR_WRITE_ENABLE_ALL` 是 windows crate 的 newtype，不能直接 `as u8`，必须 `.0 as u8`。
 
-M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报错」单测合并为一个 `unsupported_video_falls_back_only_in_auto`（webm / mkv / flv × Auto / NativeOnly），数量净 -1 但覆盖面扩大。改动只在跨平台 `selection.rs` 与注释，Windows 渲染器代码未动，probe 无需同步。按用户 14:05 的决策，**M6 起实机验证统一后置最终验收**，本阶段不再逐项确认。
+M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报错」单测合并为一个 `unsupported_video_falls_back_only_in_auto`（webm / mkv / flv × Auto / NativeOnly），数量净 -1 但覆盖面扩大。改动只在跨平台 `selection.rs` 与注释，Windows 渲染器代码未动，probe 无需同步。当时按 14:05 的决策将 M6 起实机验证统一后置；相关实机项已于 2026-11-22 全部验收通过（用户确认，见第九节收尾结论）。
 
-控制链路收尾回归：`cargo fmt --all`、`cargo test --lib` 50 passed、probe Windows target check 0 error / 0 warning。改动只在 `setting_effects.rs`（Scheduler 层），Windows 渲染器与前端均未动。副屏跟随与切回独立后的 fitMode 属于实机行为，按统一验收策略记入待办，不在本地确认。
+控制链路收尾回归：`cargo fmt --all`、`cargo test --lib` 50 passed、probe Windows target check 0 error / 0 warning。改动只在 `setting_effects.rs`（Scheduler 层），Windows 渲染器与前端均未动。副屏跟随（含 350ms crossfade 延迟）与切回 Independent 后从屏 fitMode 已实机验收通过（用户确认，2026-11-22）。
 
 ### 8.5 历史收束
 
@@ -1107,11 +1107,11 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 
 **M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。**图片 extend / mirror 已 Windows 实机验证通过（3.11）**，负 viewport 与共享 SRV 两个核心风险已关闭。
 
-**M7 已完成**（见 3.14）：Native↔Native 换图 350ms crossfade，两 pass 预乘 alpha blend，四种媒体组合全覆盖；视频在 fade 期间冻结，to 为视频时 fade 结束才从 0 计时；连续切换走 FIFO 队列，跨 backend / 首帧硬切。画面效果与 M6 视频一并留到 Windows 最终统一验收，**本阶段只完成编译、单测与交叉检查**。
+**M7 已完成**（见 3.14）：Native↔Native 换图 350ms crossfade，两 pass 预乘 alpha blend，四种媒体组合全覆盖；视频在 fade 期间冻结，to 为视频时 fade 结束才从 0 计时；连续切换走 FIFO 队列，跨 backend / 首帧硬切。画面效果（四种组合、extend 接缝明暗一致、连续切换每段跑满 350ms）已实机验收通过（用户确认，2026-11-22）。
 
-**M8 已完成**（见 3.15）：范围按现状收窄为「Auto 模式 capability fallback 接线」——原清单三条中两条早已满足，不新增设置项、不删 WebView 资产。按壁纸格式自动切 backend 的能力由此真正生效；`selection` 仍在启动阶段固定。按用户要求，M6 起所有实机验证统一后置最终验收，不再逐项确认。
+**M8 已完成**（见 3.15）：范围按现状收窄为「Auto 模式 capability fallback 接线」——原清单三条中两条早已满足，不新增设置项、不删 WebView 资产。按壁纸格式自动切 backend 的能力由此真正生效；`selection` 仍在启动阶段固定。Auto fallback（表外格式回退可播、双向切换、资源释放、混合 backend D2 提示）已实机验收通过（用户确认，2026-11-22）。
 
-**视频音频方案 A2 已完成**（见 3.17）：明确放弃 MediaPlayer frame server、MediaPlayer audio-only 与 MediaSession 三类高封装方案；视频和音频都走 `IMFSourceReader`，音频 PCM 经 WASAPI shared-mode 输出。共享模型按 display mode 对齐：Independent 每屏一份视频 + 音频，Mirror / Extend 全组各一份。音量、全屏暂停、crossfade 冻结 / reset、低频校准均已接线；无音轨静默降级。编译、单测、Windows probe 交叉检查与前端静态检查全绿，实机项统一留到最终验收。
+**视频音频方案 A2 已完成**（见 3.17）：明确放弃 MediaPlayer frame server、MediaPlayer audio-only 与 MediaSession 三类高封装方案；视频和音频都走 `IMFSourceReader`，音频 PCM 经 WASAPI shared-mode 输出。共享模型按 display mode 对齐：Independent 每屏一份视频 + 音频，Mirror / Extend 全组各一份。音量、全屏暂停、crossfade 冻结 / reset、低频校准均已接线；无音轨静默降级。编译、单测、Windows probe 交叉检查与前端静态检查全绿，音频实机项（第七节 P0 音频清单）已于 2026-11-22 全部验收通过（用户确认）。
 
 **性能收束已完成**（当前对应 `c0cc441`，见 3.12）：dev profile 优化把 O0 的 15~85 倍退化拉回正常量级，`FrameCache` 消除重复解码与纹理上传。注意它**没有削减单次解码**，release 下高分辨率大图的 `image::open` 成本仍在，因此下表新增两条 P1。剩余项：
 

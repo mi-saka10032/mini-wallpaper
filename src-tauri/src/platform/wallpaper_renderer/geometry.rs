@@ -14,7 +14,8 @@
 
 use super::contracts::{ExtendViewport, MonitorRect};
 
-/// 所有显示器矩形的并集；空集合返回 `None`。
+/// 所有显示器矩形的并集；空集合返回 `None`，让调用方跳过整组裁剪。
+/// 用 `saturating_*` 而非普通加减，是为了在极端坐标下钳制到 i32 边界而非溢出回绕。
 pub fn union_rect(rects: &[MonitorRect]) -> Option<MonitorRect> {
     let first = *rects.first()?;
     let mut min_x = first.x;
@@ -38,6 +39,8 @@ pub fn union_rect(rects: &[MonitorRect]) -> Option<MonitorRect> {
 }
 
 /// 单个显示器在 extend 组内的裁剪参数。
+/// `offset_x/y` 相对 **union 左上角** 而非主屏，这样负坐标布局下也非负；
+/// 整组共享同一个 `union`（即同一张拉伸后的全图），各屏裁出自己那一块。
 pub fn extend_viewport(rect: MonitorRect, union: MonitorRect) -> ExtendViewport {
     ExtendViewport {
         offset_x: rect.x - union.x,
@@ -53,6 +56,7 @@ pub fn extend_viewport(rect: MonitorRect, union: MonitorRect) -> ExtendViewport 
 pub fn group_viewports(
     monitors: &[(String, MonitorRect)],
 ) -> Option<Vec<(String, ExtendViewport)>> {
+    // 整组只算一次 union，保证每屏的裁剪参数都相对同一张全图。
     let union = union_rect(&monitors.iter().map(|(_, r)| *r).collect::<Vec<_>>())?;
     Some(
         monitors

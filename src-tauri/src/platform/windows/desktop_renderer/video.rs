@@ -63,6 +63,7 @@ pub fn startup() -> Result<()> {
 
 /// 暂停原因按位合并：全屏暂停与 fade 暂停互不覆盖。
 pub const PAUSE_FULLSCREEN: u8 = 1;
+/// fade（交叉淡入淡出）期间暂停，可与全屏暂停同时存在。
 pub const PAUSE_FADE: u8 = 2;
 
 /// 只在 renderer 退出、所有 SourceReader / worker 都已经释放后调用一次。
@@ -113,7 +114,10 @@ impl VideoFrameSnapshot {
 /// renderer 侧持有的视频帧资源：shared texture 只用于同步复制，实际绘制读本地 NV12。
 struct VideoFrameSource {
     shared_texture: ID3D11Texture2D,
+    // worker 与 renderer 用 keyed mutex 交替访问 shared texture：worker 持 key0 写入后置 key1，
+    // renderer 持 key1 复制后置 key0（见 process_sample / begin_frame）。
     keyed_mutex: IDXGIKeyedMutex,
+    // renderer 私有 NV12 副本，才是真正被采样绘制的纹理；shared texture 只作传输通道。
     local_texture: ID3D11Texture2D,
     local_y_view: ID3D11ShaderResourceView,
     local_uv_view: ID3D11ShaderResourceView,
@@ -121,47 +125,61 @@ struct VideoFrameSource {
     height: u32,
 }
 
+/// worker 写、renderer 克隆读的跨线程快照。用 Mutex 只为安全传递，帧同步不靠它，
+/// 真正的 mutex 在共享纹理的 keyed mutex 上（renderer 不持任何 worker 设备）。
 #[derive(Clone, Default)]
 struct SharedState {
+    /// 当前帧在循环内的时间点，供 renderer 校准音频时钟。
     frame_time: Duration,
+    /// 当前帧的真实媒体时长，决定该帧展示多久（pacing 用真实时长而非固定值）。
     frame_duration: Duration,
+    /// 整段视频的循环时长；首圈会被最大帧结束时间修正，避免下圈全速追赶。
     loop_duration: Duration,
+    /// 每次 reset 自增，renderer 可据此识别时间线已被重置。
     generation: u64,
+    /// 首帧 Blt 成功才置 true；renderer 在此前不采样，避免全 0 NV12 解成绿屏。
     ready: bool,
 }
 
+/// worker 打开 session 后回传给 renderer 的共享纹理句柄与尺寸。
+/// renderer 用 handle 在自己的设备上 OpenSharedResource 拿到 shared texture。
 #[derive(Clone)]
 struct SharedFrameInfo {
+    /// GetSharedHandle 得到的 NT 句柄值，仅用于在 renderer 设备打开共享纹理。
     handle: isize,
     width: u32,
     height: u32,
 }
 
+/// renderer → 全局 worker 的控制命令。所有命令都在 worker 线程串行消费，
+/// 避免多线程同时操作同一 D3D11 device / SourceReader。
 enum WorkerCommand {
+    /// 新建 session；ack 回传共享纹理信息，打开侧会等首帧 ready 后才返回给 renderer。
     OpenSession {
         id: u64,
         path: PathBuf,
         state: Arc<Mutex<SharedState>>,
         ack: Sender<Result<SharedFrameInfo>>,
     },
-    CloseSession {
-        id: u64,
-    },
-    Pause {
-        id: u64,
-        paused: bool,
-        now: Instant,
-    },
+    /// 关闭并移除 session，由 VideoPlayback::drop 发出。
+    CloseSession { id: u64 },
+    /// 更新 worker 侧暂停时钟；renderer 先按原因合并，再发这一开/关命令。
+    Pause { id: u64, paused: bool, now: Instant },
+    /// 重置解码与时间线（seek 到 0、generation+1）；ack 确认 worker 已完成。
     Reset {
         id: u64,
         now: Instant,
         ack: Sender<Result<()>>,
     },
+    /// worker 退出：清空所有 session 后结束主循环。
     Shutdown,
 }
 
+/// VideoWorkerHost 的内部状态：命令发送端、session id 分配器、worker 线程句柄。
+/// Drop 时先发 Shutdown 再 join，保证 SourceReader / 设备按序释放。
 struct VideoWorkerInner {
     commands: Mutex<Sender<WorkerCommand>>,
+    /// 自增分配 session id，避免 id 复用导致旧命令误伤新 session。
     next_id: AtomicU64,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -239,15 +257,21 @@ impl VideoWorkerHost {
 /// renderer 侧的轻量视频播放 handle；不再独占 worker / D3D11 device。
 pub struct VideoPlayback {
     worker: VideoWorkerHost,
+    /// 本视频对应的 worker session id；所有控制命令都带上它来定位 session。
     session_id: u64,
+    /// worker 写入、renderer 克隆读的共享快照；不靠它做帧同步（同步在 keyed mutex）。
     state: Arc<Mutex<SharedState>>,
     context: ID3D11DeviceContext,
     frame: Option<VideoFrameSource>,
+    /// 是否已有至少一帧从 shared texture 成功拷到本地纹理；未 ready 时不提供 snapshot。
     frame_ready: bool,
     audio: Option<AudioPlayback>,
     started_at: Instant,
+    /// 暂停累计时长；计算墙钟 target 时扣除，暂停期间不追赶解码。
     paused_total: Duration,
+    /// 暂停起点；Some 表示当前处于暂停累计状态，None 表示正在播放。
     paused_at: Option<Instant>,
+    /// 按位记录的暂停原因（PAUSE_FULLSCREEN / PAUSE_FADE），全部清除才真正恢复 worker。
     pause_reasons: u8,
     frame_time: Duration,
     frame_duration: Duration,
@@ -256,6 +280,8 @@ pub struct VideoPlayback {
 }
 
 impl VideoPlayback {
+    /// 打开一路视频：向 worker 申请 session，等首帧 ready 后建立本地纹理与旁挂音频。
+    /// 任一步失败都会回收已创建的 session；无音轨只降级为静音，不影响视频播放。
     pub fn open(
         renderer_device: &ID3D11Device,
         renderer_context: &ID3D11DeviceContext,
@@ -322,6 +348,8 @@ impl VideoPlayback {
         &self.identity
     }
 
+    /// 每帧同步 worker 的 frame_time / frame_duration，并按视频时钟低频校准音频。
+    /// 暂停时直接跳过，避免音频 seek 与暂停状态竞争。
     pub fn advance(&mut self, now: Instant) -> Result<()> {
         if self.paused_at.is_some() {
             return Ok(());
@@ -337,6 +365,8 @@ impl VideoPlayback {
         Ok(())
     }
 
+    /// crossfade 结束后重置 worker 时间线与音频。注意 worker 的 reset 不清暂停原因，
+    /// 若仍有 pause reason，这里立即补发 Pause，保持画面继续冻结（见下方 paused_at 处理）。
     pub fn reset_clock(&mut self, now: Instant) -> Result<()> {
         let (ack_tx, ack_rx) = mpsc::channel();
         self.worker.send(WorkerCommand::Reset {
@@ -397,12 +427,14 @@ impl VideoPlayback {
         }
     }
 
+    /// 音频暂停与视频暂停分开控制（例如某些场景只静音音频，画面继续播放）。
     pub fn set_audio_paused(&mut self, paused: bool) {
         if let Some(audio) = self.audio.as_mut() {
             audio.set_paused(paused);
         }
     }
 
+    /// 音量 0..100，由音频线程应用到 WASAPI。
     pub fn set_audio_volume(&mut self, volume: u32) {
         if let Some(audio) = self.audio.as_mut() {
             audio.set_volume(volume);
@@ -432,10 +464,12 @@ impl VideoPlayback {
         self.frame_ready = true;
     }
 
+    /// 是否已有至少一帧从共享纹理成功拷到本地纹理，可供绘制。
     pub fn is_frame_ready(&self) -> bool {
         self.frame_ready
     }
 
+    /// 返回本地 NV12 的 Y/UV 两个 SRV 供 renderer 采样；尚未 ready 时返回 None。
     pub fn frame_snapshot(&self) -> Option<VideoFrameSnapshot> {
         if !self.frame_ready {
             return None;
@@ -450,6 +484,7 @@ impl VideoPlayback {
     }
 }
 
+/// 销毁播放 handle 时只通知 worker 关闭对应 session；真正的设备 / 纹理释放由 worker 侧完成。
 impl Drop for VideoPlayback {
     fn drop(&mut self) {
         log::info!(
@@ -463,6 +498,8 @@ impl Drop for VideoPlayback {
     }
 }
 
+/// 在 renderer 设备上打开 worker 的共享纹理，并创建私有 NV12 副本及双平面 SRV。
+/// 共享纹理不参与绘制，只作为跨线程搬运帧的通道；绘制始终读本地副本。
 fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<VideoFrameSource> {
     let mut shared_texture: Option<ID3D11Texture2D> = None;
     let handle = HANDLE(info.handle as *mut c_void);
@@ -529,17 +566,23 @@ fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<Vi
     })
 }
 
+/// worker 独占的 D3D11 设备与 MF device manager。每个 VideoSession 各持一个实例，
+/// 不与 renderer 共享 device/context，避免 DXVA sample 与绘制争抢同一设备。
 struct WorkerGpu {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     video_device: ID3D11VideoDevice,
+    /// 由 device manager 取出的视频上下文，用于 VideoProcessorBlt；取不到时回退到 worker context。
     video_context: ID3D11VideoContext,
+    /// MF SourceReader 凭它拿到解码设备；worker 退出时必须 CloseDeviceHandle。
     manager: IMFDXGIDeviceManager,
     manager_handle: HANDLE,
     /// VP Blt 的目标 staging texture 按分辨率复用，避免每个 session 各持一份 NV12。
     staging_output: std::sync::Mutex<HashMap<(u32, u32), ID3D11Texture2D>>,
 }
 
+/// 关闭 device manager 的 device handle。调用方需保证 SourceReader / view / texture 先释放
+/// （VideoSession 把 gpu 字段放在最后 drop），否则会先于引用它的解码资源销毁。
 impl Drop for WorkerGpu {
     fn drop(&mut self) {
         unsafe {
@@ -549,6 +592,9 @@ impl Drop for WorkerGpu {
 }
 
 impl WorkerGpu {
+    /// 在与 renderer 相同的 adapter 上创建独立 D3D11 device，并注册到 MF device manager，
+    /// 供 SourceReader 走 DXVA 硬解。debug layer 默认关闭：长运行下它会缓存已释放对象、
+    /// 抬高内存占用，只有环境变量显式开启时才启用，且未安装时自动回退普通 device。
     fn new(renderer_device: &ID3D11Device) -> Result<Self> {
         let dxgi_device: IDXGIDevice = renderer_device.cast()?;
         let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
@@ -609,6 +655,7 @@ impl WorkerGpu {
         }
         let device = device.context("DXVA worker device 创建失败")?;
         let context = context.context("DXVA worker context 创建失败")?;
+        // SourceReader 可能在回调线程访问该 device，开启多线程保护以避开内部同步问题。
         if let Ok(multithread) = device.cast::<ID3D10Multithread>() {
             let _ = unsafe { multithread.SetMultithreadProtected(true) };
         } else {
@@ -620,6 +667,7 @@ impl WorkerGpu {
         unsafe { MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)? };
         let manager = manager.context("IMFDXGIDeviceManager 创建失败")?;
         unsafe { manager.ResetDevice(&device, reset_token)? };
+        // SourceReader 凭此 handle 取得解码设备；与 reset_token 配套使用。
         let manager_handle = unsafe { manager.OpenDeviceHandle() }?;
 
         let video_device: ID3D11VideoDevice = device.cast()?;
@@ -655,6 +703,9 @@ impl WorkerGpu {
         })
     }
 
+    /// 按 (width, height) 复用 VideoProcessorBlt 的目标 staging 纹理。
+    /// Blt 不直接写 shared keyed-mutex texture：那样会与 renderer 争抢 mutex、形成 OUTPUTHAZARD。
+    /// 每帧先 Blt 到 worker 私有纹理，再 CopyResource 到 shared texture。
     fn staging_output_texture(&self, width: u32, height: u32) -> Result<ID3D11Texture2D> {
         let key = (width, height);
         if let Some(texture) = self.staging_output.lock().unwrap().get(&key) {
@@ -673,6 +724,7 @@ impl WorkerGpu {
             Usage: D3D11_USAGE_DEFAULT,
             BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
             CPUAccessFlags: 0,
+            // 纯 worker 私有纹理：无需 shared / keyed-mutex 标志，避免与 renderer 产生同步耦合。
             MiscFlags: 0,
         };
         let mut texture: Option<ID3D11Texture2D> = None;
@@ -742,10 +794,13 @@ fn log_d3d11_info_queue(device: &ID3D11Device, stage: &str) {
     }
 }
 
+/// 一帧解码后的 DXVA sample 及其媒体时间信息。
+/// timestamp / duration 统一从 100ns 换算成 Duration，并对负值 / 0 做兜底。
 struct DecodedSample {
     sample: IMFSample,
     timestamp: Duration,
     duration: Duration,
+    /// MF 原始 flags，仅用于诊断（媒体类型变化 / 错误标志）。
     flags: u32,
 }
 
@@ -760,8 +815,11 @@ impl DecodedSample {
     }
 }
 
+/// 一路视频的解码会话：独占 SourceReader / VideoProcessor / GPU 资源，由全局 worker 串行 tick。
+/// 字段 drop 顺序有意义：gpu 必须最后释放（见 WorkerGpu::drop）。
 struct VideoSession {
     id: u64,
+    /// 与 renderer 共享的只读快照，首帧 / 每帧更新其中的时间与 ready。
     state: Arc<Mutex<SharedState>>,
     reader: IMFSourceReader,
     enumerator: Option<ID3D11VideoProcessorEnumerator>,
@@ -771,13 +829,20 @@ struct VideoSession {
     output_view: Option<ID3D11VideoProcessorOutputView>,
     width: u32,
     height: u32,
+    /// 实际用于回绕的循环时长；首圈会被最大帧结束时间修正。
     loop_duration: Duration,
+    /// 从 MF_PD_DURATION 读到的容器时长，作为 loop_duration 的初始 / reset 基准。
     presentation_duration: Duration,
     started: Instant,
+    /// 暂停累计时长，计算播放目标时扣除，暂停期间不追赶解码。
     paused_total: Duration,
+    /// worker 侧暂停起点；Some 表示暂停中，恢复时累加到 paused_total。
     paused_at: Option<Instant>,
+    /// 已播放循环的时间基准；每圈 EOF 后累加 loop_duration，避免时间戳回绕。
     cycle_base: Duration,
+    /// Blt 失败时暂存当前 sample，下一 tick 优先重试而不是丢帧。
     pending: Option<DecodedSample>,
+    /// 以下四个是“只记一次”的诊断开关，避免高频日志刷屏。
     first_frame_logged: bool,
     stage_logged: bool,
     blt_error_logged: bool,
@@ -787,6 +852,8 @@ struct VideoSession {
 }
 
 impl VideoSession {
+    /// 创建一路解码 session：配置 SourceReader 输出 NV12、读取媒体时长、建立共享纹理与
+    /// VideoProcessor。每个 session 独立持有一个 WorkerGpu，不复用其它 session 的设备。
     fn new(
         renderer_device: &ID3D11Device,
         id: u64,
@@ -814,10 +881,12 @@ impl VideoSession {
             MFCreateSourceReaderFromURL(windows::core::PCWSTR(wide.as_ptr()), &attributes)
         }
         .with_context(|| format!("SourceReader 无法打开 {:?}", path))?;
+        // 先关闭所有流再只启用第一路视频，省掉音频 / 字幕流的解码与同步开销。
         unsafe {
             reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
             reader.SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)?;
         }
+        // 请求 NV12 输出，与共享纹理格式及 renderer 的双平面采样保持一致。
         let output_type: IMFMediaType = unsafe { MFCreateMediaType() }?;
         unsafe {
             output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -880,10 +949,13 @@ impl VideoSession {
         Ok(session)
     }
 
+    /// 返回共享纹理信息；仅在 new() 内 ensure_output 成功后才可调用。
     fn shared_frame_info(&self) -> &SharedFrameInfo {
         self.shared_info.as_ref().expect("共享纹理信息已就绪")
     }
 
+    /// 建立（或尺寸变化时重建）NV12 共享纹理与 VideoProcessor 输出视图。
+    /// 纹理带 KEYEDMUTEX 标志供 renderer 安全复制，并用视频黑初始化防止首帧前的绿屏。
     fn ensure_output(&mut self, width: u32, height: u32) -> Result<()> {
         if self.width == width && self.height == height && self.output_view.is_some() {
             return Ok(());
@@ -970,6 +1042,7 @@ impl VideoSession {
         let output_view = output_view.context("VideoProcessor output view 创建失败")?;
 
         let keyed_mutex: IDXGIKeyedMutex = texture.cast()?;
+        // 把 keyed mutex 初始化为 key0 归属，renderer 才能用 key1 取得读锁。
         unsafe { keyed_mutex.AcquireSync(0, 0)? };
         let _ = unsafe { keyed_mutex.ReleaseSync(0) };
 
@@ -993,6 +1066,8 @@ impl VideoSession {
         Ok(())
     }
 
+    /// 从 SourceReader 拉取一帧解码 sample，记录 MF 原始 flags / 时间戳 / 时长。
+    /// EOF 返回 None，由 tick 决定回绕；错误标志保留在 flags 里用于诊断。
     fn read_sample(&mut self) -> Result<Option<DecodedSample>> {
         let mut flags = 0u32;
         let mut timestamp = 0i64;
@@ -1015,6 +1090,8 @@ impl VideoSession {
         Ok(Some(DecodedSample::new(sample, timestamp, duration, flags)))
     }
 
+    /// 只读诊断：打印当前 media type 的 interlace / matrix / range / frame_size，
+    /// 用于定位 Blt 的 E_INVALIDARG，不改变任何设备状态。
     fn media_type_diag(&self) -> String {
         let Ok(media_type) = (unsafe {
             self.reader
@@ -1033,6 +1110,9 @@ impl VideoSession {
         )
     }
 
+    /// 把一帧 DXVA sample 经 VideoProcessorBlt 输出到 staging 纹理，再拷入 shared texture。
+    /// 成功释放 key1（renderer 可 AcquireSync(1) 复制）；失败释放 key0 并保留 sample 供下轮重试。
+    /// 返回是否真正产出新帧。
     fn process_sample(&mut self, decoded: &DecodedSample) -> Result<bool> {
         let output_view = self.output_view.clone().context("VideoProcessor 未就绪")?;
         let output_texture = self.gpu.staging_output_texture(self.width, self.height)?;
@@ -1048,6 +1128,7 @@ impl VideoSession {
         unsafe { dxgi_buffer.GetResource(&ID3D11Texture2D::IID, &mut raw)? };
         let raw = NonNull::new(raw).context("DXVA sample 返回空 texture")?;
         let decoder_texture: ID3D11Texture2D = unsafe { ID3D11Texture2D::from_raw(raw.as_ptr()) };
+        // 解码器持有多帧纹理池，subresource index 定位当前帧在池中的数组切片。
         let subresource = unsafe { dxgi_buffer.GetSubresourceIndex() }?;
         // 只读诊断：区分 E_INVALIDARG 来自 input view 还是 Blt；不改变任何处理流程。
         let mut decoder_desc = D3D11_TEXTURE2D_DESC::default();
@@ -1167,6 +1248,7 @@ impl VideoSession {
             }
             Ok(())
         })();
+        // key1 = 写入成功，renderer 可持 key1 复制；key0 = 失败 / 未就绪，仍由 worker 持有。
         let release_key = if result.is_ok() { 1 } else { 0 };
         let _ = unsafe { keyed_mutex.ReleaseSync(release_key) };
         match result {
@@ -1192,6 +1274,8 @@ impl VideoSession {
         }
     }
 
+    /// 首圈用“当前帧结束时间”修正 loop_duration。若按首帧 ~33ms 推断循环长度，
+    /// 下次 EOF 只推进几十毫秒，墙钟 target 会远超 frame_time，导致全速追赶。
     fn note_frame(&mut self, frame_time: Duration, duration: Duration, first_cycle: bool) {
         if first_cycle {
             // 第一圈持续用最大帧结束时间修正 loop_duration；不能用第一帧的 33ms，
@@ -1200,6 +1284,7 @@ impl VideoSession {
         }
     }
 
+    /// Flush 解码器并返回起点，实现循环回退；PROPVARIANT 为 VT_I8 的 0。
     fn seek_zero(&mut self) -> Result<()> {
         let position = seek_zero_position();
         unsafe {
@@ -1211,6 +1296,8 @@ impl VideoSession {
         Ok(())
     }
 
+    /// 重置时间线到 0 并让 generation 自增：renderer 借此识别新周期并重置音频。
+    /// 本方法不清 pause_reasons；若仍暂停，由 renderer 的 reset_clock 负责补发 Pause。
     fn reset(&mut self, now: Instant) -> Result<()> {
         self.loop_duration = self.presentation_duration;
         self.seek_zero()?;
@@ -1223,11 +1310,14 @@ impl VideoSession {
         shared.frame_time = Duration::ZERO;
         shared.frame_duration = Duration::from_millis(40);
         shared.loop_duration = self.loop_duration;
+        // generation 自增：renderer 可据此丢弃旧周期残留的 frame_time。
         shared.generation = shared.generation.wrapping_add(1);
         shared.ready = false;
         Ok(())
     }
 
+    /// 记录 worker 侧暂停起点 / 累计时长；paused_at 为 Some 表示暂停中。
+    /// renderer 已按原因合并，故这里只需处理一次开 / 关切换（重复命令被 match 的 _ 吞掉）。
     fn pause(&mut self, paused: bool, now: Instant) {
         match (paused, self.paused_at) {
             (true, None) => self.paused_at = Some(now),
@@ -1241,10 +1331,13 @@ impl VideoSession {
         }
     }
 
+    /// worker 每次调度推进一帧：按真实媒体时长 pacing，必要时读取 / 重试 sample。
+    /// 返回本轮是否产出帧或发生回绕，供主循环决定是否少睡一会。
     fn tick(&mut self) -> Result<bool> {
         if self.paused_at.is_some() {
             return Ok(false);
         }
+        // 墙钟扣除暂停时长才是媒体时间；未到下一帧时间就跳过，避免解码快于展示。
         let target = self.started.elapsed().saturating_sub(self.paused_total);
         {
             let shared = self.state.lock().unwrap();
@@ -1253,11 +1346,14 @@ impl VideoSession {
             }
         }
 
+        // 上一轮 Blt 失败的 sample 优先重试，而不是继续 ReadSample 丢帧。
         let sample = match self.pending.take() {
             Some(sample) => sample,
             None => match self.read_sample()? {
                 Some(sample) => sample,
                 None => {
+                    // EOF：用真实媒体时长作为一圈长度（首圈未知则暂用 target），
+                    // 累加到 cycle_base 后回绕，避免循环播放时时间戳归零引发跳变。
                     let completed = if self.loop_duration.is_zero() {
                         target
                     } else {
@@ -1297,6 +1393,8 @@ impl VideoSession {
     }
 }
 
+/// 全局视频 worker 主循环：单线程串行处理所有 session 的命令与逐帧推进。
+/// 每轮先排空命令队列，再遍历各 session tick；无工作时短暂 sleep 让出 CPU。
 fn video_worker_main(
     renderer_device: &ID3D11Device,
     commands: Receiver<WorkerCommand>,
@@ -1304,6 +1402,7 @@ fn video_worker_main(
     let mut sessions: HashMap<u64, VideoSession> = HashMap::new();
 
     loop {
+        // 先处理所有控制命令，保证 pause / reset / open / close 能及时生效。
         while let Ok(command) = commands.try_recv() {
             match command {
                 WorkerCommand::OpenSession {
@@ -1362,6 +1461,8 @@ fn video_worker_main(
             continue;
         }
 
+        // 单线程串行 tick 所有 session：各 session 虽各有独立设备，但共用同一 worker 线程，
+        // 避免跨线程同时操作 MF / D3D11 引发 device removed 或死锁。
         let ids: Vec<u64> = sessions.keys().copied().collect();
         let mut progressed = false;
         for id in ids {
@@ -1376,12 +1477,14 @@ fn video_worker_main(
                 }
             }
         }
+        // 本轮有帧产出或回绕就不睡，尽量追上墙钟节奏；否则稍睡避免忙等。
         if !progressed {
             thread::sleep(Duration::from_millis(1));
         }
     }
 }
 
+/// 构造 VT_I8 且值为 0 的 PROPVARIANT，用于把 SourceReader 定位到起点。
 fn seek_zero_position() -> windows::Win32::System::Com::StructuredStorage::PROPVARIANT {
     use windows::Win32::System::Com::StructuredStorage::{
         PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
@@ -1401,6 +1504,7 @@ fn seek_zero_position() -> windows::Win32::System::Com::StructuredStorage::PROPV
     }
 }
 
+/// 读取 MF_PD_DURATION（100ns）；拿不到返回 None，让 session 用最大帧时间推断循环时长。
 fn read_presentation_duration(reader: &IMFSourceReader) -> Option<Duration> {
     let mut variant = unsafe {
         reader.GetPresentationAttribute(
@@ -1414,10 +1518,12 @@ fn read_presentation_duration(reader: &IMFSourceReader) -> Option<Duration> {
     hns.filter(|value| *value > 0).map(hns_to_duration)
 }
 
+/// 100ns（MF 时间单位）转 Duration，饱和乘法防溢出。
 fn hns_to_duration(hns: u64) -> Duration {
     Duration::from_nanos((hns as u128).saturating_mul(100).min(u64::MAX as u128) as u64)
 }
 
+/// sample 时长为 0 时回退到 40ms，保证 pacing 始终有最小帧间隔。
 fn normalize_duration(duration: Duration) -> Duration {
     if duration.is_zero() {
         Duration::from_millis(40)

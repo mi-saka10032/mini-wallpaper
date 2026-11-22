@@ -25,6 +25,8 @@ use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, 
 /// 只用于 EnsureMonitor / SetWallpaper——这两条会真正做 D3D11 资源创建与解码。
 type Ack = oneshot::Sender<Result<(), String>>;
 
+/// 把关键命令的执行结果回传给协调器；ack 为 None（无需回执的命令）时是空操作。
+/// 回执发送失败（接收端已退出）直接忽略：此时渲染线程本就要退出，不应因此 panic。
 fn send_ack(ack: Option<Ack>, result: Result<(), String>) {
     if let Some(tx) = ack {
         let _ = tx.send(result);
@@ -67,15 +69,19 @@ impl Drop for ComScope {
     }
 }
 
+/// 协调器 → renderer 线程的消息协议。
+///
+/// 所有命令都在单一渲染线程上串行处理，因此命令处理代码无需加锁；只有需要回传
+/// 成功 / 失败的命令（EnsureMonitor / SetWallpaper）才携带 oneshot `Ack`。
 enum RendererCommand {
+    /// 建 / 更新某屏的原生表面；表面已存在时走 update_rect，不重建。
     EnsureMonitor {
         monitor_id: String,
         rect: MonitorRect,
         ack: Option<Ack>,
     },
-    DestroyMonitor {
-        monitor_id: String,
-    },
+    /// 释放某屏表面；实际资源回收由 RenderSurface::destroy / Drop 统一完成。
+    DestroyMonitor { monitor_id: String },
     /// 组级换图：一次解码 + 一次纹理上传，组内所有屏共享同一个帧时钟。
     SetWallpaper {
         monitor_ids: Vec<String>,
@@ -90,28 +96,32 @@ enum RendererCommand {
     SetGroupGeometry {
         viewports: Vec<(String, Option<ExtendViewport>)>,
     },
+    /// 单屏 fit 变更；组级裁剪走 SetGroupGeometry，二者语义不同。
     SetFitMode {
         monitor_id: String,
         fit_mode: FitMode,
     },
-    ClearWallpaper {
-        monitor_id: String,
-    },
-    SetPaused {
-        paused: bool,
-    },
-    SetVolume {
-        volume: u32,
-    },
+    /// 清掉某屏壁纸及 transition / pending 队列，回到默认桌面。
+    ClearWallpaper { monitor_id: String },
+    /// 全屏暂停开关：冻结视频时钟与音频，但保留 surface 与壁纸内容。
+    SetPaused { paused: bool },
+    /// 全局音量（0-100）下发给所有视频播放状态；上限裁剪由入口方法负责。
+    SetVolume { volume: u32 },
+    /// 退出消息循环，之后统一析构 surface / device / MF 平台。
     Shutdown,
 }
 
+/// 协调器持有的渲染线程句柄：命令经 `sender` 投给单一渲染线程串行执行，
+/// `worker` 供 shutdown / Drop 时 join，保证线程与 D3D11 / MF 资源有序退出。
 pub struct DesktopRenderer {
+    /// 命令通道发送端；RendererCommand 的所有变体都通过它下发。
     sender: Sender<RendererCommand>,
+    /// 用 Option 是为了 shutdown 时能 take 走并 join，避免重复 join。
     worker: Option<JoinHandle<()>>,
 }
 
 impl DesktopRenderer {
+    /// 启动名为 wallpaper-renderer 的单一渲染线程；COM / MF / D3D11 都在该线程内初始化。
     pub fn start() -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
@@ -137,6 +147,7 @@ impl DesktopRenderer {
             .map_err(anyhow::Error::msg)
     }
 
+    /// 异步下发销毁命令，不等待 surface 真正释放（由渲染线程随后完成）。
     pub fn destroy_monitor(&self, monitor_id: String) -> Result<()> {
         self.sender
             .send(RendererCommand::DestroyMonitor { monitor_id })?;
@@ -167,6 +178,7 @@ impl DesktopRenderer {
             .map_err(anyhow::Error::msg)
     }
 
+    /// 组级几何更新；viewports 中的 None 表示该屏退出拼接、退回独立 fit。
     pub fn set_group_geometry(
         &self,
         viewports: Vec<(String, Option<ExtendViewport>)>,
@@ -176,6 +188,7 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    /// 单屏 fit 变更；不触发解码，只影响后续帧的 viewport 计算。
     pub fn set_fit_mode(&self, monitor_id: String, fit_mode: FitMode) -> Result<()> {
         self.sender.send(RendererCommand::SetFitMode {
             monitor_id,
@@ -184,17 +197,20 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    /// 清空该屏壁纸及 transition / pending，视频随之停止出声。
     pub fn clear_wallpaper(&self, monitor_id: String) -> Result<()> {
         self.sender
             .send(RendererCommand::ClearWallpaper { monitor_id })?;
         Ok(())
     }
 
+    /// 全屏暂停开关；与 fade 暂停按 pause reason 合并，任一方保持暂停都不会被另一方误恢复。
     pub fn set_paused(&self, paused: bool) -> Result<()> {
         self.sender.send(RendererCommand::SetPaused { paused })?;
         Ok(())
     }
 
+    /// 下发全局音量并夹到 0-100；渲染线程按 Arc 去重后逐个设置视频音量。
     pub fn set_volume(&self, volume: u32) -> Result<()> {
         self.sender.send(RendererCommand::SetVolume {
             volume: volume.min(100),
@@ -202,6 +218,7 @@ impl DesktopRenderer {
         Ok(())
     }
 
+    /// 先发 Shutdown 再 join；若通道已断（线程已退出）则直接返回。
     pub fn shutdown(&mut self) {
         if self.sender.send(RendererCommand::Shutdown).is_err() {
             return;
@@ -212,12 +229,18 @@ impl DesktopRenderer {
     }
 }
 
+/// 兜底 join：调用方忘记 shutdown 时也不会把渲染线程和 D3D11 / MF 资源留在后台。
 impl Drop for DesktopRenderer {
     fn drop(&mut self) {
         self.shutdown();
     }
 }
 
+/// 渲染线程主循环。
+///
+/// 单次 tick：排空 command → 泵 WM_QUIT → 裁决视频暂停 / 音频资格 →
+/// 推进组级视频时钟与共享帧 → 逐 surface 绘制并结束 fade → 睡眠一帧。
+/// 暂停时跳过绘制但保留 surface 与内容，恢复后无需重新解码。
 fn run(receiver: Receiver<RendererCommand>) {
     let _com = ComScope::init();
 
@@ -249,6 +272,7 @@ fn run(receiver: Receiver<RendererCommand>) {
     // 组内所有 surface 也因此始终持有同一个帧时钟，不会出现跨屏错帧。
     let mut frame_cache = FrameCache::<SharedFrames>::with_default_budget();
     let mut running = true;
+    // 全屏暂停标志：只冻结时钟 / 音频，不销毁内容；与 fade 暂停按 reason 各自独立。
     let mut paused = false;
     // global_volume 默认 0；启动时由 RenderCoordinator 再同步一次 DB 中的值。
     let mut volume = 0u32;
@@ -429,6 +453,8 @@ fn run(receiver: Receiver<RendererCommand>) {
             // 帧级共享纹理同步：同一 VideoPlayback 每帧只 AcquireSync/CopyResource 一次，
             // 所有 surface 随后只读 renderer 本地副本，避免双屏抢 keyed mutex 闪烁。
             begin_video_frames(&surfaces);
+            // fade 结束时按 Arc 指针去重：组内共享同一播放状态时只 reset 一次，
+            // 否则多屏会对同一个 SourceReader 重复 Flush / seek。
             let mut reset_seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
             for (monitor_id, surface) in surfaces.iter_mut() {
                 surface.render(monitor_id, now);
@@ -517,6 +543,8 @@ fn begin_video_frames(surfaces: &HashMap<String, RenderSurface>) {
 /// fade / pending 期间暂停所有进程的视频源；fade 结束后恢复仍在正常显示的状态。
 /// 与全屏暂停按 pause reason 合并，避免一方解除时误恢复另一方。
 fn sync_video_pause(surfaces: &HashMap<String, RenderSurface>, now: Instant) {
+    // 只要有任意一屏处于 fade / pending，就把它持有的全部视频（含 to）记为冻结，
+    // 整段过渡期间 from / to 的播放时钟都停住，避免中途继续走帧。
     let mut fade_frozen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
     for surface in surfaces.values() {
         if surface.fade_active_or_pending() {
@@ -546,6 +574,8 @@ fn sync_video_pause(surfaces: &HashMap<String, RenderSurface>, now: Instant) {
 /// 这样 Mirror/Extend 组共享一个 VideoPlayback 时自然只有一份音频；Independent 每屏
 /// 各自持有一个 VideoPlayback，自然按屏叠加。与 WebView 的过渡语义保持一致。
 fn sync_audio_state(surfaces: &HashMap<String, RenderSurface>, paused: bool) {
+    // frozen：处于 fade / pending 的屏其上全部视频都静音（含尚未显示的 to）。
+    // active：只有正常显示（无 fade）的当前壁纸视频才取得出声资格。
     let mut frozen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
     let mut active: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
 
@@ -606,6 +636,8 @@ fn advance_videos(surfaces: &mut HashMap<String, RenderSurface>, now: Instant) {
     }
 }
 
+/// 排空线程消息队列，仅关心 WM_QUIT：收到即返回 false 让主循环退出。
+/// DirectComposition 合成不需要窗口过程做额外绘制，因此消息泵极简。
 fn pump_messages() -> bool {
     unsafe {
         let mut message = MSG::default();

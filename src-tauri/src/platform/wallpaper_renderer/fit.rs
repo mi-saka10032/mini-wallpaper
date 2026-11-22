@@ -1,5 +1,8 @@
 use super::contracts::FitMode;
 
+/// 源图映射后的目标矩形。`x` / `y` 是相对显示器左上角的偏移，**可能为负**
+/// （cover 放大后靠裁剪对齐、center 居中）：负值意味着矩形溢出到显示器之外，
+/// 由后续裁剪处理，而不是在这里截断。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FitRect {
     pub x: f32,
@@ -23,6 +26,7 @@ pub fn fit_rect(
         height: target_height as f32,
     };
 
+    // 退化尺寸直接铺满目标：既避免后续除零，也保证界面不会出现空矩形。
     if source_width == 0 || source_height == 0 || target_width == 0 || target_height == 0 {
         return target;
     }
@@ -58,6 +62,9 @@ pub fn fit_rect(
     }
 }
 
+/// 按等比缩放计算居中后的矩形。`cover = true` 取较大的缩放比，保证铺满目标
+///（超出部分由裁剪丢弃）；`false` 取较小的缩放比，保证完整显示（留黑边）。
+/// 两者都把结果相对目标居中，因此 `x` / `y` 可能为负。
 fn scaled_rect(
     source_width: f32,
     source_height: f32,

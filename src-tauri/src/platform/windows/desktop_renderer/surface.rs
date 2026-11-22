@@ -47,6 +47,8 @@ use crate::platform::wallpaper_renderer::{
 };
 use crate::platform::windows::desktop_embedder::EmbedPolicy;
 
+/// 全屏 quad 的 HLSL：图片走 B8G8R8A8 采样，视频走 NV12 双平面采样；
+/// 两者共用同一个 fade_alpha cbuffer，因此 fade 不需要第二套绘制路径。
 const SHADER_SOURCE: &str = r#"
 struct VS_IN {
     float2 pos : POSITION;
@@ -96,6 +98,7 @@ float4 ps_nv12(VS_OUT input) : SV_TARGET {
 }
 "#;
 
+/// 与 input layout（POSITION / TEXCOORD）一一对应的全屏 quad 顶点。
 #[repr(C)]
 struct Vertex {
     position: [f32; 2],
@@ -128,6 +131,8 @@ const QUAD: [Vertex; 4] = [
     },
 ];
 
+/// 全屏 quad 所需的对象集合：由 SharedDevice 创建一次并克隆给所有 surface。
+/// blend state + fade cbuffer 承载 crossfade 的混合数学，nv12 pixel shader 专供视频链路。
 #[derive(Clone)]
 struct QuadPipeline {
     vertex_shader: ID3D11VertexShader,
@@ -141,6 +146,8 @@ struct QuadPipeline {
     fade_buffer: ID3D11Buffer,
 }
 
+/// swapchain 经 DirectComposition visual 挂到嵌入后的壁纸 HWND。
+/// 这几个 COM 对象必须一起存活，否则 visual 失效、桌面合成树取不到内容。
 struct CompositionSwapChain {
     swap_chain: IDXGISwapChain1,
     device: IDCompositionDevice,
@@ -148,6 +155,7 @@ struct CompositionSwapChain {
     visual: IDCompositionVisual,
 }
 
+/// 一张已上传 GPU 的帧：`view` 是 SRV（内部持有纹理引用），duration 供动图取模选帧。
 struct GpuFrame {
     view: ID3D11ShaderResourceView,
     width: u32,
@@ -161,6 +169,7 @@ struct GpuFrame {
 /// `Instant::now()` 会让跨屏接缝出现不同帧，正是 WebView 侧 useVideoSync 想解决的问题。
 pub struct SharedFrames {
     frames: Vec<GpuFrame>,
+    // 组内所有 surface 共用这个起点，保证跨屏选到同一帧。
     started_at: Instant,
 }
 
@@ -218,8 +227,11 @@ pub enum WallpaperMedia {
 /// 不把 to 直接挂到 `wallpaper`：transition 期间 renderer loop 必须能区分
 /// from / to 并冻结两侧视频时钟，结束后才把 to 提升为当前壁纸。
 struct Transition {
+    // to 单独挂在 transition 而非直接覆盖 wallpaper：fade 期间 wallpaper 仍是 from，
+    // renderer loop 才能同时冻结两侧视频时钟，并在结束时只提升一次 to。
     to: WallpaperMedia,
     to_fit_mode: FitMode,
+    // fade 时间线起点；组内所有 surface 传入同一个 now，避免接缝明暗不同步。
     started_at: Instant,
 }
 
@@ -236,8 +248,10 @@ struct PendingWallpaper {
 /// 绘制，即时上下文的非线程安全约束自动满足。
 pub struct SharedDevice {
     device: ID3D11Device,
+    // 即时上下文非线程安全；所有 surface 都在同一渲染线程上用它绘制。
     context: ID3D11DeviceContext,
     pipeline: QuadPipeline,
+    // 单个 video worker 服务全部 VideoPlayback；每路播放自带独立 GPU / SourceReader。
     video_worker: VideoWorkerHost,
 }
 
@@ -316,6 +330,8 @@ impl SharedDevice {
         Ok(Arc::new(Mutex::new(playback)))
     }
 
+    /// 单帧解码结果上传显存：建 DEFAULT 纹理并以初始数据填充，再建 SRV。
+    /// 纹理只由 SRV 持有（见 GpuFrame），这里不重复存一份以简化引用管理。
     fn upload_frame(&self, frame: &DecodedFrame) -> Result<GpuFrame> {
         let desc = D3D11_TEXTURE2D_DESC {
             Width: frame.width,
@@ -376,10 +392,15 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
+/// 单屏壁纸渲染状态：自有窗口 / swapchain / RTV，但共享 device / pipeline / video worker。
+///
+/// 壁纸内容分三层保存：`wallpaper`（当前，fade 期间即 from）、`transition`（fade 的 to）、
+/// `pending`（排队换图）。视频的暂停与音量必须覆盖全部三层，见 `video_arcs()`。
 pub struct RenderSurface {
     window: NativeWindow,
     device: ID3D11Device,
     context: ID3D11DeviceContext,
+    // flip model 的 backbuffer 容器；每次 Present 后轮转，需重新取 GetBuffer(0) 建 RTV。
     swap_chain: IDXGISwapChain1,
     // DirectComposition COM 对象必须活到 RenderSurface 析构；字段只用于持有引用，不直接读取。
     #[allow(dead_code)]
@@ -388,22 +409,31 @@ pub struct RenderSurface {
     composition_target: IDCompositionTarget,
     #[allow(dead_code)]
     composition_visual: IDCompositionVisual,
+    // 绑定当前 backbuffer 的 render target view；None 表示尚未绑定 / 已释放。
     render_target: Option<ID3D11RenderTargetView>,
+    // 来自共享层：extend 组内所有 surface 必须绑定同一份 SRV，故不可各自新建。
     pipeline: QuadPipeline,
     rect: MonitorRect,
     fit_mode: FitMode,
     /// Some 表示该屏参与 extend 拼接；None 表示按本屏尺寸独立 fit。
     extend_viewport: Option<ExtendViewport>,
+    // 是否仍嵌入桌面；destroy 据此决定是否 unembed，避免重复调用。
     embedded: bool,
+    // 当前显示内容；fade 期间这里仍是 from，to 放在 transition 里。
     wallpaper: Option<WallpaperMedia>,
+    // 正在进行的淡入淡出；视频时钟冻结与 fade 推进都以此为准。
     transition: Option<Transition>,
+    // 排队换图：连续切换只保留最新一张，避免每个视频各自持有 GPU 导致内存暴涨。
     pending: VecDeque<PendingWallpaper>,
     // Present / backbuffer 错误只记录一次，避免每帧刷屏
+    // 成功后复位，以便下次出错时还能再报一次。
     present_error_logged: bool,
     backbuffer_error_logged: bool,
 }
 
 impl RenderSurface {
+    /// 创建并嵌入壁纸窗口，再挂 swapchain / DirectComposition / RTV；
+    /// 首帧前先 Present 一张全透明 backbuffer，避免默认黑色闪一下。
     pub fn new(shared: &SharedDevice, rect: MonitorRect) -> Result<Self> {
         let window = NativeWindow::new(rect)?;
         let hwnd = window.hwnd();
@@ -503,6 +533,8 @@ impl RenderSurface {
         }
     }
 
+    /// 从队首取出下一张开启 fade；队列为空则保持无 transition。
+    /// 沿用同一个 now 续接上一段，使组内所有 surface 的 fade 时间线一致。
     fn start_next_transition(&mut self, now: Instant) {
         let Some(next) = self.pending.pop_front() else {
             return;
@@ -569,14 +601,17 @@ impl RenderSurface {
         arcs
     }
 
+    /// 更新 extend 裁剪参数；None 表示该屏退出拼接、退回独立 fit。
     pub fn set_extend_viewport(&mut self, viewport: Option<ExtendViewport>) {
         self.extend_viewport = viewport;
     }
 
+    /// 单屏 fit 模式；extend 生效时由 viewport 决定裁剪，该值被忽略。
     pub fn set_fit_mode(&mut self, fit_mode: FitMode) {
         self.fit_mode = fit_mode;
     }
 
+    /// 清空三层内容，视频随之停止出声；窗口与 RTV 保留以便复用。
     pub fn clear_wallpaper(&mut self) {
         self.wallpaper = None;
         self.transition = None;
@@ -637,6 +672,7 @@ impl RenderSurface {
         Ok(())
     }
 
+    /// 帧是否可绘制：静态帧恒为 true；视频需等首帧到达，避免采样全 0 NV12 出现绿屏。
     fn media_has_drawable_frame(media: &WallpaperMedia) -> bool {
         match media {
             WallpaperMedia::Frames(_) => true,
@@ -647,6 +683,7 @@ impl RenderSurface {
         }
     }
 
+    /// fade 期间 from / to 任一有帧即可绘制；否则只有当前壁纸有帧才绘制。
     fn has_drawable_frame(&self) -> bool {
         if let Some(transition) = &self.transition {
             self.wallpaper
@@ -660,6 +697,8 @@ impl RenderSurface {
         }
     }
 
+    /// 一帧渲染：重绑 backbuffer → 清屏 → 绘制 from / to（或单层壁纸）→ Present。
+    /// backbuffer / Present 失败各只记一次日志；透明清屏用于让系统默认壁纸透出。
     pub fn render(&mut self, monitor_id: &str, now: Instant) {
         if let Err(err) = self.bind_current_backbuffer() {
             if !self.backbuffer_error_logged {
@@ -692,6 +731,7 @@ impl RenderSurface {
         }
 
         if let Some(transition) = &self.transition {
+            // crossfade_progress = 已过时长 / CROSSFADE_DURATION，作为 to 的混合权重（0→1）。
             let progress = crossfade_progress(
                 now.saturating_duration_since(transition.started_at),
                 CROSSFADE_DURATION,
@@ -827,6 +867,7 @@ impl RenderSurface {
         }
     }
 
+    /// 释放三层壁纸内容并按需从桌面取消嵌入；窗口 / 设备交给各自 Drop 回收。
     pub fn destroy(&mut self) {
         self.wallpaper = None;
         self.transition = None;
@@ -846,6 +887,8 @@ impl Drop for RenderSurface {
     }
 }
 
+/// 建 flip model swapchain，并用 DirectComposition visual 挂到壁纸 HWND。
+/// premultiplied alpha + FLIP_SEQUENTIAL 是 24H2 桌面合成树正确采样该窗口的前提。
 fn create_composition_swap_chain(
     device: &ID3D11Device,
     hwnd: HWND,
@@ -897,6 +940,8 @@ fn create_composition_swap_chain(
     })
 }
 
+/// 编译三套 shader 并创建 quad / 采样器 / 光栅化 / blend / fade cbuffer。
+/// 全部由 SharedDevice 创建一次，之后克隆给各 surface 共享。
 fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
     let vs_bytecode = compile_shader(
         SHADER_SOURCE,
@@ -1065,6 +1110,7 @@ fn create_pipeline(device: &ID3D11Device) -> Result<QuadPipeline> {
     })
 }
 
+/// 运行时编译 HLSL；失败时把 D3DCompile 的错误 blob 一并带进 anyhow，便于定位编译错误。
 fn compile_shader(source: &str, entry: *const u8, target: *const u8) -> Result<Vec<u8>> {
     let mut code: Option<ID3DBlob> = None;
     let mut errors: Option<ID3DBlob> = None;

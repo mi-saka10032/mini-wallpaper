@@ -41,6 +41,8 @@ pub async fn create_wallpaper_window(
     let Some(wallpaper_id) = wallpaper_id else {
         return Ok(());
     };
+    // ensure_target 内部按壁纸 capability 选 backend（Native 建 surface 并渲染
+    // 首帧 / WebView 沿用既有壁纸窗口），命令层不感知具体路由。
     coordinator
         .ensure_target(&req.monitor_id, rect, wallpaper_id)
         .await?;
@@ -66,6 +68,8 @@ pub async fn destroy_wallpaper_window(
 pub async fn destroy_all_wallpaper_windows(ctx: State<'_, AppContext>) -> CommandResult<()> {
     let app_ctx: &AppContext = ctx.inner();
     let mut coordinator = app_ctx.render_coordinator.lock().await;
+    // active_ids 已合并 Native 渲染目标与 WebView 窗口；一次循环覆盖两条
+    // backend，避免只清一边导致另一边残留。
     let mids = coordinator.active_ids().await;
     for mid in mids {
         coordinator.destroy_target(&mid).await;

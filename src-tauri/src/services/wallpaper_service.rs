@@ -1,3 +1,9 @@
+//! 壁纸领域服务：导入、软删除 / 回收站、缩略图，以及供渲染链路消费的文件格式定义。
+//!
+//! 这里的扩展名白名单表达的是「导入宽容度」而非「渲染能力表」：导入阶段只按
+//! 扩展名判类型并尽量接收，真正的「能否被原生解码」推迟到渲染时的
+//! `resolve_backend` 决策，二者刻意解耦——避免导入期就把可选格式锁死。
+
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use image::GenericImageView;
@@ -100,6 +106,10 @@ pub async fn get_active_by_id(
 }
 
 /// 获取所有支持的壁纸文件扩展名
+///
+/// 用于文件选择对话框 / 拖拽过滤。注意它比原生渲染能力表宽：webm / mkv
+/// 等可导入，但运行期可能回退 WebView（Auto）或报 UnsupportedFormat
+/// （NativeOnly），导入成功不代表一定能被原生解码。
 pub fn get_supported_extensions() -> Vec<String> {
     IMAGE_EXTENSIONS
         .iter()

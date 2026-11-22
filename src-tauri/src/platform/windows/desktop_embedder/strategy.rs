@@ -33,6 +33,10 @@ pub(crate) trait EmbedStrategy {
 }
 
 /// 显示器矩形区域（虚拟桌面坐标 + 物理分辨率）
+///
+/// `x` / `y` 是相对整个虚拟桌面的左上坐标，多屏布局下可能为负；它不是单屏
+/// 局部坐标。extend 模式把各屏 rect 的并集当作一张大画布，因此这里必须保留
+/// 全局坐标，否则跨屏拼接会错位。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MonitorRect {
     pub x: i32,

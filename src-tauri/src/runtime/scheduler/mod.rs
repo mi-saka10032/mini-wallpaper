@@ -47,7 +47,10 @@ pub use super::tasks::TaskSpawner;
 pub struct Scheduler {
     /// Tauri 应用句柄（注入给 TaskSpawner）
     pub(super) app: tauri::AppHandle,
-    /// key -> JoinHandle 映射
+    /// key -> JoinHandle 映射，key 是稳定标识（如 `carousel:<monitor_id>` / `fullscreen_detector`）。
+    ///
+    /// 这张表本身就是「任务是否在跑」的唯一事实来源：同 key 再 spawn 会先 abort 旧任务，
+    /// 因此注册/停止/重启都按 key 幂等处理，不需要额外的 running 标志位。
     pub(super) tasks: HashMap<String, JoinHandle<()>>,
 }
 

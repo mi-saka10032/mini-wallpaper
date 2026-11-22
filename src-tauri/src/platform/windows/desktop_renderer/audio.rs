@@ -46,26 +46,41 @@ const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
 const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
     GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
 
+// 音频是视频的旁挂增强：位置只每 5s 低频校准一次（超过 100ms 才 seek），不做逐帧同步；
+// ring 设上限防止解码快于播放时无限堆积；WASAPI 请求 200ms 缓冲。
 const DRIFT_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const DRIFT_THRESHOLD: Duration = Duration::from_millis(100);
 const MAX_RING_BYTES: usize = 1 << 20;
 const AUDIO_BUFFER_DURATION_HNS: i64 = 2_000_000;
 
+/// renderer → 音频线程的命令。COM / SourceReader / WASAPI 都活在音频线程内，
+/// 命令在其主循环里串行消费，渲染侧不直接触碰这些对象。
 enum AudioCommand {
+    /// 暂停：记录当前位置、停 WASAPI、清空 ring。
     Pause,
+    /// 从 pause_position 恢复播放。
     Play,
+    /// 跳转到指定媒体时间并清空 ring（reset / 漂移校正）。
     Seek(Duration),
+    /// 音量 0..100，由 ISimpleAudioVolume 应用。
     SetVolume(u32),
+    /// 停 WASAPI 并退出音频线程。
     Shutdown,
 }
 
 /// 只向 renderer 暴露控制面；COM / SourceReader / WASAPI 全部活在自己的线程内。
 pub struct AudioPlayback {
     tx: Sender<AudioCommand>,
+    /// 音频线程句柄；Drop 时先发 Shutdown 再 join。
     thread: Option<JoinHandle<()>>,
+    /// 音频线程写入的当前位置（100ns），renderer 只读，仅用于低频漂移校准。
     position: Arc<AtomicU64>,
+    /// 目标音量 0..100；主线程先 swap 去重，变化时才发命令。
     volume: Arc<AtomicU32>,
+    /// 初始为 true：控制面与音频线程都必须以“暂停”启动，
+    /// 否则 open() 后会立即出声，而后续 set_paused(true) 因状态相同不会发 Pause。
     paused: Arc<AtomicBool>,
+    /// 上次漂移校准时刻，用于把校准限制为每 5s 一次。
     last_drift_check: Instant,
 }
 
@@ -73,8 +88,10 @@ impl AudioPlayback {
     /// 打开音频流并默认暂停在 0。无音轨 / 打开失败只返回 None，视频继续播放。
     pub fn open(path: &Path, volume: u32) -> Option<Self> {
         let path = path.to_path_buf();
+        // 100ns 原子位置，初始为 0；音频线程写，renderer 每 5s 只读校准一次。
         let position = Arc::new(AtomicU64::new(0));
         let volume_state = Arc::new(AtomicU32::new(volume.min(100)));
+        // 控制面默认暂停；音频线程同样以 paused 启动（见 audio_loop），两者必须一致。
         let paused = Arc::new(AtomicBool::new(true));
         let (tx, rx) = mpsc::channel();
 
@@ -102,6 +119,7 @@ impl AudioPlayback {
         })
     }
 
+    /// 音量 0..100；值未变化时跳过命令，避免频繁调用 SetMasterVolume。
     pub fn set_volume(&mut self, volume: u32) {
         let volume = volume.min(100);
         if self.volume.swap(volume, Ordering::Relaxed) == volume {
@@ -155,6 +173,7 @@ impl AudioPlayback {
     }
 }
 
+/// 销毁时通知音频线程退出并等待 join，保证 COM / WASAPI 在线程内按序释放。
 impl Drop for AudioPlayback {
     fn drop(&mut self) {
         let _ = self.tx.send(AudioCommand::Shutdown);
@@ -164,11 +183,14 @@ impl Drop for AudioPlayback {
     }
 }
 
+/// 保证 COM 初始化与反初始化成对。RPC_E_CHANGED_MODE 表示线程已被别处初始化，
+/// 此时本作用域不负责 CoUninitialize，避免误释放别人的 COM 状态。
 struct AudioComScope {
     initialized: bool,
 }
 
 impl AudioComScope {
+    /// 以多线程单元（MTA）初始化 COM；已被其它模式初始化时静默降级（initialized=false）。
     fn init() -> Self {
         unsafe {
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -188,6 +210,8 @@ impl Drop for AudioComScope {
     }
 }
 
+/// 音频线程主循环：独占 COM / SourceReader / WASAPI，串行处理控制命令与 PCM 搬运。
+/// paused 的初值约束见下方 ring 初始化处的注释。
 fn audio_loop(
     path: PathBuf,
     rx: Receiver<AudioCommand>,
@@ -207,8 +231,10 @@ fn audio_loop(
     log::info!("[Audio] 音频 PCM 格式协商完成");
     // 控制面 AudioPlayback.paused 初始为 true；audio 线程必须也以 paused 启动，
     // 否则新视频在 open() 后就已经出声，而后续 set_audio_paused(true) 因状态相同不会发 Pause。
+    // ring 暂存解码 PCM，由 pump_audio_sample 写入、fill_render_buffer 消费。
     let mut ring: VecDeque<u8> = VecDeque::new();
     let mut paused = true;
+    // 暂停时冻结的媒体位置，恢复播放时从这里 seek，避免暂停期间丢进度。
     let mut pause_position = Duration::ZERO;
 
     loop {
@@ -216,6 +242,7 @@ fn audio_loop(
             match command {
                 AudioCommand::Pause => {
                     if !paused {
+                        // 冻结当前位置；停 WASAPI 并丢弃 ring，避免恢复后旧数据爆音。
                         pause_position = Duration::from_nanos(position.load(Ordering::Relaxed));
                         unsafe {
                             wasapi.client.Stop()?;
@@ -227,6 +254,7 @@ fn audio_loop(
                 }
                 AudioCommand::Play => {
                     if paused {
+                        // 恢复：先 seek 回暂停点并清空 ring，再重启 WASAPI。
                         seek_audio(&reader, pause_position, position, &mut ring)?;
                         unsafe { wasapi.client.Start()? };
                         paused = false;
@@ -247,10 +275,13 @@ fn audio_loop(
         }
 
         if paused {
+            // 暂停时不搬运数据，只低频检查命令队列。
             thread::sleep(Duration::from_millis(10));
             continue;
         }
 
+        // 先把 ring 里的数据喂给 WASAPI，再拉一帧 PCM 补充；
+        // ring 满则说明解码快于播放，退避等待，避免无界增长。
         fill_render_buffer(&wasapi, &mut ring)?;
         if ring.len() < MAX_RING_BYTES {
             let sample_duration = pump_audio_sample(&reader, &mut ring, position)?;
@@ -261,6 +292,8 @@ fn audio_loop(
     }
 }
 
+/// 打开音频 SourceReader 并只启用第一路音频流。无音轨时 SetStreamSelection 失败，
+/// 上层据此静音降级，不影响视频播放。
 fn open_audio_reader(path: &Path) -> Result<IMFSourceReader> {
     let wide: Vec<u16> = path
         .as_os_str()
@@ -293,6 +326,7 @@ fn configure_audio_format(
     ieee_float: bool,
 ) -> Result<()> {
     let output: IMFMediaType = unsafe { MFCreateMediaType() }?;
+    // float 设备请求 Float，否则请求 PCM；采样率 / 声道 / 位深全部对齐 WASAPI mix format。
     let subtype = if ieee_float {
         MFAudioFormat_Float
     } else {
@@ -306,6 +340,7 @@ fn configure_audio_format(
         output.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, format.wBitsPerSample as u32)?;
         output.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, format.nBlockAlign as u32)?;
         output.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, format.nAvgBytesPerSec)?;
+        // 关键：输出类型必须与 WASAPI mix format 完全一致，否则 IAudioClient 不接受该格式。
         reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, None, &output)?;
     }
     let w_format_tag = format.wFormatTag;
@@ -325,17 +360,25 @@ fn configure_audio_format(
     Ok(())
 }
 
+/// WASAPI shared-mode 输出及其 mix format 信息；ieee_float 决定 SourceReader
+/// 请求 Float 还是 PCM。仅存在于音频线程内。
 struct WasapiOutput {
     client: IAudioClient,
     render: IAudioRenderClient,
     volume: ISimpleAudioVolume,
+    /// 引擎一次可提交的帧数，fill_render_buffer 据此计算可写字节。
     buffer_frames: usize,
+    /// 每帧字节数，用于把 ring 的字节数向下对齐到整帧。
     block_align: usize,
+    /// 保留完整 mix format（含 EXTENSIBLE 扩展），供 PCM 协商时填写。
     format: WAVEFORMATEX,
     ieee_float: bool,
 }
 
 impl WasapiOutput {
+    /// 以 shared-mode 初始化默认渲染设备。必须把 GetMixFormat 的完整结构保留到
+    /// Initialize 之后（含 EXTENSIBLE 扩展），并从 SubFormat 判断是否 float，
+    /// 否则在 float / 多声道设备上会得到 E_INVALIDARG。
     fn open(initial_volume: u32) -> Result<Self> {
         unsafe {
             let enumerator: IMMDeviceEnumerator =
@@ -387,6 +430,7 @@ impl WasapiOutput {
         }
     }
 
+    /// 0..100 映射为 0.0..1.0，显式取消静音后再设置主音量。
     fn set_volume(&self, value: u32) -> Result<()> {
         let level = value.min(100) as f32 / 100.0;
         unsafe {
@@ -401,11 +445,14 @@ impl WasapiOutput {
     }
 }
 
+/// 把 ring 中的数据写入 WASAPI 渲染缓冲：只提交引擎当前可容纳的整帧字节，
+/// 不足一帧则等待下次，避免破坏帧边界产生杂音。
 fn fill_render_buffer(output: &WasapiOutput, ring: &mut VecDeque<u8>) -> Result<()> {
     let padding = unsafe { output.client.GetCurrentPadding()? } as usize;
     if padding >= output.buffer_frames {
         return Ok(());
     }
+    // padding 是引擎尚未播放的帧数；剩余空间按整帧对齐后再写。
     let available_bytes = (output.buffer_frames - padding) * output.block_align;
     let mut bytes = ring.len().min(available_bytes);
     bytes -= bytes % output.block_align;
@@ -415,6 +462,7 @@ fn fill_render_buffer(output: &WasapiOutput, ring: &mut VecDeque<u8>) -> Result<
 
     let frames = (bytes / output.block_align) as u32;
     let target = unsafe { output.render.GetBuffer(frames)? };
+    // VecDeque 可能分两段存储，先合并成连续切片再一次拷入。
     let contiguous = ring.make_contiguous();
     unsafe { std::ptr::copy_nonoverlapping(contiguous.as_ptr(), target, bytes) };
     ring.drain(..bytes);
@@ -422,6 +470,8 @@ fn fill_render_buffer(output: &WasapiOutput, ring: &mut VecDeque<u8>) -> Result<
     Ok(())
 }
 
+/// 从 SourceReader 拉一帧 PCM 追加到 ring，并把 position 更新为 sample 时间戳（100ns）。
+/// EOF 时回绕到 0；返回该帧真实时长，供主循环决定睡眠节奏。
 fn pump_audio_sample(
     reader: &IMFSourceReader,
     ring: &mut VecDeque<u8>,
@@ -442,6 +492,7 @@ fn pump_audio_sample(
     }
 
     if (flags as i32) & MF_SOURCE_READERF_ENDOFSTREAM.0 != 0 || sample.is_none() {
+        // 音频比视频短时循环回退到 0，与视频的循环对齐。
         seek_zero(reader, position, ring)?;
         return Ok(Duration::from_millis(10));
     }
@@ -473,10 +524,13 @@ fn pump_audio_sample(
     unsafe { buffer.Unlock()? };
     copied?;
 
+    // 位置以 sample 时间戳为准，供 renderer 每 5s 校准；seek 后由 seek_audio 同步更新。
     position.store(timestamp.max(0) as u64, Ordering::Relaxed);
     Ok(hns_to_duration(duration))
 }
 
+/// Flush 解码器并跳转到 target；同时清空 ring 与重置 position，
+/// 避免跳转后旧缓冲数据继续播放。
 fn seek_audio(
     reader: &IMFSourceReader,
     target: Duration,
@@ -492,6 +546,7 @@ fn seek_audio(
     Ok(())
 }
 
+/// seek 到 0，用于音频循环回退 / reset。
 fn seek_zero(
     reader: &IMFSourceReader,
     position: &AtomicU64,
@@ -500,6 +555,7 @@ fn seek_zero(
     seek_audio(reader, Duration::ZERO, position, ring)
 }
 
+/// 构造 VT_I8 的 PROPVARIANT，值为 target 对应的 100ns。
 fn seek_position(target: Duration) -> PROPVARIANT {
     PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
@@ -516,10 +572,12 @@ fn seek_position(target: Duration) -> PROPVARIANT {
     }
 }
 
+/// Duration 转 100ns，饱和到 i64 上限再转换。
 fn duration_to_hns(value: Duration) -> i64 {
     (value.as_nanos().min(i64::MAX as u128 / 100) / 100) as i64
 }
 
+/// 100ns（MF 时间单位）转 Duration，饱和乘法防溢出。
 fn hns_to_duration(value: u64) -> Duration {
     Duration::from_nanos((value as u128).saturating_mul(100).min(u64::MAX as u128) as u64)
 }

@@ -48,8 +48,14 @@ use crate::platform::wallpaper_renderer::{
 use crate::services::{app_setting_service, monitor_config_service, wallpaper_service};
 
 /// 批量通知指令，供数据库阶段收集、短锁内一次性派发
+///
+/// 这样把「改 DB / 管定时器」与「路由到 renderer」拆成两个阶段：
+/// 前者不持协调器锁，后者才短暂持锁，避免长事务期间阻塞其它渲染操作。
 pub enum RenderNotification {
+    /// (monitor_id, wallpaper_id, is_sync)
+    /// `is_sync` 决定是否整组下发（mirror/extend），不是「是否同步等待」。
     Updated(String, i32, bool),
+    /// (monitor_id, is_sync)：清空壁纸，同样按 is_sync 决定作用范围。
     Cleared(String, bool),
 }
 
@@ -62,20 +68,32 @@ pub struct RenderCoordinator {
     app_handle: AppHandle,
     window_manager: Arc<Mutex<WallpaperWindowManager>>,
     renderer: DesktopRenderer,
+    /// backend 路由策略（Auto / NativeOnly），启动时由构建配置与环境变量决定。
+    /// 它决定「原生不支持的格式」是回退 WebView 还是直接报错。
     selection: BackendSelection,
     /// monitor_id -> 当前 active backend
+    ///
+    /// 是路由的依据：换图、fitMode、清屏都按这里记录的值选择 Native 命令或 WebView 事件。
+    /// apply_backend 会就地改写它，所以跨 backend 判断必须提前快照。
     backends: HashMap<String, RenderBackend>,
     /// monitor_id -> 当前正在显示的壁纸 id；用于判定换图是否触发 crossfade。
     /// 与 renderer 侧的 transition 队列解耦：这里只决定要不要 fade，不跟踪 fade 进度。
     wallpaper_ids: HashMap<String, i32>,
     /// monitor_id -> 显示器几何；extend 的 union 由整张表算出
+    ///
+    /// 即使某屏没有壁纸也要登记，否则虚拟桌面画布会缺一块。
     rects: HashMap<String, MonitorRect>,
+    /// 当前显示模式，决定 resolve_targets 的作用范围与整组视口是否启用。
     display_mode: DisplayMode,
     /// 降级提示只发一次，恢复为全 Native 时重置
     degraded_logged: bool,
 }
 
 impl RenderCoordinator {
+    /// 构造协调器：启动 renderer 线程并初始化默认 backend 策略与空状态表。
+    ///
+    /// 此处不访问 DB；display_mode / 音量的首次同步由 AppContext::new 显式调用，
+    /// 避免在构造函数里做异步 I/O。renderer 线程启动失败则整个协调器创建失败。
     pub fn new(
         db: DatabaseConnection,
         app_handle: AppHandle,
@@ -115,12 +133,18 @@ impl RenderCoordinator {
         self.set_volume(volume);
     }
 
+    /// 只同步 Native 侧音量；WebView 页面通过 setting_effects 广播的
+    /// VolumeChangedPayload 自行更新，两条路径互补，缺一条就会有一侧音量不跟随。
     pub fn set_volume(&self, volume: u32) {
         if let Err(err) = self.renderer.set_volume(volume) {
             log::warn!("[RenderCoordinator] 同步 Native 音量失败: {:#}", err);
         }
     }
 
+    /// 设置显示模式并触发整组视口重算。
+    ///
+    /// 同值直接返回，避免重复下发几何；切换时重置 `degraded_logged`，
+    /// 让新模式下如果再次出现混合 backend 仍能收到一次降级提示。
     pub fn set_display_mode(&mut self, mode: DisplayMode) {
         if self.display_mode == mode {
             return;
@@ -256,6 +280,8 @@ impl RenderCoordinator {
 
         // apply_backend 会改写 backends；crossfade 必须基于切换「之前」的状态判断，
         // 否则 Native→WebView→Native 的回切会被误判成 Native→Native。
+        // 快照内容即每屏的 (previous_backend, previous_wid)：
+        // 后续 apply_backend 改写 backends 后，只有这份旧值能回答「切换前是什么」。
         let previous: HashMap<String, (Option<RenderBackend>, Option<i32>)> = targets
             .iter()
             .map(|mid| {
@@ -461,6 +487,7 @@ impl RenderCoordinator {
         ids
     }
 
+    /// 当前所有 Native 屏的 id；同步模式下用它把同一份解码帧一次下发整组。
     fn native_targets(&self) -> Vec<String> {
         self.backends
             .iter()
@@ -563,6 +590,8 @@ impl RenderCoordinator {
         })
     }
 
+    /// Native 侧没有 WebView 的 loadConfig 重读机制，fitMode 必须在下发壁纸前查库。
+    /// 缺配置时回退 Cover，与 WebView 侧的默认行为保持一致。
     async fn resolve_fit_mode(&self, monitor_id: &str) -> FitMode {
         match monitor_config_service::get_by_monitor_id(&self.db, monitor_id).await {
             Ok(Some(config)) => FitMode::parse(&config.fit_mode).unwrap_or(FitMode::Cover),
@@ -571,6 +600,10 @@ impl RenderCoordinator {
     }
 
     /// 只负责 backend 切换（销毁旧目标 / 建新目标），壁纸内容由调用方组级下发。
+    ///
+    /// 调用顺序很关键：必须先切 backend、再下发壁纸内容。因为本函数会改写
+    /// `backends`，所以「切换前状态」必须由调用方提前快照，否则 crossfade 判定失真。
+    /// 同 backend 时不重建目标，避免每次换图都销毁 surface / WebView 窗口。
     async fn apply_backend(&mut self, monitor_id: &str, descriptor: &Descriptor) -> Result<()> {
         let previous = self.backends.get(monitor_id).copied();
 
@@ -620,6 +653,10 @@ impl RenderCoordinator {
         Ok(())
     }
 
+    /// renderer-error 的统一出口。
+    ///
+    /// Native 命令的 oneshot 回执把渲染线程失败回传为 `Err`，在这里转成前端事件；
+    /// 事件发送本身失败只记日志——渲染链路已失败，不应因通知失败再改变控制流。
     fn report_error(
         &self,
         monitor_id: Option<&str>,

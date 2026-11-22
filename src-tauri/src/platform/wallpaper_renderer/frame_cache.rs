@@ -50,15 +50,21 @@ pub fn cache_key(path: &Path) -> Option<CacheKey> {
     })
 }
 
+/// 帧序列缓存，泛型 `T` 由平台侧提供（Windows 为持有 D3D11 SRV 的 `SharedFrames`）。
+/// 三个核心要素：`CacheKey` 判失效、`order` 维护 LRU、`bytes`/`max_bytes` 控制显存预算。
+/// 只存在于渲染线程且单线程访问，故无需加锁。
 pub struct FrameCache<T: ByteSize> {
     entries: HashMap<CacheKey, Arc<T>>,
     /// 最近使用在队尾；淘汰从队首开始
     order: VecDeque<CacheKey>,
+    /// 当前已记账的字节数（不含被 surface 单独持有、已淘汰出缓存的份）。
     bytes: usize,
+    /// 缓存的字节预算上限，来自 `DEFAULT_MAX_BYTES` 或自定义值。
     max_bytes: usize,
 }
 
 impl<T: ByteSize> FrameCache<T> {
+    /// 以显存字节预算创建缓存；预算为 0 时所有条目都会因超预算而不入缓存。
     pub fn new(max_bytes: usize) -> Self {
         Self {
             entries: HashMap::new(),
@@ -68,6 +74,7 @@ impl<T: ByteSize> FrameCache<T> {
         }
     }
 
+    /// 使用默认预算创建缓存，便于各平台统一采用同一套显存上限。
     pub fn with_default_budget() -> Self {
         Self::new(DEFAULT_MAX_BYTES)
     }
@@ -96,6 +103,7 @@ impl<T: ByteSize> FrameCache<T> {
         Ok(frames)
     }
 
+    /// 把命中的 key 移到队尾，标记为最近使用，使其在预算淘汰中最后被清除。
     fn touch(&mut self, key: &CacheKey) {
         if let Some(pos) = self.order.iter().position(|item| item == key) {
             self.order.remove(pos);

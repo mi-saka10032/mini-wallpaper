@@ -1,3 +1,8 @@
+//! 壁纸窗口管理命令的请求 DTO
+//!
+//! 字段对应前端传入的显示器几何信息。渲染路由收口后，窗口 backend 的选择
+//! 完全由后端协调器按壁纸 capability 决定，DTO 只保留 `extra_query` 做前端兼容。
+
 use garde::Validate;
 use serde::Deserialize;
 

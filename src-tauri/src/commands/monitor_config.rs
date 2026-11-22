@@ -1,3 +1,9 @@
+//! 显示器配置命令
+//!
+//! 把前端的配置增删改请求翻译成两件事：轮播定时器的启停，以及样式 / 壁纸
+//! 变更对渲染目标的更新。渲染侧统一经 `render_coordinator` 路由到 Native
+//! 渲染目标或 WebView 窗口事件，命令层只描述「改了什么」，不感知 backend。
+
 use std::sync::Arc;
 
 use tauri::State;
@@ -66,6 +72,8 @@ pub async fn upsert_monitor_config(
     sched.manage_carousel_timer(&config, need_restart).await;
 
     // ===== 样式 / 壁纸变更通知（按 backend 路由） =====
+    // 先向 Scheduler 取 is_sync（display_mode 决定），再释放 scheduler 锁——
+    // 避免与渲染协调器持锁形成交叉等待。
     let is_sync = sched.resolve_is_sync_mode().await;
     drop(sched);
 

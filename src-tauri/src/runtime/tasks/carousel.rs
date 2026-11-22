@@ -31,10 +31,13 @@ pub fn carousel_key(monitor_id: &str) -> String {
 /// 仅持有纯业务参数 `monitor_id`，`spawn` 接收调度器注入的 `AppHandle`，
 /// 按需获取 db / window_manager / emit 事件等共享资源。
 pub struct CarouselTask {
+    /// 驱动哪块显示器的轮播；同时是 scheduler key 的一部分（carousel:<monitor_id>）。
     pub monitor_id: String,
 }
 
 impl TaskSpawner for CarouselTask {
+    /// 每块显示器一个独立任务。config 与 play_mode 每次 tick 重读，
+    /// 因此设置/删除带来的变化无需重启定时器即可生效。
     fn spawn(self, app: &tauri::AppHandle) -> JoinHandle<()> {
         let app = app.clone();
         let mid = self.monitor_id;
@@ -90,6 +93,8 @@ impl TaskSpawner for CarouselTask {
                         }
                     };
 
+                // 不用启动时缓存的值：快捷键切图、删除联动都会改 DB，
+                // 必须按最新 wallpaper_id / play_mode 计算下一张才不会回退到旧图。
                 let current_wid = current_config.wallpaper_id;
                 let play_mode = current_config.play_mode;
 
@@ -114,6 +119,8 @@ impl TaskSpawner for CarouselTask {
                 .await
                 {
                     Ok(Some(new_wid)) => {
+                        // 同步模式下既要改所有从屏的 DB，也要让协调器覆盖整组下发；
+                        // 两者靠同一个 is_sync 保持一致。
                         let is_sync = display_mode == "mirror" || display_mode == "extend";
 
                         // 1. 更新当前 monitor 的 DB 记录

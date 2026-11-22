@@ -57,6 +57,9 @@ impl EventPayload for WallpaperChangedPayload {
 }
 
 /// 缩略图变更事件（通知主窗口更新缩略图）
+///
+/// 与 backend 无关：无论壁纸由 Native 渲染目标还是 WebView 窗口显示，换图后
+/// 都要通知主窗口刷新，否则收藏 / 设置页会显示上一张的缩略图。
 #[derive(Clone, Serialize)]
 pub struct ThumbnailChangedPayload {
     pub monitor_id: String,
@@ -187,12 +190,24 @@ impl EventPayload for FavoritesChangedPayload {
     const EVENT_NAME: &'static str = "favorites-changed";
 }
 
-/// 壁纸渲染器错误事件（通知主窗口显示原生渲染链路的错误）
+/// 壁纸渲染器错误 / 降级提示事件（发往主窗口）
+///
+/// 这是「发后不理」的单向通知：后端只负责 `typed_emit`，不等待前端确认
+/// （无 ack 回执），同一错误可能重复上报，前端仅用 toast 即时呈现，不据此
+/// 驱动业务状态。注意 `code` 不是枚举而是稳定字符串：渲染错误取
+/// `RendererErrorCode::as_str()`（如 UnsupportedFormat / DecodeFailed），
+/// 而 `ExtendDegraded` 是 extend 组降级的专用提示码，前端据此显示 warning
+/// 而非 error。`monitor_id` / `wallpaper_id` 用 Option 是因为降级等事件是
+/// 全局性的，不存在明确的出错显示器或壁纸。
 #[derive(Clone, Serialize)]
 pub struct RendererErrorPayload {
+    /// 出错显示器；全局性事件（如 extend 降级）为 None
     pub monitor_id: Option<String>,
+    /// 出错壁纸；无法定位到具体壁纸时为 None
     pub wallpaper_id: Option<i32>,
+    /// 稳定错误码字符串，供前端区分能力边界 / 运行时故障 / 降级
     pub code: String,
+    /// 人类可读信息，供日志与 toast 展示
     pub message: String,
 }
 

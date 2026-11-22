@@ -7,6 +7,7 @@ use anyhow::Result;
 mod contracts;
 pub mod decoder;
 pub mod fit;
+pub mod frame_cache;
 pub mod geometry;
 mod selection;
 

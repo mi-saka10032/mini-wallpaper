@@ -38,15 +38,25 @@ pub struct CacheKey {
     path: PathBuf,
     len: u64,
     modified: Option<SystemTime>,
+    /// 解码目标尺寸。同一张图在不同屏配置（independent 单屏 / extend union）下
+    /// 会解出不同分辨率的纹理，必须作为 key 的一部分，否则切换模式会命中错尺寸帧。
+    /// None 用于不感知目标尺寸的调用方（如跨平台单测）。
+    target: Option<(u32, u32)>,
 }
 
 /// 读取文件元数据生成 key；文件不存在 / 无权限时返回 None，调用方照常解码但不缓存。
 pub fn cache_key(path: &Path) -> Option<CacheKey> {
+    cache_key_with_target(path, None)
+}
+
+/// 带解码目标尺寸的 key：同一文件在不同目标分辨率下是不同的纹理。
+pub fn cache_key_with_target(path: &Path, target: Option<(u32, u32)>) -> Option<CacheKey> {
     let metadata = std::fs::metadata(path).ok()?;
     Some(CacheKey {
         path: path.to_path_buf(),
         len: metadata.len(),
         modified: metadata.modified().ok(),
+        target,
     })
 }
 
@@ -222,6 +232,7 @@ mod tests {
             path: PathBuf::from(name),
             len: 0,
             modified: None,
+            target: None,
         }
     }
 

@@ -42,9 +42,9 @@ use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::wallpaper;
 use crate::events::{RendererErrorPayload, ThumbnailChangedPayload, TypedEmit};
 use crate::platform::wallpaper_renderer::{
-    default_backend_selection, group_viewports, resolve_backend, BackendSelection, DesktopRenderer,
-    DisplayMode, ExtendViewport, FitMode, MonitorRect, RenderBackend, RendererError,
-    RendererErrorCode, WallpaperKind,
+    default_backend_selection, group_viewports, resolve_backend, union_rect, BackendSelection,
+    DesktopRenderer, DisplayMode, ExtendViewport, FitMode, MonitorRect, RenderBackend,
+    RendererError, RendererErrorCode, WallpaperKind,
 };
 use crate::services::{app_setting_service, monitor_config_service, wallpaper_service};
 
@@ -222,6 +222,7 @@ impl RenderCoordinator {
             } else {
                 self.native_targets()
             };
+            let (tw, th) = self.decode_target_size(&mids);
             if let Err(e) = self
                 .renderer
                 .set_wallpaper(
@@ -229,6 +230,8 @@ impl RenderCoordinator {
                     descriptor.file_path.clone(),
                     descriptor.kind,
                     descriptor.fit_mode,
+                    tw,
+                    th,
                     false, // 首帧硬切：没有 from 可淡出
                 )
                 .await
@@ -338,6 +341,7 @@ impl RenderCoordinator {
                     && old_wid.is_some()
                     && old_wid != Some(wallpaper_id)
             });
+            let (tw, th) = self.decode_target_size(&native_mids);
             if let Err(e) = self
                 .renderer
                 .set_wallpaper(
@@ -345,6 +349,8 @@ impl RenderCoordinator {
                     descriptor.file_path.clone(),
                     descriptor.kind,
                     descriptor.fit_mode,
+                    tw,
+                    th,
                     crossfade,
                 )
                 .await
@@ -508,6 +514,31 @@ impl RenderCoordinator {
             .filter(|(_, backend)| **backend == RenderBackend::Native)
             .map(|(id, _)| id.clone())
             .collect()
+    }
+
+    /// 计算本次解码的目标尺寸：extend 生效时整组共用一张拉伸到 union 的图，
+    /// 目标即 union 宽高；independent / mirror / extend 降级时按单屏最大宽高。
+    /// 该值交给 renderer 做 DCT 缩放与 cache key，必须与 draw_media 的采样目标一致。
+    fn decode_target_size(&self, monitor_ids: &[String]) -> (u32, u32) {
+        let rects: Vec<MonitorRect> = monitor_ids
+            .iter()
+            .filter_map(|mid| self.rects.get(mid).copied())
+            .collect();
+        if rects.is_empty() {
+            return (0, 0);
+        }
+        let all_native = !self.backends.is_empty()
+            && monitor_ids
+                .iter()
+                .all(|mid| self.backends.get(mid) == Some(&RenderBackend::Native));
+        if self.display_mode == DisplayMode::Extend && all_native {
+            if let Some(union) = union_rect(&rects) {
+                return (union.width as u32, union.height as u32);
+            }
+        }
+        let width = rects.iter().map(|r| r.width).max().unwrap_or(0) as u32;
+        let height = rects.iter().map(|r| r.height).max().unwrap_or(0) as u32;
+        (width, height)
     }
 
     /// 重算整组 extend 视口。任何一屏几何 / backend / display_mode 变化都必须调用，

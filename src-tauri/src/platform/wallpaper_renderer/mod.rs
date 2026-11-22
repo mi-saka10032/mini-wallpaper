@@ -60,6 +60,8 @@ impl DesktopRenderer {
         _path: PathBuf,
         _kind: WallpaperKind,
         _fit_mode: FitMode,
+        _target_width: u32,
+        _target_height: u32,
         _crossfade: bool,
     ) -> Result<()> {
         Ok(())

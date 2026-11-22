@@ -26,11 +26,11 @@ use windows::Win32::Media::Audio::{
     ISimpleAudioVolume, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, WAVEFORMATEX,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFMediaType, IMFSample, IMFSourceReader, MFAudioFormat_PCM, MFCreateAttributes,
-    MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Audio,
-    MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
-    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
+    IMFAttributes, IMFMediaType, IMFSample, IMFSourceReader, MFAudioFormat_Float,
+    MFAudioFormat_PCM, MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL,
+    MFMediaType_Audio, MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE,
+    MF_MT_AUDIO_BLOCK_ALIGNMENT, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
+    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ALL_STREAMS,
     MF_SOURCE_READER_FIRST_AUDIO_STREAM,
 };
 use windows::Win32::System::Com::{
@@ -39,6 +39,12 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Variant::VT_I8;
+
+// 只依赖 windows-core，不需要启用 KernelStreaming / Multimedia 模块。
+const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
+const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
+    GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
 
 const DRIFT_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const DRIFT_THRESHOLD: Duration = Duration::from_millis(100);
@@ -190,10 +196,17 @@ fn audio_loop(
 ) -> Result<()> {
     let _com = AudioComScope::init();
 
-    let reader = open_audio_reader(&path)?;
-    let wasapi = WasapiOutput::open(volume.load(Ordering::Relaxed))?;
-    configure_audio_format(&reader, &wasapi.format)?;
+    let reader = open_audio_reader(&path)
+        .with_context(|| format!("打开音频 SourceReader 失败 file={}", path.display()))?;
+    log::info!("[Audio] 音频 SourceReader 已打开 file={}", path.display());
+    let wasapi =
+        WasapiOutput::open(volume.load(Ordering::Relaxed)).context("WASAPI 输出初始化失败")?;
+    log::info!("[Audio] WASAPI 输出已初始化");
+    configure_audio_format(&reader, &wasapi.format, wasapi.ieee_float)
+        .context("音频 PCM 格式协商失败")?;
+    log::info!("[Audio] 音频 PCM 格式协商完成");
     unsafe { wasapi.client.Start()? };
+    log::info!("[Audio] 音频输出已启动 file={}", path.display());
 
     let mut ring: VecDeque<u8> = VecDeque::new();
     let mut paused = false;
@@ -275,11 +288,20 @@ fn open_audio_reader(path: &Path) -> Result<IMFSourceReader> {
 }
 
 /// 用 WASAPI 当前 mix format 反推 PCM 请求，避免采样率 / 声道数不一致导致初始化失败。
-fn configure_audio_format(reader: &IMFSourceReader, format: &WAVEFORMATEX) -> Result<()> {
+fn configure_audio_format(
+    reader: &IMFSourceReader,
+    format: &WAVEFORMATEX,
+    ieee_float: bool,
+) -> Result<()> {
     let output: IMFMediaType = unsafe { MFCreateMediaType() }?;
+    let subtype = if ieee_float {
+        MFAudioFormat_Float
+    } else {
+        MFAudioFormat_PCM
+    };
     unsafe {
         output.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-        output.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
+        output.SetGUID(&MF_MT_SUBTYPE, &subtype)?;
         output.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, format.nChannels as u32)?;
         output.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, format.nSamplesPerSec)?;
         output.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, format.wBitsPerSample as u32)?;
@@ -287,6 +309,20 @@ fn configure_audio_format(reader: &IMFSourceReader, format: &WAVEFORMATEX) -> Re
         output.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, format.nAvgBytesPerSec)?;
         reader.SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32, None, &output)?;
     }
+    let w_format_tag = format.wFormatTag;
+    let channels = format.nChannels;
+    let sample_rate = format.nSamplesPerSec;
+    let bits = format.wBitsPerSample;
+    let block_align = format.nBlockAlign;
+    log::info!(
+        "[Audio] 输出格式协商完成 tag={} float={} channels={} rate={} bits={} block_align={}",
+        w_format_tag,
+        ieee_float,
+        channels,
+        sample_rate,
+        bits,
+        block_align
+    );
     Ok(())
 }
 
@@ -297,6 +333,7 @@ struct WasapiOutput {
     buffer_frames: usize,
     block_align: usize,
     format: WAVEFORMATEX,
+    ieee_float: bool,
 }
 
 impl WasapiOutput {
@@ -308,17 +345,31 @@ impl WasapiOutput {
             let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
             let mix = client.GetMixFormat()?;
+            // GetMixFormat 可能返回 WAVEFORMATEXTENSIBLE。必须把原始完整结构保留到
+            // Initialize 之后，不能只复制 WAVEFORMATEX 后立刻释放，否则 cbSize 扩展丢失，
+            // 在 float / 多声道设备上会得到 E_INVALIDARG。
             let format = *mix;
-            CoTaskMemFree(Some(mix as *const c_void));
-
-            client.Initialize(
+            let w_format_tag = format.wFormatTag;
+            let ieee_float = if w_format_tag == WAVE_FORMAT_IEEE_FLOAT {
+                true
+            } else if w_format_tag == WAVE_FORMAT_EXTENSIBLE {
+                // WAVEFORMATEXTENSIBLE 是 packed(1)，SubFormat 从 WAVEFORMATEX(18 bytes)
+                // 之后的第 6 个 u16 + u32 + GUID 偏移读取，不能取 packed struct 字段引用。
+                let subformat_ptr = (mix as *const u8).add(18 + 2 + 4) as *const GUID;
+                std::ptr::read_unaligned(subformat_ptr) == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+            } else {
+                false
+            };
+            let init_result = client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 0,
                 AUDIO_BUFFER_DURATION_HNS,
                 0,
-                &format,
+                mix,
                 None,
-            )?;
+            );
+            CoTaskMemFree(Some(mix as *const c_void));
+            init_result?;
             let buffer_frames = client.GetBufferSize()? as usize;
             let render: IAudioRenderClient = client.GetService()?;
             let volume: ISimpleAudioVolume = client.GetService()?;
@@ -330,6 +381,7 @@ impl WasapiOutput {
                 buffer_frames,
                 block_align: format.nBlockAlign as usize,
                 format,
+                ieee_float,
             };
             output.set_volume(initial_volume)?;
             Ok(output)
@@ -338,8 +390,15 @@ impl WasapiOutput {
 
     fn set_volume(&self, value: u32) -> Result<()> {
         let level = value.min(100) as f32 / 100.0;
-        unsafe { self.volume.SetMasterVolume(level, std::ptr::null()) }
-            .context("设置 WASAPI 音量失败")
+        unsafe {
+            self.volume
+                .SetMute(false, std::ptr::null())
+                .context("取消 WASAPI 静音失败")?;
+            self.volume
+                .SetMasterVolume(level, std::ptr::null())
+                .context("设置 WASAPI 音量失败")?;
+        }
+        Ok(())
     }
 }
 
@@ -400,7 +459,9 @@ fn pump_audio_sample(
         if ptr.is_null() {
             return Err(anyhow!("音频 sample 缓冲区指针为空"));
         }
-        let len = max_len.max(current_len) as usize;
+        // IMFDXGIBuffer/IMFMediaBuffer::Lock 的 max_len 是缓冲区容量，current_len 才是本次
+        // sample 的有效字节数。取 max 会把旧数据或空闲容量写进 WASAPI ring buffer。
+        let len = current_len as usize;
         if len > 0 {
             ring.extend(
                 unsafe { std::slice::from_raw_parts(ptr, len) }

@@ -73,6 +73,7 @@ impl AppContext {
         {
             let mut coordinator = render_coordinator.lock().await;
             coordinator.refresh_display_mode().await;
+            coordinator.refresh_volume().await;
         }
         let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
 

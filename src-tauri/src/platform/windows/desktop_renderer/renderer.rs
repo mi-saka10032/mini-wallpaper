@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -79,6 +79,8 @@ enum RendererCommand {
         path: PathBuf,
         kind: WallpaperKind,
         fit_mode: FitMode,
+        /// Native↔Native 且 wid 变化才为 true；跨 backend / 首帧硬切。
+        crossfade: bool,
         ack: Option<Ack>,
     },
     /// 全组更新 extend 裁剪参数；None 表示该屏退回各自渲染（M4 语义 / D2 降级）。
@@ -143,6 +145,7 @@ impl DesktopRenderer {
         path: PathBuf,
         kind: WallpaperKind,
         fit_mode: FitMode,
+        crossfade: bool,
     ) -> Result<()> {
         let (ack, rx) = oneshot::channel();
         self.sender.send(RendererCommand::SetWallpaper {
@@ -150,6 +153,7 @@ impl DesktopRenderer {
             path,
             kind,
             fit_mode,
+            crossfade,
             ack: Some(ack),
         })?;
         rx.await
@@ -270,6 +274,7 @@ fn run(receiver: Receiver<RendererCommand>) {
                     path,
                     kind,
                     fit_mode,
+                    crossfade,
                     ack,
                 } => {
                     // 视频走流式：一次打开、组内共享一个 Arc；图片/GIF/WebP 走缓存。
@@ -290,16 +295,17 @@ fn run(receiver: Receiver<RendererCommand>) {
                     match result {
                         Ok(media) => {
                             let mut attached = false;
+                            // 组内 surface 共用同一个起点：extend 拼接时各屏 fade 必须
+                            // 同步推进，否则接缝处会出现明暗差。
+                            let now = Instant::now();
                             for monitor_id in &monitor_ids {
                                 if let Some(surface) = surfaces.get_mut(monitor_id) {
-                                    match &media {
-                                        WallpaperMedia::Frames(frames) => {
-                                            surface.set_frames(frames.clone(), fit_mode)
-                                        }
-                                        WallpaperMedia::Video(playback) => {
-                                            surface.set_video(playback.clone(), fit_mode)
-                                        }
-                                    }
+                                    surface.queue_wallpaper(
+                                        media.clone(),
+                                        fit_mode,
+                                        crossfade,
+                                        now,
+                                    );
                                     attached = true;
                                 } else {
                                     log::warn!("[Renderer] {} 组换图时原生表面不存在", monitor_id);
@@ -369,10 +375,29 @@ fn run(receiver: Receiver<RendererCommand>) {
 
         // 全屏暂停时跳过绘制，但保留 surface 与壁纸内容，恢复后无需重新解码
         if !paused {
+            let now = Instant::now();
             // 组级视频时钟推进：同一 Arc 只 advance 一次，避免每屏各推进一次导致快进。
-            advance_videos(&mut surfaces, Instant::now());
+            advance_videos(&mut surfaces, now);
+            let mut reset_seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
             for (monitor_id, surface) in surfaces.iter_mut() {
-                surface.render(monitor_id);
+                surface.render(monitor_id, now);
+                if surface.finish_transition(now) {
+                    // 刚提升为 wallpaper 的就是 fade 的 to。组内共享同一个播放状态，
+                    // 只能 reset 一次；否则多屏会重复 Flush / seek 同一个 SourceReader。
+                    if let Some(playback) = surface.video() {
+                        let ptr = Arc::as_ptr(playback);
+                        if reset_seen.insert(ptr) {
+                            if let Ok(mut guard) = playback.lock() {
+                                if let Err(err) = guard.reset_clock(now) {
+                                    log::error!(
+                                        "[Renderer] fade 结束后视频时钟重置失败: {:#}",
+                                        err
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -386,16 +411,26 @@ fn run(receiver: Receiver<RendererCommand>) {
 
 /// 推进整组视频时钟：按 Arc 指针去重，同一播放状态每帧只 advance 一次。
 /// 暂停状态由 renderer loop 的 `paused` 标志保证不会走到这里。
+/// fade 期间 from / to 都冻结，to 为视频时 fade 结束才由 finish_transition 重置时钟。
 fn advance_videos(surfaces: &mut HashMap<String, RenderSurface>, now: Instant) {
-    use std::collections::HashSet;
-    use std::sync::Arc;
+    // 先收集冻结集合：组内共享同一个 Arc，只要有一屏在 fade 就不能推进，
+    // 否则未同步的那一屏会把整个组的 from 视频偷偷往前推。
+    let mut frozen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
+    for surface in surfaces.values() {
+        if surface.fade_active_or_pending() {
+            if let Some(playback) = surface.video() {
+                frozen.insert(Arc::as_ptr(playback));
+            }
+        }
+    }
 
     let mut seen: HashSet<*const Mutex<VideoPlayback>> = HashSet::new();
     for surface in surfaces.values_mut() {
         let Some(playback) = surface.video() else {
             continue;
         };
-        if !seen.insert(Arc::as_ptr(playback)) {
+        let ptr = Arc::as_ptr(playback);
+        if frozen.contains(&ptr) || !seen.insert(ptr) {
             continue;
         }
         if let Ok(mut guard) = playback.lock() {

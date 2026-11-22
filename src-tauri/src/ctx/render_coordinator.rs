@@ -65,6 +65,9 @@ pub struct RenderCoordinator {
     selection: BackendSelection,
     /// monitor_id -> 当前 active backend
     backends: HashMap<String, RenderBackend>,
+    /// monitor_id -> 当前正在显示的壁纸 id；用于判定换图是否触发 crossfade。
+    /// 与 renderer 侧的 transition 队列解耦：这里只决定要不要 fade，不跟踪 fade 进度。
+    wallpaper_ids: HashMap<String, i32>,
     /// monitor_id -> 显示器几何；extend 的 union 由整张表算出
     rects: HashMap<String, MonitorRect>,
     display_mode: DisplayMode,
@@ -85,6 +88,7 @@ impl RenderCoordinator {
             renderer: DesktopRenderer::start()?,
             selection: default_backend_selection(),
             backends: HashMap::new(),
+            wallpaper_ids: HashMap::new(),
             rects: HashMap::new(),
             display_mode: DisplayMode::Independent,
             degraded_logged: false,
@@ -181,16 +185,20 @@ impl RenderCoordinator {
             if let Err(e) = self
                 .renderer
                 .set_wallpaper(
-                    mids,
+                    mids.clone(),
                     descriptor.file_path.clone(),
                     descriptor.kind,
                     descriptor.fit_mode,
+                    false, // 首帧硬切：没有 from 可淡出
                 )
                 .await
             {
                 let error = RendererError::new(RendererErrorCode::DecodeFailed, e.to_string());
                 self.report_error(Some(monitor_id), Some(wallpaper_id), &error);
                 return Err(error.into());
+            }
+            for mid in mids {
+                self.wallpaper_ids.insert(mid, wallpaper_id);
             }
         }
 
@@ -201,6 +209,7 @@ impl RenderCoordinator {
     /// 销毁显示器的渲染目标，按当前 backend 选择清理路径
     pub async fn destroy_target(&mut self, monitor_id: &str) {
         let backend = self.backends.remove(monitor_id);
+        self.wallpaper_ids.remove(monitor_id);
         self.rects.remove(monitor_id);
         match backend {
             Some(RenderBackend::Native) => {
@@ -230,6 +239,21 @@ impl RenderCoordinator {
             }
         };
 
+        // apply_backend 会改写 backends；crossfade 必须基于切换「之前」的状态判断，
+        // 否则 Native→WebView→Native 的回切会被误判成 Native→Native。
+        let previous: HashMap<String, (Option<RenderBackend>, Option<i32>)> = targets
+            .iter()
+            .map(|mid| {
+                (
+                    mid.clone(),
+                    (
+                        self.backends.get(mid).copied(),
+                        self.wallpaper_ids.get(mid).copied(),
+                    ),
+                )
+            })
+            .collect();
+
         // 阶段 1：只切换 backend / 创建或销毁渲染目标，不设置内容
         for mid in &targets {
             if let Err(e) = self.apply_backend(mid, &descriptor).await {
@@ -256,6 +280,14 @@ impl RenderCoordinator {
             }
         }
         if !native_mids.is_empty() {
+            // 只有整组都从 Native 的旧壁纸切到 Native 的新壁纸才淡入淡出；
+            // 首帧、跨 backend、同一 id 重复下发一律硬切。
+            let crossfade = native_mids.iter().all(|mid| {
+                let (old_backend, old_wid) = previous.get(mid).cloned().unwrap_or((None, None));
+                old_backend == Some(RenderBackend::Native)
+                    && old_wid.is_some()
+                    && old_wid != Some(wallpaper_id)
+            });
             if let Err(e) = self
                 .renderer
                 .set_wallpaper(
@@ -263,6 +295,7 @@ impl RenderCoordinator {
                     descriptor.file_path.clone(),
                     descriptor.kind,
                     descriptor.fit_mode,
+                    crossfade,
                 )
                 .await
             {
@@ -273,6 +306,12 @@ impl RenderCoordinator {
                     &RendererError::new(RendererErrorCode::DecodeFailed, e.to_string()),
                 );
             }
+        }
+
+        // 无论 backend 都记录当前壁纸：WebView 阶段换图也要更新，才不会在
+        // 后续切回 Native 时把「同一张图」误判成跨图 fade。
+        for mid in &targets {
+            self.wallpaper_ids.insert(mid.clone(), wallpaper_id);
         }
 
         // 主窗口缩略图与 backend 无关，始终通知刷新
@@ -296,6 +335,7 @@ impl RenderCoordinator {
     pub async fn clear_wallpaper(&mut self, monitor_id: &str, is_sync: bool) {
         let targets = self.resolve_targets(monitor_id, is_sync);
         for mid in targets {
+            self.wallpaper_ids.remove(&mid);
             let backend = self
                 .backends
                 .get(&mid)

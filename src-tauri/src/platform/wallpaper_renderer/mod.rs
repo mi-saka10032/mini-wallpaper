@@ -12,8 +12,9 @@ pub mod geometry;
 mod selection;
 
 pub use contracts::{
-    BackendSelection, DisplayMode, ExtendViewport, FitMode, MonitorRect, RenderBackend,
-    RenderDescriptor, RendererError, RendererErrorCode, WallpaperKind,
+    crossfade_progress, BackendSelection, DisplayMode, ExtendViewport, FitMode, MonitorRect,
+    RenderBackend, RenderDescriptor, RendererError, RendererErrorCode, WallpaperKind,
+    CROSSFADE_DURATION,
 };
 pub use geometry::{extend_viewport, group_viewports, union_rect};
 pub use selection::{default_backend_selection, resolve_backend};
@@ -48,6 +49,7 @@ impl DesktopRenderer {
         _path: PathBuf,
         _kind: WallpaperKind,
         _fit_mode: FitMode,
+        _crossfade: bool,
     ) -> Result<()> {
         Ok(())
     }

@@ -1,7 +1,20 @@
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+/// Native↔Native 换图淡入淡出的固定时长。不暴露设置项：壁纸切换属于低频操作，
+/// 固定值既让跨屏共用同一条时间线，也省掉设置项到 renderer 线程的同步链路。
+pub const CROSSFADE_DURATION: Duration = Duration::from_millis(350);
+
+/// 把已流逝时间归一化为 [0, 1] 的 fade 进度；零时长视作立即完成。
+pub fn crossfade_progress(elapsed: Duration, duration: Duration) -> f32 {
+    if duration.is_zero() {
+        return 1.0;
+    }
+    (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,5 +238,22 @@ mod tests {
         assert_eq!(FitMode::parse("cover"), Some(FitMode::Cover));
         assert_eq!(FitMode::parse("center"), Some(FitMode::Center));
         assert_eq!(FitMode::parse("unknown"), None);
+    }
+
+    #[test]
+    fn crossfade_progress_is_clamped_and_handles_zero_duration() {
+        assert_eq!(crossfade_progress(Duration::ZERO, CROSSFADE_DURATION), 0.0);
+        assert_eq!(
+            crossfade_progress(Duration::from_millis(175), CROSSFADE_DURATION),
+            0.5
+        );
+        assert_eq!(
+            crossfade_progress(Duration::from_millis(1000), CROSSFADE_DURATION),
+            1.0
+        );
+        assert_eq!(
+            crossfade_progress(Duration::from_secs(1), Duration::ZERO),
+            1.0
+        );
     }
 }

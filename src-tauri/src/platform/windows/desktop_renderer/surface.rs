@@ -477,6 +477,12 @@ impl RenderSurface {
         now: Instant,
     ) {
         if !crossfade || self.wallpaper.is_none() {
+            log::info!(
+                "[Renderer] wallpaper 硬切换 crossfade={} pending_before={} transition_before={}",
+                crossfade,
+                self.pending.len(),
+                self.transition.is_some()
+            );
             self.transition = None;
             self.pending.clear();
             self.wallpaper = Some(media);
@@ -485,6 +491,11 @@ impl RenderSurface {
         }
         // 只保留最新排队项；被丢弃的 Arc 会立即触发 VideoPlayback::Drop，
         // worker 收到 Exit 后释放 SourceReader / device manager / shared texture。
+        log::info!(
+            "[Renderer] wallpaper 排队 pending_before={} transition_active={}",
+            self.pending.len(),
+            self.transition.is_some()
+        );
         self.pending.clear();
         self.pending.push_back(PendingWallpaper { media, fit_mode });
         if self.transition.is_none() {

@@ -6,6 +6,8 @@
 
 // 独立音频线程：MF 拉 PCM 走 WASAPI 输出，与视频时钟低频校准。
 mod audio;
+// 图片一次性解码 worker：cache miss 时在独立线程解码 + 上传，避免冻结渲染线程。
+mod image;
 // 渲染线程：命令分发、帧推进、视频暂停 / 音频资格裁决与退出清理。
 mod renderer;
 // 渲染表面：壁纸三层状态、crossfade、纹理 / SRV / RTV 与 present。

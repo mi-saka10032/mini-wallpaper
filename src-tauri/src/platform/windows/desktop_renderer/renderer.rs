@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::image;
+
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::oneshot;
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
@@ -18,8 +20,62 @@ use super::video::{
     shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback, PAUSE_FADE,
     PAUSE_FULLSCREEN,
 };
-use crate::platform::wallpaper_renderer::frame_cache::{cache_key, FrameCache};
+use crate::platform::wallpaper_renderer::frame_cache::{cache_key, CacheKey, FrameCache};
 use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
+
+/// 在途的一次性图片解码：worker 线程完成后，结果经 `decode_tx` 回到渲染线程 attach。
+/// 只活到结果回收；过期 generation 的结果被丢弃，ack 仍回 Ok 避免误报 error。
+struct PendingDecode {
+    key: Option<CacheKey>,
+    monitor_ids: Vec<String>,
+    fit_mode: FitMode,
+    crossfade: bool,
+    // 同 key 的重复命令会合并到同一次解码，所有等待方都要收到回执。
+    acks: Vec<Ack>,
+    handle: JoinHandle<()>,
+}
+
+/// 给所有等待方回同一个结果（Ack 是 oneshot，逐个 send）。
+fn send_acks(acks: Vec<Ack>, result: Result<(), String>) {
+    for ack in acks {
+        send_ack(Some(ack), result.clone());
+    }
+}
+
+/// worker → 渲染线程的解码结果。`generation` 用于在连点时丢弃过期结果。
+struct DecodeResult {
+    generation: u64,
+    result: Result<SharedFrames, String>,
+}
+
+/// 把媒体挂到组内每个 surface，并回 ack。命中缓存的同步路径与 worker 回来的
+/// 异步路径共用这一份逻辑，保证「组级共用同一个 now」的行为不变。
+fn attach_media(
+    surfaces: &mut HashMap<String, RenderSurface>,
+    monitor_ids: &[String],
+    media: WallpaperMedia,
+    fit_mode: FitMode,
+    crossfade: bool,
+    now: Instant,
+    ack: Option<Ack>,
+) {
+    let mut attached = false;
+    for monitor_id in monitor_ids {
+        if let Some(surface) = surfaces.get_mut(monitor_id) {
+            surface.queue_wallpaper(media.clone(), fit_mode, crossfade, now);
+            attached = true;
+        } else {
+            log::warn!("[Renderer] {} 组换图时原生表面不存在", monitor_id);
+        }
+    }
+    if attached {
+        send_ack(ack, Ok(()));
+    } else {
+        let message = format!("组换图时所有原生表面都不存在: {:?}", monitor_ids);
+        log::warn!("[Renderer] {}", message);
+        send_ack(ack, Err(message));
+    }
+}
 
 /// 关键命令的异步回执：把 renderer 线程内的解码 / surface 失败回传给协调器。
 /// 只用于 EnsureMonitor / SetWallpaper——这两条会真正做 D3D11 资源创建与解码。
@@ -271,6 +327,13 @@ fn run(receiver: Receiver<RendererCommand>) {
     // 缓存整条解码 + 纹理上传链。命中时连 started_at 一起复用：动图回切会接着播，
     // 组内所有 surface 也因此始终持有同一个帧时钟，不会出现跨屏错帧。
     let mut frame_cache = FrameCache::<SharedFrames>::with_default_budget();
+    // 一次性图片解码 worker 的结果回收通道；worker 只借用 device clone，完成后即退出。
+    let (decode_tx, decode_rx) = mpsc::channel::<DecodeResult>();
+    let mut pending_decodes: HashMap<u64, PendingDecode> = HashMap::new();
+    // cache key → 在途 generation：同 key 的重复命令合并到同一次解码，
+    // 避免「首次双下发」时把同一张图解两遍。
+    let mut inflight_by_key: HashMap<CacheKey, u64> = HashMap::new();
+    let mut next_generation = 0u64;
     let mut running = true;
     // 全屏暂停标志：只冻结时钟 / 音频，不销毁内容；与 fade 暂停按 reason 各自独立。
     let mut paused = false;
@@ -308,6 +371,8 @@ fn run(receiver: Receiver<RendererCommand>) {
                     }
                 }
                 RendererCommand::DestroyMonitor { monitor_id } => {
+                    // 该屏已销毁，任何在途解码结果挂上去都没有意义；generation 递增让它过期。
+                    next_generation += 1;
                     if let Some(mut surface) = surfaces.remove(&monitor_id) {
                         surface.destroy();
                     }
@@ -320,11 +385,15 @@ fn run(receiver: Receiver<RendererCommand>) {
                     crossfade,
                     ack,
                 } => {
-                    // 视频走流式：一次打开、组内共享一个 Arc；图片/GIF/WebP 走缓存。
-                    // 两条链路都必须先构造出媒体内容，再挂到每个 surface，避免半挂状态。
-                    let result: Result<WallpaperMedia> = match kind {
-                        WallpaperKind::Video => {
-                            let identity = VideoIdentity::from_path(&path);
+                    // 每条换图命令递增 generation：连点 / 清屏 / 销毁显示器时，
+                    // 让所有更早发出的在途解码结果自动过期（见结果回收处）。
+                    next_generation += 1;
+                    let generation = next_generation;
+
+                    if kind == WallpaperKind::Video {
+                        // 视频仍走同步流式打开：首帧等待是有意设计，保证 attach 时已可绘制。
+                        let identity = VideoIdentity::from_path(&path);
+                        let result =
                             if let Some(existing) = find_reusable_video(&surfaces, &identity) {
                                 log::info!(
                                     "[Renderer] 复用已有视频播放状态 {:?}",
@@ -336,50 +405,86 @@ fn run(receiver: Receiver<RendererCommand>) {
                                     .open_video(&path, volume)
                                     .map(WallpaperMedia::Video)
                                     .with_context(|| format!("视频解码失败 {:?}", path))
-                            }
-                        }
-                        _ => frame_cache
-                            .get_or_insert_with(cache_key(&path), || {
-                                shared.upload_frames(&path, kind)
-                            })
-                            .map(WallpaperMedia::Frames)
-                            .with_context(|| format!("图片解码失败 {:?}", path)),
-                    };
-
-                    match result {
-                        Ok(media) => {
-                            let mut attached = false;
-                            // 组内 surface 共用同一个起点：extend 拼接时各屏 fade 必须
-                            // 同步推进，否则接缝处会出现明暗差。
-                            let now = Instant::now();
-                            for monitor_id in &monitor_ids {
-                                if let Some(surface) = surfaces.get_mut(monitor_id) {
-                                    surface.queue_wallpaper(
-                                        media.clone(),
-                                        fit_mode,
-                                        crossfade,
-                                        now,
-                                    );
-                                    attached = true;
-                                } else {
-                                    log::warn!("[Renderer] {} 组换图时原生表面不存在", monitor_id);
-                                }
-                            }
-                            if attached {
-                                send_ack(ack, Ok(()));
-                            } else {
-                                let message =
-                                    format!("组换图时所有原生表面都不存在: {:?}", monitor_ids);
-                                log::warn!("[Renderer] {}", message);
+                            };
+                        match result {
+                            Ok(media) => attach_media(
+                                &mut surfaces,
+                                &monitor_ids,
+                                media,
+                                fit_mode,
+                                crossfade,
+                                Instant::now(),
+                                ack,
+                            ),
+                            Err(err) => {
+                                let message = format!("{:#}", err);
+                                log::error!("[Renderer] {}", message);
                                 send_ack(ack, Err(message));
                             }
                         }
-                        Err(err) => {
-                            let message = format!("{:#}", err);
-                            log::error!("[Renderer] {}", message);
-                            send_ack(ack, Err(message));
+                        continue;
+                    }
+
+                    // 图片：缓存命中直接 attach（复用同一份 Arc 与帧时钟）；
+                    // miss 才 spawn 一次性 worker，渲染线程立即继续下一帧，不冻结旧画面。
+                    let key = cache_key(&path);
+                    if let Some(frames) = key.as_ref().and_then(|key| frame_cache.get(key)) {
+                        attach_media(
+                            &mut surfaces,
+                            &monitor_ids,
+                            WallpaperMedia::Frames(frames),
+                            fit_mode,
+                            crossfade,
+                            Instant::now(),
+                            ack,
+                        );
+                        continue;
+                    }
+
+                    // 同一张图可能连续下发两次（update_wallpaper 与同步窗口各一次），
+                    // 或首屏还没解码完就再次下发：合并到同一次在途解码，避免重复 spawn。
+                    // 多屏 monitor_ids 取并集，所有等待方共享同一份结果。
+                    if let Some(inflight_gen) = key
+                        .as_ref()
+                        .and_then(|key| inflight_by_key.get(key).copied())
+                        .filter(|gen| *gen == next_generation)
+                    {
+                        if let Some(pending) = pending_decodes.get_mut(&inflight_gen) {
+                            for monitor_id in monitor_ids {
+                                if !pending.monitor_ids.contains(&monitor_id) {
+                                    pending.monitor_ids.push(monitor_id);
+                                }
+                            }
+                            if let Some(ack) = ack {
+                                pending.acks.push(ack);
+                            }
+                            continue;
                         }
                     }
+
+                    let device = shared.device().clone();
+                    let worker_path = path.clone();
+                    let worker_kind = kind;
+                    let tx = decode_tx.clone();
+                    let handle = thread::spawn(move || {
+                        let result = image::decode_and_upload(&device, &worker_path, worker_kind)
+                            .map_err(|err| format!("{:#}", err));
+                        let _ = tx.send(DecodeResult { generation, result });
+                    });
+                    if let Some(key) = key.clone() {
+                        inflight_by_key.insert(key, generation);
+                    }
+                    pending_decodes.insert(
+                        generation,
+                        PendingDecode {
+                            key,
+                            monitor_ids,
+                            fit_mode,
+                            crossfade,
+                            acks: ack.into_iter().collect(),
+                            handle,
+                        },
+                    );
                 }
                 RendererCommand::SetGroupGeometry { viewports } => {
                     for (monitor_id, viewport) in viewports {
@@ -397,6 +502,8 @@ fn run(receiver: Receiver<RendererCommand>) {
                     }
                 }
                 RendererCommand::ClearWallpaper { monitor_id } => {
+                    // 清屏后迟到的解码结果不应把壁纸盖回来。
+                    next_generation += 1;
                     if let Some(surface) = surfaces.get_mut(&monitor_id) {
                         surface.clear_wallpaper();
                     }
@@ -433,6 +540,62 @@ fn run(receiver: Receiver<RendererCommand>) {
                     }
                 }
                 RendererCommand::Shutdown => running = false,
+            }
+        }
+
+        // 回收一次性解码结果。只有 generation 仍等于最新值的那份才算数：连点、
+        // 清屏、销毁显示器都会递增 generation 让旧结果过期。过期结果静默丢弃，
+        // ack 回 Ok——它不是解码失败，不该让协调器误报 renderer-error。
+        while let Ok(DecodeResult { generation, result }) = decode_rx.try_recv() {
+            let Some(pending) = pending_decodes.remove(&generation) else {
+                continue;
+            };
+            // worker 已经发回结果，join 只做线程资源回收，不会阻塞。
+            let _ = pending.handle.join();
+            if let Some(key) = pending.key.as_ref() {
+                inflight_by_key.remove(key);
+            }
+
+            if generation != next_generation {
+                log::info!(
+                    "[Renderer] 图片解码结果过期丢弃 generation={} latest={}",
+                    generation,
+                    next_generation
+                );
+                send_acks(pending.acks, Ok(()));
+                continue;
+            }
+
+            match result {
+                Ok(frames) => {
+                    // 帧时钟起点对齐到真正 attach 的时刻，保证 GIF 从第一帧开始、
+                    // 组内所有屏共享同一条时间线；缓存命中路径复用旧 Arc 不进这里。
+                    let now = Instant::now();
+                    let mut frames = frames;
+                    frames.reset_clock(now);
+                    let frames = Arc::new(frames);
+                    if let Some(key) = pending.key {
+                        frame_cache.insert(key, frames.clone());
+                    }
+                    // attach 只回一个 ack：它是「内容已挂载」的语义代表，
+                    // 其余等待方由 send_acks 统一回 Ok。
+                    let mut acks = pending.acks;
+                    let primary = acks.pop();
+                    attach_media(
+                        &mut surfaces,
+                        &pending.monitor_ids,
+                        WallpaperMedia::Frames(frames),
+                        pending.fit_mode,
+                        pending.crossfade,
+                        now,
+                        primary,
+                    );
+                    send_acks(acks, Ok(()));
+                }
+                Err(message) => {
+                    log::error!("[Renderer] {}", message);
+                    send_acks(pending.acks, Err(message));
+                }
             }
         }
 
@@ -488,9 +651,20 @@ fn run(receiver: Receiver<RendererCommand>) {
     for (_, mut surface) in surfaces {
         surface.destroy();
     }
+    // 退出时可能还有在途图片解码：先 join 让它们释放 device clone，
+    // 且对等待中的 ack 回 Err，避免协调器永久挂住。
+    for (_, pending) in pending_decodes {
+        let _ = pending.handle.join();
+        send_acks(
+            pending.acks,
+            Err("渲染线程退出，图片解码未完成".to_string()),
+        );
+    }
     // 所有 SourceReader / worker 已随 surface 释放；先释放 D3D11，再关闭 MF 平台，
     // 保证 MFStartup / MFShutdown 成对，且不会从工作队列线程调用 shutdown。
     drop(frame_cache);
+    drop(decode_tx);
+    drop(decode_rx);
     drop(shared);
     if mf_started {
         if let Err(err) = mf_shutdown() {

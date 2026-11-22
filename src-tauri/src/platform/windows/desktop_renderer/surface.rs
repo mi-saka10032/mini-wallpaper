@@ -452,6 +452,17 @@ impl RenderSurface {
             backbuffer_error_logged: false,
         };
         surface.bind_current_backbuffer()?;
+        // 首帧前先提交一张完全透明的 backbuffer，避免 DirectComposition 初始内容
+        // 在 renderer loop 第一帧之前显示为黑色。
+        if let Some(render_target) = &surface.render_target {
+            unsafe {
+                surface
+                    .context
+                    .ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 0.0]);
+                surface.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
+                surface.composition_device.Commit()?;
+            }
+        }
         Ok(surface)
     }
 
@@ -615,6 +626,29 @@ impl RenderSurface {
         Ok(())
     }
 
+    fn media_has_drawable_frame(media: &WallpaperMedia) -> bool {
+        match media {
+            WallpaperMedia::Frames(_) => true,
+            WallpaperMedia::Video(playback) => playback
+                .lock()
+                .map(|guard| guard.is_frame_ready())
+                .unwrap_or(false),
+        }
+    }
+
+    fn has_drawable_frame(&self) -> bool {
+        if let Some(transition) = &self.transition {
+            self.wallpaper
+                .as_ref()
+                .is_some_and(Self::media_has_drawable_frame)
+                || Self::media_has_drawable_frame(&transition.to)
+        } else {
+            self.wallpaper
+                .as_ref()
+                .is_some_and(Self::media_has_drawable_frame)
+        }
+    }
+
     pub fn render(&mut self, monitor_id: &str, now: Instant) {
         if let Err(err) = self.bind_current_backbuffer() {
             if !self.backbuffer_error_logged {
@@ -632,10 +666,18 @@ impl RenderSurface {
         let Some(render_target) = &self.render_target else {
             return;
         };
+        let has_wallpaper = self.wallpaper.is_some() || self.transition.is_some();
 
+        // 有壁纸但还没有任何可绘制帧（典型：视频首帧未到）时清成完全透明，
+        // 让系统默认壁纸透出；swapchain 已声明 premultiplied alpha。
+        let clear_color = if has_wallpaper && !self.has_drawable_frame() {
+            [0.0, 0.0, 0.0, 0.0]
+        } else {
+            [0.08, 0.12, 0.18, 1.0]
+        };
         unsafe {
             self.context
-                .ClearRenderTargetView(render_target, &[0.08, 0.12, 0.18, 1.0]);
+                .ClearRenderTargetView(render_target, &clear_color);
         }
 
         if let Some(transition) = &self.transition {

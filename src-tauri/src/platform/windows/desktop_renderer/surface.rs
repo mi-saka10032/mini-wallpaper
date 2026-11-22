@@ -624,8 +624,20 @@ impl RenderSurface {
 
     /// 一帧渲染：重绑 backbuffer → 清屏 → 绘制 from / to（或单层壁纸）→ Present。
     /// backbuffer / Present 失败各只记一次日志；透明清屏用于让系统默认壁纸透出。
-    pub fn render(&mut self, monitor_id: &str, now: Instant) {
+    ///
+    /// 返回 true 表示检测到设备丢失（DXGI_ERROR_DEVICE_REMOVED / DEVICE_RESET）：
+    /// 该 surface 的 D3D11 资源已整体失效，调用方必须清理整组 surface 与共享 device，
+    /// 不能继续在这块 device 上 Present。
+    pub fn render(&mut self, monitor_id: &str, now: Instant) -> bool {
         if let Err(err) = self.bind_current_backbuffer() {
+            if is_device_lost(&err) {
+                log::error!(
+                    "[Renderer] {} backbuffer 绑定时设备丢失: {:#}",
+                    monitor_id,
+                    err
+                );
+                return true;
+            }
             if !self.backbuffer_error_logged {
                 log::error!(
                     "[Renderer] {} 当前 backbuffer 绑定失败: {:#}",
@@ -634,12 +646,12 @@ impl RenderSurface {
                 );
                 self.backbuffer_error_logged = true;
             }
-            return;
+            return false;
         }
         self.backbuffer_error_logged = false;
 
         let Some(render_target) = &self.render_target else {
-            return;
+            return false;
         };
         let has_wallpaper = self.wallpaper.is_some() || self.transition.is_some();
 
@@ -673,11 +685,16 @@ impl RenderSurface {
 
         let present = unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) };
         if let Err(err) = present.ok() {
+            if is_device_lost(&err) {
+                log::error!("[Renderer] {} Present 时设备丢失: {:#}", monitor_id, err);
+                return true;
+            }
             if !self.present_error_logged {
                 log::warn!("[Renderer] {} Present 失败: {:?}", monitor_id, err);
                 self.present_error_logged = true;
             }
         }
+        false
     }
 
     /// 一次全屏 quad 绘制。帧来源、fit / extend 视口推导在两条媒体链路间完全共用；
@@ -810,6 +827,23 @@ impl Drop for RenderSurface {
     fn drop(&mut self) {
         self.destroy();
     }
+}
+
+/// 判断 D3D11 / DXGI 错误是否属于设备丢失。设备丢失时整块 device 上的所有资源
+/// 同时失效，必须整组清理 surface 与 SharedDevice，不能只重试单屏。
+fn is_device_lost(err: &anyhow::Error) -> bool {
+    // windows crate 的错误链末端是 windows::core::Error，其 code() 是 HRESULT。
+    // 用 chain 逐层找，避免依赖具体错误被哪一层 Context 包装。
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<windows::core::Error>()
+            .is_some_and(|hresult| {
+                let code = hresult.code();
+                code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED
+                    || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_RESET
+                    || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DRIVER_INTERNAL_ERROR
+            })
+    })
 }
 
 /// 建 flip model swapchain，并用 DirectComposition visual 挂到壁纸 HWND。

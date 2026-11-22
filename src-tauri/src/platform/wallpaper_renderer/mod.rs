@@ -39,7 +39,7 @@ pub struct DesktopRenderer;
 #[cfg(not(target_os = "windows"))]
 impl DesktopRenderer {
     /// 占位：非 Windows 平台不启动渲染线程，仅返回空实例以保证跨平台编译通过。
-    pub fn start() -> Result<Self> {
+    pub fn start(_app_handle: tauri::AppHandle) -> Result<Self> {
         Ok(Self)
     }
 

@@ -180,9 +180,16 @@ impl WallpaperWindowManager {
     }
 
     /// 销毁指定显示器的壁纸窗口
+    ///
+    /// 先 `hide()` 再解除嵌入 / 关闭：`ShowWindow(SW_HIDE)` 会把窗口整体从
+    /// DWM 合成树（含硬件视频叠加平面）里摘除，比单纯的 Z-order 更强——
+    /// 跨 backend 切换时旧窗口仍在播放视频，若它的 `<video>` 走硬件叠加
+    /// 渲染，叠加平面不一定严格遵守普通窗口 Z-order，只靠"被新窗口盖住"
+    /// 不能保证销毁瞬间彻底不可见；显式隐藏从根上避免这段切换瞬间的闪烁。
     pub fn destroy_window(&mut self, monitor_id: &str) {
         if let Some(label) = self.windows.remove(monitor_id) {
             if let Some(window) = self.app_handle.get_webview_window(&label) {
+                let _ = window.hide();
                 #[cfg(target_os = "windows")]
                 {
                     if let Ok(hwnd) = window.hwnd() {

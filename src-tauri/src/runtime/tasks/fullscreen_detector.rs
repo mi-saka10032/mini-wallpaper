@@ -77,7 +77,8 @@ impl TaskSpawner for FullscreenDetectionTask {
 #[cfg(target_os = "windows")]
 fn check_fullscreen() -> bool {
     use crate::platform::windows::monitor_geometry::{
-        foreground_window, is_shell_window, monitor_info_from_window, window_rect,
+        foreground_window, is_own_wallpaper_window, is_shell_window, monitor_info_from_window,
+        window_rect,
     };
 
     let Some(hwnd) = foreground_window() else {
@@ -86,6 +87,14 @@ fn check_fullscreen() -> bool {
 
     // 排除系统桌面相关窗口类
     if is_shell_window(hwnd) {
+        return false;
+    }
+
+    // 排除本应用自己的壁纸窗口：跨 backend 切换销毁旧窗口时，SetParent(null)
+    // 解除嵌入到 DestroyWindow 真正生效之间有短暂的顶层窗口裸露期，覆盖整个
+    // 显示器的壁纸窗口有极小概率被误判为"前台全屏应用"，导致全屏检测在
+    // 切换瞬间反复误报（见 `is_own_wallpaper_window` 文档）。
+    if is_own_wallpaper_window(hwnd) {
         return false;
     }
 

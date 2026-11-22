@@ -13,14 +13,13 @@ const NATIVE_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "m4v", "mov", "avi", "wmv", "asf", "3gp", "3g2", "3gp2", "3gpp",
 ];
 
-/// 决定默认的后端选择策略：debug 构建强制 `NativeOnly`，以便在开发期尽早暴露
-/// 兼容性问题；release 下读取 `MINI_WALLPAPER_RENDERER=native` 可覆盖，
-/// 否则用 `Auto` 在能力不足时自动回退 WebView。
+/// 决定默认的后端选择策略：debug / release 行为一致，统一用 `Auto` 按壁纸
+/// capability 自动分流——不再在 debug 构建强制 `NativeOnly`，Auto fallback
+/// 已完成实机验收（WebView 渲染、Native↔WebView 互切、资源释放均确认正常），
+/// 不需要继续用 debug 强制 Native 来提前暴露兼容性问题。
+/// 读取 `MINI_WALLPAPER_RENDERER=native` 仍可显式覆盖为 `NativeOnly`，
+/// 用于单独验证原生链路——此时不支持的格式会直接报错，不回退 WebView。
 pub fn default_backend_selection() -> BackendSelection {
-    if cfg!(debug_assertions) {
-        return BackendSelection::NativeOnly;
-    }
-
     let forced = matches!(env::var("MINI_WALLPAPER_RENDERER").as_deref(), Ok("native"));
     if forced {
         BackendSelection::NativeOnly

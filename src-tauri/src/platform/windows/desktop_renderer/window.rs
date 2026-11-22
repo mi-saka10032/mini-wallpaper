@@ -20,11 +20,15 @@ use crate::platform::wallpaper_renderer::MonitorRect;
 const CLASS_NAME: windows::core::PCWSTR = w!("MiniWallpaperNativeRenderer");
 const WINDOW_NAME: windows::core::PCWSTR = w!("MiniWallpaperSurface");
 
+/// 壁纸原生窗口的 RAII 句柄：new 时创建，Drop 时销毁。
+/// 窗口自身不绘制内容，实际绘制走 DirectComposition + swapchain。
 pub struct NativeWindow {
     hwnd: HWND,
 }
 
 impl NativeWindow {
+    /// 注册窗口类并按显示器几何创建弹出式壁纸窗口；
+    /// WS_EX_NOREDIRECTIONBITMAP 必须在创建期声明，原因见下方说明。
     pub fn new(rect: MonitorRect) -> Result<Self> {
         ensure_class_registered()?;
         let instance = unsafe { GetModuleHandleW(None)? };
@@ -55,6 +59,7 @@ impl NativeWindow {
         Ok(Self { hwnd })
     }
 
+    /// 返回窗口句柄，供嵌入桌面及创建 DirectComposition target 使用。
     pub fn hwnd(&self) -> HWND {
         self.hwnd
     }
@@ -100,6 +105,7 @@ impl NativeWindow {
         Ok(())
     }
 
+    /// 显示器几何变化时移动 / 调整窗口；不激活、不改 Z 序。
     pub fn set_bounds(&self, rect: MonitorRect) -> Result<()> {
         unsafe {
             SetWindowPos(
@@ -116,6 +122,7 @@ impl NativeWindow {
     }
 }
 
+/// 幂等销毁：窗口已被系统销毁时 DestroyWindow 失败直接忽略。
 impl Drop for NativeWindow {
     fn drop(&mut self) {
         unsafe {
@@ -124,6 +131,7 @@ impl Drop for NativeWindow {
     }
 }
 
+/// 进程内只注册一次窗口类；ERROR_CLASS_ALREADY_EXISTS 视为成功以兼容重复注册。
 fn ensure_class_registered() -> Result<()> {
     static REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -161,6 +169,8 @@ fn ensure_class_registered() -> Result<()> {
     }
 }
 
+/// 极简窗口过程：壁纸窗口不处理绘制 / 输入，全部交给 DefWindowProcW。
+/// 消息泵在渲染线程（见 renderer::pump_messages），这里只从队列挑 WM_QUIT 用于退出。
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     message: u32,

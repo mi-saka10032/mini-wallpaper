@@ -30,10 +30,14 @@ pub const FULLSCREEN_TIMER_KEY: &str = "fullscreen_detector";
 pub struct FullscreenDetectionTask;
 
 impl TaskSpawner for FullscreenDetectionTask {
+    /// 每 2 秒轮询一次；仅在全屏状态翻转时才发事件并切换暂停，
+    /// 避免持续全屏期间反复下发 pause 命令。
     fn spawn(self, app: &tauri::AppHandle) -> JoinHandle<()> {
         let app = app.clone();
 
         tokio::spawn(async move {
+            // 上一次的状态，作为边沿触发的基准：
+            // 只有 is_fullscreen != was_fullscreen 才意味着「刚进入/刚退出全屏」。
             let mut was_fullscreen = false;
 
             loop {
@@ -57,6 +61,7 @@ impl TaskSpawner for FullscreenDetectionTask {
                     was_fullscreen = is_fullscreen;
                 }
 
+                // 2 秒是响应速度与检测开销的折中；任务被 stop 时 sleep 随之中断。
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         })

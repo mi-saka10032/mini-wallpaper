@@ -43,9 +43,15 @@ pub struct AppContext {
     pub db: DatabaseConnection,
 
     /// 壁纸窗口管理器（物理显示器 ↔ 壁纸窗口的映射管理）
+    ///
+    /// 用 `Arc` 是因为它不仅被 AppContext 持有，还要交给协调器与 Scheduler 共享；
+    /// `Mutex` 保证窗口的创建/销毁与通知不会并发交错。
     pub window_manager: Arc<Mutex<WallpaperWindowManager>>,
 
     /// 渲染协调器（壁纸渲染链路唯一入口，决定 Native / WebView backend）
+    ///
+    /// 内部持有 per-monitor 的可变状态（backends / wallpaper_ids / 几何），
+    /// 因此必须整体加锁：调用方只锁这一个 Mutex，避免与 window_manager 形成双锁持锁。
     pub render_coordinator: Arc<Mutex<RenderCoordinator>>,
 
     /// Toast 通知窗口管理器（右下角独立通知窗口）
@@ -69,7 +75,8 @@ impl AppContext {
             app_handle.clone(),
             window_manager.clone(),
         )?));
-        // 启动时同步一次全局 display_mode，避免 extend 组首屏仍按 independent 渲染
+        // 启动时同步一次全局 display_mode，避免 extend 组首屏仍按 independent 渲染。
+        // 用独立作用域刻意把锁收窄到这两次同步：后续创建 toast_manager 不需要持协调器锁。
         {
             let mut coordinator = render_coordinator.lock().await;
             coordinator.refresh_display_mode().await;

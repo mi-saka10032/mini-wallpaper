@@ -29,6 +29,7 @@ impl Scheduler {
     ) {
         match key {
             setting_keys::PAUSE_ON_FULLSCREEN => {
+                // 开关只决定检测任务是否存在；is_running 判空避免重复设置时起多个轮询。
                 let enabled = value == "true";
                 if enabled {
                     if !self.is_running(FULLSCREEN_TIMER_KEY) {
@@ -42,6 +43,8 @@ impl Scheduler {
             }
             setting_keys::GLOBAL_VOLUME => {
                 let volume = value.parse::<u32>().unwrap_or(0).min(100);
+                // 两个消费方缺一不可：Native renderer 走 set_volume，
+                // WebView 页面靠广播的 VolumeChangedPayload 自行更新。
                 let coordinator = self.render_coordinator();
                 coordinator.lock().await.set_volume(volume);
                 let wm = self.window_manager();

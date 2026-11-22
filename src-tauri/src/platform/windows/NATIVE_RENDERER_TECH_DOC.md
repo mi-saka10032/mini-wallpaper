@@ -1,11 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
 > **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
-<<<<<<< HEAD
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地）
-=======
-> **最后更新**: 2026-11-20（M5 跨屏拼接落地、图片 extend / mirror 已 Windows 实机验证；解码缓存与 dev 构建优化 `d639b63`，见 3.12；M6 MediaFoundation 流式视频解码，见 3.13）
->>>>>>> 63067b3 (feat: add native video decoding via Media Foundation)
+> **最后更新**: 2026-11-22（当前分支已重写为 16 个语义化提交，代码基线 `6f831d5`，文档为最终提交；Native renderer M0~M9 全链路完成；最终采用 session 级 GPU；`OUTPUTHAZARD` / 循环高倍速 / 首帧绿黑屏 / fade 视频与音频回放均已修复；纯图片壁纸 Native 有明确内存优势，视频壁纸 Native 优势在 CPU 与帧同步而非最低内存）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -111,7 +107,7 @@ pub struct RenderDescriptor {
 | 模式 | 生效条件 | 行为 |
 |------|----------|------|
 | `NativeOnly` | `cfg!(debug_assertions)` 恒真；或 release 下 `MINI_WALLPAPER_RENDERER=native` | 绝不创建 WebView；不支持格式直接报错 |
-| `Auto` | release 默认 | 当前阶段视频同样不回退 WebView；参数保留给后续动态 backend 切换（M8） |
+| `Auto` | release 默认 | 按 capability 自动分流：Native 支持表内的格式走 Native，表外的全部走 WebView fallback |
 
 ```rust
 pub fn resolve_backend(
@@ -125,12 +121,12 @@ pub fn resolve_backend(
 |------|-----------|------|
 | 图片 / GIF / WebP（静态与动态） | `Native` | `Native` |
 | `.mp4` / `.m4v` / `.mov` / `.avi` / `.wmv` / `.asf` / `.3gp` / `.3g2` / `.3gp2` / `.3gpp` | `Native`（MF 解码） | `Native`（MF 解码） |
-| `.webm` / `.mkv` | `UnsupportedFormat` 报错 | `UnsupportedFormat` 报错（M6 无 WebView fallback） |
-| 其它视频扩展名 | `UnsupportedFormat` 报错 | `UnsupportedFormat` 报错 |
+| `.webm` / `.mkv` | `UnsupportedFormat` 报错 | `WebView`（解码前 capability fallback） |
+| 其它视频扩展名 | `UnsupportedFormat` 报错 | `WebView`（同上） |
 
 上面 10 个扩展名来自微软官方 *Supported Media Formats in Media Foundation* 的 File Containers 表（3GP / ASF / AVI / MPEG-4）。声明的是「交给 Media Foundation 的 SourceReader 尝试」，不保证容器内编码一定能解：`.mp4` 里装 HEVC 但系统没装对应 codec 时，SourceReader 打开失败会通过命令 ack 回传 `DecodeFailed`，不静默黑屏、不回退 WebView。
 
-> **WebView 不是解码失败后的兜底。** 一旦 `resolve_backend` 返回 Native，SourceReader / `decode_frames` 失败都通过 mpsc + oneshot ack 回传协调器，发 `renderer-error`，不会偷偷重建 WebView 窗口。这条路是 M6 刻意验证「Native 独立链路」的一部分：本地 dev 模式下不出现 WebView2。
+> **WebView 只做解码前的 capability fallback，不是解码失败后的兜底。** 一旦 `resolve_backend` 返回 Native，SourceReader / `decode_frames` 失败都通过 mpsc + oneshot ack 回传协调器，发 `renderer-error`，不会偷偷重建 WebView 窗口。M8 把 Auto 模式的 fallback 接回后这条铁律不变：分流依据是「容器在不在 MF 支持表」，不是「这次解码成不成功」。本地 dev 默认 NativeOnly，仍不出现 WebView2。
 
 ### 2.4 错误上报链路
 
@@ -348,8 +344,6 @@ viewport_i        = fit_rect(Fill, src, union_w, union_h) − (offset_x_i, offse
 
 > **视觉一致的边界**：WebView 侧 `useExtendViewport` 会把物理坐标除以 `scaleFactor()` 转逻辑 px 给 CSS，Native 侧用物理像素。D2 保证同一组不会同时出现两种后端，所以「一致」指**语义一致**（同一张全图拉伸铺满虚拟桌面、每屏显示对应区域），不是跨 DPI 场景下的逐像素对齐；WebView 侧既有的 DPI 偏差另立条目处理。
 
-<<<<<<< HEAD
-=======
 ### 3.11 实机验证结论（2026-11-20）
 
 Windows 实机确认：**图片 extend 与 mirror 均可正常渲染**。这一条同时关闭了 M5 立项时最大的几个风险假设：
@@ -410,7 +404,7 @@ Windows 实机确认：**图片 extend 与 mirror 均可正常渲染**。这一�
 
 **为什么不用 `SharedFrames` 装视频帧**：一段 30fps / 4K / 10s 视频，全帧 BGRA 约 10GB，常驻必然爆显存。视频改为流式：SourceReader 按 100ns 时间戳逐帧取出，上传进**一张**复用的 D3D11 纹理，所有 surface 绑定同一个 SRV。`SharedFrames` 继续服务图片 / GIF / 动态 WebP，两套机制并存于 `WallpaperMedia` 枚举。
 
-**支持的扩展名**（来自微软官方 *Supported Media Formats in Media Foundation* 的 File Containers 表）：`.mp4` / `.m4v` / `.mov` / `.avi` / `.wmv` / `.asf` / `.3gp` / `.3g2` / `.3gp2` / `.3gpp`。`wallpaper_service::VIDEO_EXTENSIONS` 同步补齐，`.m4v` 等此前无法导入的裂缝一并修掉。`.webm` / `.mkv` 保留导入但 `resolve_backend` 明确 `UnsupportedFormat`，当前阶段不回退 WebView。
+**支持的扩展名**（来自微软官方 *Supported Media Formats in Media Foundation* 的 File Containers 表）：`.mp4` / `.m4v` / `.mov` / `.avi` / `.wmv` / `.asf` / `.3gp` / `.3g2` / `.3gp2` / `.3gpp`。`wallpaper_service::VIDEO_EXTENSIONS` 同步补齐，`.m4v` 等此前无法导入的裂缝一并修掉。`.webm` / `.mkv` 保留导入；M6 阶段 `resolve_backend` 对它们明确 `UnsupportedFormat`，WebView fallback 于 M8 才接回（见 3.15）。
 
 **解码链路**：
 
@@ -436,12 +430,347 @@ renderer loop 每帧
 
 **回执与错误**：`DesktopRenderer::ensure_monitor` / `set_wallpaper` 改为 `async`，带 `tokio::sync::oneshot` 回执。解码 / surface 失败从 renderer thread 回到协调器，发 `renderer-error` toast（此前只在日志里）。其余命令仍是 fire-and-forget。
 
-**边界与后续**：当前只接受 RGB32 输出，HEVC/AV1 依赖系统可选 codec 包，缺失时明确报错；音频不渲染（静音），音量设置对 Native 视频不生效；`.webm` / `.mkv` 的 WebView fallback 留到后续里程碑。NV12 硬解、DXVA device manager、音视频同步是下一步方向，不进 M6。
+**边界与后续**：当前只接受 RGB32 输出，HEVC/AV1 依赖系统可选 codec 包，缺失时明确报错；音频不渲染（静音），音量设置对 Native 视频不生效；`.webm` / `.mkv` 的 WebView fallback 留到后续里程碑（已在 M8 接回，见 3.15）。NV12 硬解、DXVA device manager、音视频同步是下一步方向，不进 M6。
 
->>>>>>> 63067b3 (feat: add native video decoding via Media Foundation)
+### 3.14 M7：Native↔Native 换图 crossfade（2026-11-20）
+
+**语义先钉死**：这里的 crossfade 是「换图淡入淡出」，**不是 backend 切换的过渡动画**。启用条件只有一条——`old_backend == Native && new_backend == Native && old_wid != new_wid`。首帧、同一 id 重复下发、跨 backend（Native↔WebView）一律硬切。判定放在 `RenderCoordinator`，`apply_backend` 改写状态之前先快照 `previous`，否则 Native→WebView→Native 回切会被误判成 Native→Native。
+
+**为什么是两 pass 而不是两路一起混**：swapchain 的 AlphaMode 是 `DXGI_ALPHA_MODE_PREMULTIPLIED`。若 from / to 都用 `progress` 参与混合，RT 会退化成 `to*t + from*(1-t)^2 + bg*t*(1-t)`，中段发暗且 alpha 掉到 1 以下，桌面合成阶段整屏变暗。正确顺序是：
+
+```
+pass1: from, alpha = 1   → RT = from, alpha = 1
+pass2: to,   alpha = t   → RT = to*t + from*(1-t), alpha = t + (1-t) = 1
+```
+
+shader 因此改成输出预乘色（`color.rgb *= fade_alpha; color.a = fade_alpha`），pipeline 增加 `ONE / INV_SRC_ALPHA` 的 `ID3D11BlendState` 和存放 alpha 的 cbuffer。单 pass 路径传 `alpha = 1.0`，行为与 M6 完全一致，没有第二套绘制代码；`draw_media(media, fit_mode, alpha, now)` 把帧来源、fit / extend viewport 推导在两条媒体链路间彻底共用。
+
+**四种组合全覆盖**：
+
+| from → to | fade 期间 | fade 结束 |
+|-----------|-----------|-----------|
+| 图 → 图 | 图按各自 `started_at` 继续取帧 | to 成为 wallpaper |
+| 图 → 视 | to 停在 open 时预读的首帧 | `reset_clock(now)`，从 0 开始播放 |
+| 视 → 图 | from 停在最后一帧 | to 成为 wallpaper |
+| 视 → 视 | 两侧都冻结 | to `reset_clock(now)`，从 0 开始播放 |
+
+**视频冻结的理由**：视切视若双路同时推进 SourceReader，会同时出现两路 RGB32 解码的 CPU 峰值。用户方案是「无论视是 from 还是 to，fade 结束前都保持帧暂停」。renderer loop 在 `advance_videos` 前先扫一遍，把处于 fade / 排队状态的 surface 的 from 视频 Arc 收进 `frozen` 集合，再按 Arc 指针去重推进；组内共享同一个 Arc，只要有一屏在 fade 就不推进整个播放状态。
+
+**时钟语义**：to 是视频时，fade 耗时**完全不计入**播放时间。`transition` 只保存 `to / to_fit_mode / started_at`，不碰 to 的 `VideoPlayback`；`finish_transition` 在 fade 结束那一帧才调用 `reset_clock(now)`——Flush + `SetCurrentPosition(0)` + 预读首帧，不销毁 SourceReader，与暂停恢复保持同一生命周期。多屏共享同一个播放状态，reset 由 renderer loop 按 Arc 指针去重，**只做一次**，不能在每个 surface 上各做一次。
+
+**连续切换用 FIFO 队列，不覆盖**：`RenderSurface` 持有 `pending: VecDeque<PendingWallpaper>`。A→B 还没结束时又来 C，C 入队；A→B 跑满 350ms 后 `finish_transition` 用同一个 `now` 立即启动 B→C，每段 fade 都完整播放。硬切（跨 backend / 首帧）会清空队列和当前 transition。代价是队列里的视频会提前 `open` 并占用一个 SourceReader，不做过度设计。
+
+**跨屏同步**：`SetWallpaper` 命令在 renderer 线程取**一个** `Instant::now()` 发给组内所有 surface，fade 起跑线一致，extend 接缝不会一侧亮一侧暗。`crossfade_progress` 是跨平台纯函数并带单测（0 / 半程 / 超界 / 零时长），Windows 专有代码只消费它。
+
+### 3.15 M8：WebView capability fallback 接线与范围收尾（2026-11-20）
+
+**范围按现状调整，不照搬原清单**。原 M8 三条逐一取证后只有一条是真缺口：
+
+| 原条目 | 取证结果 | 处置 |
+|---|---|---|
+| 明确 WebView 为 fallback backend | `resolve_backend` 无任何返回 WebView 的路径，`selection` 被 `let _ = selection` 忽略；Auto 与 NativeOnly 行为完全等价 | **接线（本次唯一代码改动）** |
+| 保留 wallpaper page 与事件链 | `src/pages/wallpaper/` + `wallpaper.html` + 5 个事件监听完整，`WindowManager` 建窗 / 嵌入 / broadcast 全在 | 已满足，不动 |
+| 清理 debug / NativeOnly 下的无效 WebView 创建路径 | debug 默认 NativeOnly，不支持格式直接报错，从不走到 `create_and_show` | 已自然满足，不删代码 |
+
+**接线方式**：`resolve_backend` 真正消费 `selection`——图片 / GIF / WebP 与 MF 容器表内 10 种视频固定 Native；表外格式在 `Auto` 下返回 `RenderBackend::WebView`，在 `NativeOnly` 下仍报 `UnsupportedFormat`。**不新增设置项**，按壁纸 capability 自动分流即用户确认的「方案 A」；`selection` 仍在进程启动时由 debug / release + `MINI_WALLPAPER_RENDERER=native` 决定。
+
+**复用的既有资产**（无需新增代码）：`apply_backend` 已处理 Native↔WebView 双向切换（Native→WebView 建窗、WebView→Native 销毁窗）；WebView 页面自己 `loadConfig` 读 DB 显示首帧，`update_window` / `notify_fit_mode_changed` / `notify_wallpaper_cleared` / `broadcast_display_mode_changed` 事件链完整；D2 降级在混合 backend 的 extend 组里已会提示一次；M7 的 crossfade 本来就只在 Native↔Native，跨 backend 继续硬切。
+
+**边界**：WebView 仍只是**解码前** capability fallback——分流依据是容器在不在 MF 支持表，不是这次解码成不成功。选定 Native 后 SourceReader 失败只回 `DecodeFailed`，不会二次回退。回退后能否播放取决于 Chromium：WebM（VP8/VP9）通常可用，MKV 支持有限，可能仍黑屏；这属于实机验收项。不因为 M8 恢复 fallback 就修改 M6 的错误语义或 M7 的动画语义。
+
+### 3.16 控制链路收尾：display_mode 切换时副屏不跟随（2026-11-20）
+
+**用户报告**：Windows 上从 MonitorConfig 选择 Mirror / Extend 时，副屏**不总是**立刻跟随切换。顺带要求审计「原本发往 WebView 页面的 DisplayMode / FitMode / 播放暂停」是否已被 Native backend 完整复刻，覆盖页面、快捷键、托盘三个来源。
+
+**四个维度逐一取证**：
+
+| 维度 | 来源 | 链路 | 结论 |
+|---|---|---|---|
+| DisplayMode | 设置页 | `set_setting` → `apply_display_mode_side_effect`：①`coordinator.set_display_mode` ②`sync_config_from` 改从屏 DB ③WebView 广播 | ❌ Native 缺一步 |
+| FitMode | 设置页 | `upsert_monitor_config` → `coordinator.set_fit_mode` | ✅ 正常；模式切换同步配置时从屏漏更新 |
+| 播放/暂停（全屏） | 全屏检测 | `FullscreenDetectionTask` → `coordinator.set_paused` + `fullscreen-changed` → 前端暂停 video | ✅ 完整 |
+| 播放/暂停（轮播） | 快捷键 / 托盘 | `Action::TogglePause` → 翻转 `is_enabled` + 启停定时器 | ✅ 语义是「暂停轮播」，不停渲染 |
+| 音量 | 设置页 | `GLOBAL_VOLUME` → `coordinator.set_volume` → Native renderer + `wm.broadcast` → WebView 页面 | ✅ 两边同时生效（见 3.17） |
+
+**根因**：WebView 页面收到 `display-mode-changed` 后会 `loadConfig()` **重读 DB**（`useWallpaperLoader.ts`），Native renderer 收到 `set_display_mode` 却只重算 viewport、不重读 config。`sync_config_from` 把主屏 `wallpaper_id` 写进从屏 DB，surface 仍挂着旧壁纸；前端 `syncWallpaperWindows` 只为新建窗口调 `ensure_target`，已有 surface 不刷新。「不总是」的四种表现：从屏本来就是同一张图（看不出差异）、从屏还没 surface（新建时读新 DB，跟随）、轮播定时器重启后整组下发（延迟跟随）、从屏已有 surface 且壁纸不同且定时器未立即触发（不跟随）。
+
+**修复**（全在 `setting_effects.rs`，改动 2 处）：
+
+1. Mirror / Extend 分支在 `sync_config_from` 之后调一次 `coordinator.update_wallpaper(primary_mid, wid, true)`：`is_sync=true` 让 `resolve_targets` 覆盖整组，一次下发即让所有已有 surface 拿到主屏壁纸；`wallpaper_id=None` 时走 `clear_wallpaper`。这一步是 Native 侧对 WebView `loadConfig` 的等价补齐。
+2. Independent 分支按 DB 最新 config 逐屏 `coordinator.set_fit_mode`：同步模式下 `sync_config_from` 也会改从屏 `fit_mode`，但没通知 renderer；Mirror/Extend 下两侧都忽略 fitMode 所以当下无差异，切回独立后 Native surface 会保留旧值。
+
+**语义确认**：`Action::TogglePause`（快捷键 / 托盘菜单）只停轮播定时器，**不调 `coordinator.set_paused`**；只有全屏检测才停 Native 帧 / 隐藏 WebView 窗口。菜单文案是「暂停/恢复轮播」，两种暂停语义保持分离，本次不改。
+
+**边界**：修复走 `update_wallpaper`，因此从屏换图会按 M7 规则触发 350ms crossfade（Native↔Native 且 wid 变化）——是平滑跟随而非零延迟硬切；跨 backend 仍硬切。若实机验收要求零延迟，需单独给这条路径加 `crossfade=false`。
+
+### 3.17 Native 视频音频：方案 A2 —— audio `SourceReader` + WASAPI
+
+**决策收口**：先否决 WinRT `MediaPlayer` frame server 接管视频帧的方案（等价“更底层一点的 WebView 视频方案”），随后又否决“仅音频借用 WinRT `MediaPlayer`”的折中——它仍然引入独立播放器状态机与时钟，和视频链路的 `SourceReader` 拉取模型不一致。`IMFMediaSession` 虽属 MF 生态，但要建 topology、绑定 audio sink、维护 session 状态机与 Presentation Clock，本质上仍是高层黑盒，也不采用。
+
+最终方案 A2：**视频和音频都走 `IMFSourceReader`**；视频帧仍 RGB32 → D3D11，音频流解码为 PCM → ring buffer → WASAPI shared-mode 输出。解码器由系统提供，缓冲、seek、暂停、音量、循环、时钟基准全部由我们控制。
+
+**共享模型按 display mode 对齐**：
+
+| 模式 | 视频播放状态 | 音频播放状态 | 结果 |
+|---|---|---|---|
+| Independent | 每屏一个 `VideoPlayback` | 每个 `VideoPlayback` 内一个 `AudioPlayback` | 每屏独立音频，和 WebView 类似 |
+| Mirror / Extend | 整组共享一个 `VideoPlayback` | 同一个 `VideoPlayback` 内一个 `AudioPlayback` | 全组一份音频，不再多屏叠加 |
+
+`is_sync` 在主要路径上由 `display_mode` 推导，视频共享语义无需改动；把音频挂到 `VideoPlayback` 上即自然继承同一模型。
+
+**链路**：
+
+```text
+视频：SourceReader(video) → RGB32 → D3D11 → shader / crossfade → DirectComposition
+音频：SourceReader(audio) → PCM → ring buffer → WASAPI shared-mode → ISimpleAudioVolume
+```
+
+音频链路在独立 MTA 线程内运行，避免 `ReadSample` 阻塞 renderer 线程。renderer 只通过 `AudioCommand::{Pause, Play, Seek, SetVolume, Shutdown}` 控制它，并通过 `AtomicU64` 读取 100ns 音频位置做低频校准。
+
+**关键不变量**：
+
+- 无音轨 / 音频打开失败 / PCM 协商失败一律静默降级为无声视频，只记日志，不 toast、不阻断 `set_wallpaper`。
+- 音频 PCM 参数由 WASAPI 当前 mix format 反推，避免采样率 / 声道数不匹配导致 `IAudioClient::Initialize` 失败。
+- 音频默认暂停在 0；只有「当前正在显示、不在 fade / pending、且未全屏暂停」的 `VideoPlayback` 才播放音频，由 `renderer.rs::sync_audio_state` 每帧裁决。
+- crossfade 期间 from / to / pending 音频全部冻结；`finish_transition` 后 `reset_clock(now)` 同时把视频与音频重置到 0。
+- 全屏暂停只冻结视频时钟，不累加 fade 时钟；音频由 `sync_audio_state` 统一暂停 / 恢复。
+- `global_volume` 启动时由 `RenderCoordinator::refresh_volume` 从 DB 同步一次；设置变更时同时写 Native `SetVolume` 与 WebView `VolumeChangedPayload`。
+- 音视频同步以视频时钟为唯一基准：音频线程在 EOF 时自行 seek 0，renderer 每 5s 检查漂移，超过 100ms 才下发 `Seek`。
+- 不引入 WinRT `MediaPlayer` / `MediaSource` / `MediaSession`，不引入 `url` crate，视频格式白名单与 M8 策略不变。
+
+**新增文件 / 改动点**：
+
+- `desktop_renderer/audio.rs`：新建 `AudioPlayback`，封装独立 MTA 音频线程、audio `SourceReader`、PCM ring buffer、WASAPI shared-mode、`ISimpleAudioVolume`、seek / pause / reset / 漂移校准。
+- `desktop_renderer/video.rs`：`VideoPlayback` 持有 `Option<AudioPlayback>`；`open` 接受音量并默认暂停音频；`advance` 调 `tick`；`reset_clock` 同步重置音频；新增 `set_audio_paused` / `set_audio_volume`。
+- `desktop_renderer/surface.rs`：`open_video` 传音量；新增 `video_arcs()`，让音量 / 冻结覆盖 transition.to 与 pending 队列。
+- `desktop_renderer/renderer.rs`：新增 `SetVolume` 命令、renderer 内音量状态、`sync_audio_state()`；全屏暂停改为覆盖所有 video arc。
+- `render_coordinator.rs` / `ctx/mod.rs` / `setting_effects.rs`：音量持久化同步与双 backend 路由。
+- `Cargo.toml`：新增 `Win32_Media_Audio` feature；未引入新的第三方媒体运行时。
+
+**验证**：`cargo fmt --all -- --check`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning、`pnpm exec tsc --noEmit`、`pnpm exec oxlint src` 0 warning / 0 error。实机项按统一策略留到最终验收。
+
+### 3.18 M9 前置：图片 / 视频链路计时埋点
+
+M9 不先假设「异步解码」「DCT 缩放」「DYNAMIC 纹理」哪个是主因，先用日志分段取证。
+
+- **图片静态链路**
+  - `decoder.rs`：记录 `image::open`、`to_rgba8`、`rgba_to_bgra`、解码总耗时；
+  - `surface.rs::upload_frames`：记录 `decode_frames` 总耗时、`CreateTexture2D + initial data`、`CreateShaderResourceView`、整段 `upload_frames` 耗时。
+  - 日志只写文件名，不写绝对路径。
+- **视频链路**
+  - `VideoPlayback::open`：记录打开总耗时与首帧读取耗时；
+  - `read_next_frame`：把 `ReadSample + ConvertToContiguousBuffer` 计入 read，把 `upload_buffer` 计入 upload；
+  - 每 2s 聚合输出一次 `read_avg/max`、`upload_avg/max`、reset 次数与 reset 耗时，避免逐帧刷日志。
+
+当前静态图上传不是 `D3D11_USAGE_STAGING + Map/Unmap`，也不是逐行 `UpdateSubresource`；它是 `D3D11_USAGE_DEFAULT + CreateTexture2D(initial data)`。逐行 `UpdateSubresource` 只存在于视频链路。因此 M9 必须先通过计时确认阻塞究竟在解码、CPU 格式转换、纹理创建/上传，还是视频逐帧上传，再决定优化方案。
+
+**验证**：`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。实机计时按统一策略留到最终验收。
+
+### 3.19 DXVA 硬解稳定链路与全局 VideoWorker
+
+本节覆盖 `feature/native-wallpaper-renderer` 分支在 M9 之后的视频链路重构。最终实机结论以本节和 `docs/NATIVE_RENDERER_ARCHITECTURE_REVIEW.md` 为准；3.13 / 3.17 中早期“每视频 SourceReader + RGB32 上传”“单视频 worker”的描述属于阶段历史。
+
+**最终链路**：
+
+```text
+一个 renderer 线程
+一个全局 VideoWorker 线程
+N 个 video session
+```
+
+- `VideoWorkerHost`
+  - 全局唯一 worker handle；
+  - 命令：`OpenSession` / `CloseSession` / `Pause` / `Reset` / `Shutdown`；
+  - renderer 侧 `VideoPlayback` 退化为轻量 handle。
+- `WorkerGpu`
+  - 最终形态：每个 `VideoSession` 持有一份 `ID3D11Device` / `ID3D11DeviceContext`；
+  - 每个 session 独立 `IMFDXGIDeviceManager` / device handle / `ID3D11VideoContext`；
+  - `CloseSession` 时整体释放，避免跨视频长期持有 MF/DXVA/GPU cache holder。
+- `VideoSession`
+  - 每个视频独立 `IMFSourceReader`、VideoProcessor、shared texture、timing、`pending sample`；
+  - worker 每轮轮询所有 session，每个 session 每轮最多产一帧，命令处理优先于帧推进。
+- renderer 侧
+  - `begin_video_frames()` 每帧按 `Arc<Mutex<VideoPlayback>>` 指针去重；
+  - 每个唯一视频只 `AcquireSync(1)` + `CopyResource` 一次；
+  - mirror / extend 共享一份本地纹理，independent 每个视频各自一份。
+
+**纹理与同步**：
+
+- DXVA 输出、shared texture、renderer 本地副本统一为 NV12；
+- Y 平面 SRV：`DXGI_FORMAT_R8_UNORM`；
+- UV 平面 SRV：`DXGI_FORMAT_R8G8_UNORM`；
+- 复用 `ps_nv12` shader 做 GPU 侧色彩转换；
+- keyed mutex 协议：
+  ```text
+  key0 = worker 可写
+  key1 = renderer 可复制
+  worker: AcquireSync(0) → VideoProcessorBlt(staging) → Flush → CopyResource(shared) → Flush → ReleaseSync(1)
+  renderer: AcquireSync(1) → CopyResource → Flush → ReleaseSync(0)
+  ```
+
+**生命周期修复**：
+
+- `ManuallyDrop<Option<ID3D11VideoProcessorInputView>>` 在每次 `VideoProcessorBlt` 后显式 drop；
+- `IMFDXGIDeviceManager::OpenDeviceHandle` 在 `WorkerGpu::drop()` 中关闭；
+- `pending` 队列只保留最新排队项，避免连续切换时堆积多个 worker/session；
+- 相同 `VideoIdentity(path, len, mtime)` 复用已有 `VideoPlayback`；
+- `MFStartup` / `MFShutdown` 在 renderer 生命周期内成对；
+- Worker 线程空闲常驻；GPU 资源随每个 session 关闭释放，Worker 真正退出 / 按需重启暂缓。
+
+**实机验收**：
+
+- mirror 稳定；
+- extend 稳定；
+- independent 稳定；
+- 双屏闪烁消失；
+- 快速切换、暂停、循环正常；
+- CPU 约 1%；
+- 内存稳定、切换后可回落；
+- 纯图片壁纸 Native 有明确内存优势；视频壁纸 Native 不以最低内存为优势，优势在 CPU 与帧同步；
+- WebView 方案波谷约 380MB / 波峰约 500MB；Native 视频方案单视频约 350MB，双视频切换后约 400MB+；
+- 具体分析见 3.21 / 3.22 和架构评审。
+
+**验证**：`cargo fmt --all`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。当前可达的相关提交：`1f7b2db`、`85dc97c`、`af00651`、`8db0ce0`。
+
+### 3.20 音频加载失败与无声修复
+
+音频链路在 Native 视频稳定后启用，实机出现两类问题：
+
+1. 初始化失败被静默忽略；
+2. SourceReader / WASAPI / PCM 协商 / Start 日志全部正常但无声。
+
+修复内容：
+
+- `bec0b9e fix: stabilize native video audio output`
+  - `GetMixFormat()` 返回的可能是 `WAVEFORMATEXTENSIBLE`，原始完整结构保留到 `IAudioClient::Initialize` 之后才释放；
+  - ring buffer 从 `max_len.max(current_len)` 改为 `current_len`，避免把缓冲区容量当有效音频写入；
+  - 检测 `WAVE_FORMAT_IEEE_FLOAT` 与 `WAVEFORMATEXTENSIBLE.SubFormat`；
+  - float mix 请求 `MFAudioFormat_Float`，否则请求 `MFAudioFormat_PCM`；
+  - 设置音量时先 `SetMute(false)`；
+  - 输出协商后的 tag / float / channels / rate / bits / block_align 日志；
+  - audio thread 初始状态与 control 面一致，见 3.22。
+
+实机验收：
+
+- 有音轨视频正常播放；
+- volume 50 正常；
+- 音频常驻约 10MB，用户确认可接受；
+- 用户确认音频 M 项完成。
+
+**验证**：`cargo fmt --all`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。
+
+### 3.21 DXVA `OUTPUTHAZARD`、循环 pacing 与 session 级 GPU 生命周期最终稳定化（2026-11-22）
+
+本节记录 `feature/native-wallpaper-renderer` 最终交付前的视频链路收尾。3.19 描述的是“全局 WorkerGpu + session”的阶段架构，最终形态以本节为准。
+
+**问题与根因**：
+
+1. `VideoProcessorBlt` 偶发 `E_INVALIDARG 0x80070057`，D3D11 debug layer 给出：
+   ```text
+   D3D11_MESSAGE_ID_VIDEOPROCESSORBLT_OUTPUTHAZARD (3145906)
+   Output resource is inaccessible because of a previous call to ReleaseSync or GetDC
+   ```
+   根因不是 NV12 / subresource / media type，而是 `VideoProcessorBlt` 直接写 shared keyed-mutex texture 时触发资源状态校验。
+2. 循环播放一段时间后出现高倍速：旧 `note_frame()` 只把 `loop_duration` 设为第一帧 `frame_time + duration`（约 33ms），EOF 后 `cycle_base` 只推进几十毫秒，墙钟 `target` 已经前进整段视频，所有帧被判为 overdue，worker 全速追赶。
+3. 切换多张视频后内存从 130MB 稳定涨到 300+MB：需要同时看三个条件。历史对照基线（重写前 hash `2f278fba`，当前不可 checkout）的共用 `WorkerGpu` 本身也能在切换后回落；当时 Blt 失败 / 偶发冻结会让视频链路经常停在重试或停滞状态，MF / DXVA / driver cache 未完整持续扩张。staging 隔离后 Blt 不再失败、帧持续推进、循环恢复正常，视频链路第一次长时间稳定运行。与此同时，为打印 debug message 引入的重写前诊断提交 `be2e647`（当前不可 checkout）在 debug 构建默认启用了 `D3D11_CREATE_DEVICE_DEBUG`：debug layer 会为对象生命周期跟踪持有内部引用，而全局 `WorkerGpu` / device manager 在视频切换间长期存活，旧 session 已释放的 D3D11 对象仍可能被 debug layer 挂住；再叠加健康播放后 MF / DXVA / driver cache 的完整展开，三者共同把内存推到 300+MB。这里不能把原因简化为 staging texture 或全局 GPU 单项：staging texture 只有数 MB，全局 GPU 在历史对照基线（重写前 hash `2f278fba`）已存在且当时可回落；中间态新增的 debug layer 默认开启是必须计入的诊断副产物。
+
+**最终修复**：
+
+- `ID3D11InfoQueue` / `D3D11_MESSAGE` 诊断：
+  - 日志区分 `CreateVideoProcessorInputView` 与 `VideoProcessorBlt`；
+  - 记录 `decoder texture desc`、`ReadSample flags`、`MF_MT_INTERLACE_MODE` / `YUV_MATRIX` / `NOMINAL_RANGE` / `FRAME_SIZE`；
+  - D3D11 debug layer 改为 opt-in：`MINI_WALLPAPER_D3D11_DEBUG=1/true`，默认关闭，避免 debug layer 生命周期跟踪抬高 dev 构建内存。
+- VP 输出隔离：
+  - `VideoProcessorBlt` 写 worker staging texture；
+  - 成功后 `CopyResource(staging → shared keyed-mutex texture)`；
+  - 再 `ReleaseSync(1)` 给 renderer；
+  - staging texture 先按 session 私有、后按 WorkerGpu 内 `(width, height)` 复用，最终随 session 独立 GPU 生命周期释放。
+- 循环 pacing：
+  - 读取 `MF_PD_DURATION` 作为真实 `loop_duration`；
+  - 读不到时用首轮最大 `frame_time + duration` 推断；
+  - `reset()` 和 EOF 同步 `SharedState.loop_duration`；
+  - EOF 推进完整 `cycle_base`，消除高倍速。
+- session 级 GPU 生命周期：
+  - 保留一个全局 video worker thread，保证所有 session 串行处理、切换稳定；
+  - 删除 worker 级全局 `WorkerGpu`；
+  - 每个 `VideoSession` 创建并持有自己的 `WorkerGpu` / device manager / staging texture；
+  - `CloseSession` 或 tick 失败移除 session 时，整体释放该 session 的 D3D11/MF GPU 资源；
+  - `VideoSession` 字段顺序保证 `IMFSourceReader` / view / texture 先 drop，最后 drop `WorkerGpu` 并关闭 device manager。
+
+**实机验收结论（用户确认）**：
+
+- `0x80070057 / VIDEOPROCESSORBLT_OUTPUTHAZARD`：不再出现；
+- 循环后高倍速：不再出现；
+- 切屏偶发冻结：不回归；
+- 初始化视频 + 图片双屏：约 130MB；
+- 切换多张视频后：能正常回落；此阶段曾以重写前历史对照基线（hash `2f278fba`，当前不可 checkout）得到稳态约 +20MB 的结论，最终内存定位见 3.23；
+- 结论：该阶段选择 session 级 GPU 以收敛跨视频 cache holder；后续多轮 A/B 表明这不是最低内存方案，但最终仍因生命周期清晰与工程管理优势保留，见 3.23。历史对照基线（重写前 hash `2f278fba`，当前不可 checkout）共用 GPU 且能回落，但伴随 Blt 报错、偶发冻结与循环 pacing 风险。
+- A/B 验证：保留 staging / pacing / debug opt-in，仅恢复全局单 `WorkerGpu` 后，用户实机确认首个视频会把 cache 拉高并稳定，第二个视频只小幅上升；全局单 GPU 多屏边际成本更低，但旧 cache 跨视频留存。最终工程决策见 3.23。
+
+**验证**：`cargo fmt --all`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。当前可达的相关提交：`7027365`、`8db0ce0`。
+
+### 3.22 fade 期间视频/音频暂停与恢复（2026-11-22）
+
+此前 M7 已经做到 fade 期间不推进 renderer 侧视频时钟，并在 fade 结束后 `reset_clock()`。但 worker 侧 `VideoSession::tick()` 仍会推进解码，音频线程也可能在 `open()` 后立即出声，表现为：
+
+```text
+fade 期间画面/声音继续推进
+fade 结束后 reset 到 0
+→ 画面闪回 / 声音回放
+```
+
+最终修复分两部分：
+
+- `6f831d5 fix: pause video and audio during crossfade`
+  - `VideoPlayback` 增加 `PAUSE_FULLSCREEN` / `PAUSE_FADE` pause reason；
+  - 只有所有 reason 清除后才真正 resume worker；
+  - renderer 新增 `sync_video_pause()`，fade / pending 期间暂停所有 current / transition / pending 视频源；
+  - `finish_transition()` 后先 `reset_clock(to)`，此时 `PAUSE_FADE` 仍在，reset 后立刻恢复暂停；随后同步清除 fade reason，让新 wallpaper 恢复；
+  - 全屏暂停与 fade 暂停按位合并，避免一方解除时误恢复另一方。
+- audio 初始 paused 修复已合并进同一个当前可达 commit `6f831d5`
+  - `AudioPlayback` 控制面默认 `paused=true`，但历史实现中 `audio_loop()` 初始化 WASAPI 后立即 `Start()` 且本地 `paused=false`；
+  - 新视频在 `open()` 后已经出声，而 fade 中 `set_audio_paused(true)` 因 atomic 已是 true 不再发 Pause；
+  - 现在 audio 线程保持 paused，只有收到 `AudioCommand::Play` 才 `Start()`，控制面与线程状态一致。
+
+实机验收：
+
+```text
+fade 期间视频静止：通过
+fade 结束后从 0 恢复且不闪回：通过
+fade 期间音频静音：通过
+fade 结束后音频从 0 播放：通过
+```
+
+**验证**：`cargo fmt --all`、`cargo test --lib` 50 passed、Windows probe target `cargo check` 0 error / 0 warning。当前代码基线：`6f831d5`；文档 HEAD 随分支。
+
+
+### 3.23 最终内存定位与工程取舍（2026-11-22）
+
+最终代码保留 session 级 GPU：一个全局 video worker thread，每个 `VideoSession` 一份 `WorkerGpu` / device manager / staging texture，session 关闭时整体释放。
+
+多轮 A/B 后的产品级结论：
+
+- 纯图片壁纸：Native 有明确内存优势；
+- 视频壁纸：单视频时 Native 已不再具备内存优势，独立视频窗口越多优势越弱；
+- 全局单 GPU：首个视频 cache 拉高后稳定，多屏边际成本更低，但旧 MF/DXVA/driver cache 跨视频长期留存；
+- session 级 GPU：多屏固定成本更高，但每个视频的 cache holder 生命周期清晰，关闭即释放，符合当前 OOP / 资源管理取舍；
+- 官方没有进程级 MF/DXVA clear cache API；`MFShutdown()` 只能在应用去初始化阶段调用，不能用于每次视频切换；
+- 尝试过的 decoder output sample count 与 direct shared SRV 两条优化均未纳入最终代码：前者对当前 decoder 的 `ArraySize` 无效，后者在 mirror 下产生高频闪烁与绿屏。
+
+因此 Native 视频方案的定位是：
+
+```text
+低 CPU
+可控帧同步
+session 级资源生命周期清晰
+不是最低稳态内存方案
+```
+
 ---
 
 ## 四、踩坑历程：方案演进全记录
+
+> **历史 hash 说明**：本章及后续“方案演进”段落中的短 hash 多数属于历史重写前的提交，仅用于解释方案取舍，**当前分支无法 checkout**。当前可达提交只有第七章列出的 16 个。
 
 ### 阶段 0：M0 ~ M4 主干实现（`d15f251` → `d9bb998`）
 
@@ -504,12 +833,21 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 
 删除 debug shader、backbuffer readback、心跳、窗口状态 dump、桌面层级枚举、冗余日志；保留 `CULL_NONE` 与正常渲染链路。随后发现共享 `ModernStrategy` 的 `WS_POPUP` 改动会影响 WebView，引入 `EmbedPolicy` 收窄。
 
+### 阶段 10：切换延迟 ≈1s，不是渲染引擎的问题（当前对应 `c0cc441`）
+
+用户反馈 dev 下设置壁纸接近 1s、release 明显变低、高分辨率大图 release 下仍有延迟。最初按「有 GPU 加速不该这么慢」的直觉怀疑渲染引擎，取证后前提被推翻：GPU 只覆盖 `Draw + Present`（≈16ms），前面整条 CPU 链路都不受加速。用 `rustc` 微基准分别链接项目 debug / release 已编译的 `image` rlib，量化出 O0 下解码 + 像素转换慢 15~85 倍（4K JPEG 1.9s → 79ms）。
+
+**另一次自我修正**：排查中曾把「shader swizzle 去掉 `rgba_to_bgra`」列为 release 下每次换图的主要 CPU 开销，实测 O3 下它只占 1.2ms / 79ms，于是把它从主方案降级为可选清理；真正的主因是 `image::open` 解码。最终实施 A（dev profile）+ B（解码结果缓存），详见 3.12。
+
+> **教训**：先量再改。同一个「慢」在 dev 与 release 下根因不同；用宿主机上可跑的微基准把每一段耗时钉死，比在 Windows 实机上盲加计时日志更快，也避免了改错地方。
+
 ### 诊断方法沉淀
 
 1. **先证伪前提**：「看到清屏色」不等于「渲染链路在跑」，用无条件心跳把可见性做成可观测事实。
 2. **分层 A/B**：把「窗口可见 / Present / GPU 写入 / Draw 输出」拆成独立可证伪命题，逐层排除。
 3. **HRESULT 不等于画面**：`Present` 返回 `S_OK` 或 `DXGI_STATUS_OCCLUDED` 都不能推断桌面可见。
 4. 排查期日志与探针一次性引入、定位后一次性清除，不留在生产代码里。
+5. **性能问题先分段定量，别凭「GPU 加速」推断瓶颈**：把链路切成 IPC/DB → 嵌入 → 解码/通道转换/上传 → 循环 tick → Draw/Present，逐段测 O0 vs O3，才能把「dev 未优化」和「单次解码成本」拆成两个独立问题（3.12）。改 `Cargo.toml` 后还要用 `cargo build -v` 确认 `opt-level` 真的传给了 rustc。
 
 ---
 
@@ -536,6 +874,15 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 - extend 的 union 是**全组共享**的：几何 / backend / display_mode 任一变化都必须 `refresh_group_geometry()` 刷新整组视口，只改单屏会留下旧 offset。
 - 组内所有 surface 必须来自**同一个 `SharedDevice`** 并持有**同一个 `Arc<SharedFrames>`**，否则 SRV 无法跨屏绑定、动画帧会错开。
 - `DesktopRenderer` 的命令是 mpsc fire-and-forget，**同 channel FIFO 保证顺序**，但没有 ack：「`ensure_target` 返回 Ok」≠「renderer thread 已完成 surface 创建 / 纹理上传」。
+- `FrameCache` 只能活在渲染线程内（SRV 不可跨线程），且**命中必须返回同一个 `Arc<SharedFrames>`**：帧时钟、跨屏同帧都依赖这一份 Arc 不被复制重建。
+- `CacheKey` 必须包含 `len + mtime`，只用路径会在同名文件覆盖 / 备份恢复后显示旧纹理。
+- `SetWallpaper` 允许重复下发，但缓存预算内的同一 key **解码 / 纹理上传至多一次**；`RenderCoordinator` 不负责去重，也不得删掉 `ensure_target` 的组级重发。
+- crossfade 的判定快照必须取在 `apply_backend` **之前**；跨 backend 与首帧一律硬切，不能用「后端名」在切换后反推。
+- 两 pass 混合要求 shader 输出**预乘色**且 blend 为 `ONE / INV_SRC_ALPHA`；from 必须 alpha=1 先铺满 RT，两路都带 progress 会让中段发暗。
+- fade / 排队期间**不推进任何视频时钟**；to 是视频时只在 fade 结束那一帧 `reset_clock(now)`，组内按 Arc 指针去重，一次 fade 只 reset 一次。
+- 连续换图走 FIFO 队列；硬切必须清空 `transition` 与 `pending`，不能让旧 fade 在新 backend 上继续跑。
+- `display_mode` 变更必须同时更新两个 backend：WebView 靠 `display-mode-changed → loadConfig` 重读 DB，Native renderer 没有这一步，`sync_config_from` 改完 DB 后必须显式整组 `update_wallpaper`，否则已有 surface 不跟随。
+- 「暂停轮播」（`Action::TogglePause`，快捷键 / 托盘）与「暂停渲染」（全屏检测 → `set_paused`）是两套语义，前者不得调 `set_paused`。
 
 ### 5.3 已知限制（如实记录，非疏漏）
 
@@ -546,11 +893,19 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **视频播放状态只在 renderer 线程推进** | 视频用 `Arc<Mutex<VideoPlayback>>`，组级每帧只 advance 一次；不进 `FrameCache` | 与图片的 `SharedFrames` 是两套机制：视频是流式常驻一个播放状态，不是全帧缓存。跨屏同帧由「同一 Arc + 一次推进」保证，见 3.13 |
 | **WebView / Native 坐标系差异** | 物理像素（Native）vs 逻辑像素（WebView CSS，除以 `scaleFactor()`）；`WebviewWindowBuilder` 直接接收物理值存在既有 DPI 偏差 | Q2 决定 M5 只保证 Native 内部统一，WebView 侧 DPI 另立条目；D2 保证同一组不会混用两套坐标 |
 | **混合 backend 时 extend 降级** | D2：组内出现非 Native backend 时整组退回逐屏独立渲染 | 若未来要求混合组也拼接，需先统一两套几何与帧时钟；17:27 决策明确不重写 WebView 侧行为 |
-| **运行时动态 backend 切换** | `apply_backend` 已支持跨 backend 切换（先销毁旧目标再建新目标），但 `selection` 在 `RenderCoordinator::new` 时固定 | 运行时切换推到 M8 |
-| **视频静音** | SourceReader 只选视频流、关音频流；`VideoPlayback` 不做音频渲染 | 用户确认「M6 先静音，后面补」；当前 WebView 侧的 volume 设置对 Native 视频不生效 |
+| **selection 仍固定在启动阶段** | M8 已让 `apply_backend` 按每次壁纸的 capability 跨 backend 切换；但 `selection` 本身在 `RenderCoordinator::new` 时固定 | 用户确认方案 A：不新增设置项，不做运行时切 NativeOnly/Auto |
+| **WebView fallback 可播性依赖 Chromium** | Auto 下 MF 容器表外的格式回退到 `wallpaper.html`；WebM（VP8/VP9）通常可用，MKV 支持有限 | 回退成功 ≠ 一定能播；仍只是 capability fallback，不是解码失败兜底，列最终实机验收 |
+| **音频只做低频校准** | 音频线程在 EOF 自行 seek 0，renderer 每 5s 校准漂移，阈值 100ms | 不引入统一 Presentation Clock；用户确认低频校准即可，见 3.17 |
 | **无 HTML 网页壁纸** | 产品边界决策 | 见 1.3 |
 | **DWM 圆角 ~1px** | 继承自 `desktop_embedder`，选择接受 | 见关联文档 |
+| **动画帧同步仅在代码层保证** | `Arc<SharedFrames>` 让组内共用一个 `started_at`，但 GIF / 动态 WebP 的接缝同帧尚未实机确认 | 静态图 extend / mirror 已实测通过（3.11）；动画路径待补验 |
 | **旧版本 Windows 未实测** | DirectComposition 链路只在 24H2 / 25H2 实机验证 | legacy 嵌入路径沿用社区成熟方案，未实测 |
+| **单次解码仍未削减** | A+B 只消除**重复**解码；release 下 4K JPEG 的 ~75ms `image::open`、8K 的成倍成本依然存在 | 唯一能真正削减它的路是按目标分辨率降采样解码（WIC / 换解码器），见第九节；当前 `upload_frames` 仍按原始尺寸建纹理 |
+| **超大素材不进缓存** | 单份 >192MiB（8K / 多帧 GIF）直接不入缓存，避免显存爆炸 | mirror/extend 下这类素材仍会重复解码；可用「连续同 key 命令合并」补，无需常驻缓存 |
+| **动图回切接着播** | 缓存命中连 `started_at` 一起复用，A→B→A 回切不会从头重播 | 这是省掉重复解码的必然结果，同时保证组内帧时钟一致；若产品要求每次从头，需显式重置帧时钟 |
+| **crossfade 只在 Native↔Native** | 跨 backend 与首帧硬切，不存在过渡 | 原任务清单 M7 明确；WebView 侧无对应 blend 路径，不追求两侧视觉一致 |
+| **连续切换会提前 open 队列里的视频** | FIFO 队列在 `SetWallpaper` 到达时就解码 / open，不等轮到它 | 快速连点多个视频会同时持有多个 SourceReader；按用户要求不做覆盖式过度设计，见 3.14 |
+| **crossfade 核心行为已实机验证** | Native↔Native fade 与 fade 期间视频/音频暂停、结束后从 0 恢复均通过 | 历史文档中四种媒体组合与 extend 接缝明暗的完整矩阵仍可作为额外回归项 |
 
 ---
 
@@ -564,10 +919,13 @@ src-tauri/src/
 │   ├── wallpaper_renderer/                 跨平台契约（不依赖 windows crate）
 │   │   ├── mod.rs                          facade：Windows 导出真实 DesktopRenderer，
 │   │   │                                   其它平台同签名 no-op（macOS/CI 可编译）
-│   │   ├── contracts.rs                    RenderDescriptor / ExtendViewport / enums / RendererError
+│   │   ├── contracts.rs                    RenderDescriptor / ExtendViewport / enums / RendererError /
+│   │   │                                   crossfade_progress + CROSSFADE_DURATION（350ms，含单测）
 │   │   ├── selection.rs                    default_backend_selection / resolve_backend
 │   │   ├── decoder.rs                      image 0.25：GIF / WebP / 静态图 → BGRA 帧
 │   │   ├── fit.rs                          fit_rect → D3D11_VIEWPORT，含单元测试
+│   │   ├── frame_cache.rs                  CacheKey / ByteSize / 泛型字节预算 LRU
+│   │   │                                   （解码结果缓存，跨平台纯逻辑 + 8 个单测）
 │   │   └── geometry.rs                     union_rect / extend_viewport / group_viewports
 │   │                                       （M5 跨屏几何，跨平台纯函数 + 6 个单测）
 │   │
@@ -580,26 +938,23 @@ src-tauri/src/
 │       │
 │       ├── desktop_renderer/
 │       │   ├── mod.rs                      导出 DesktopRenderer / SharedDevice / SharedFrames
-│       │   ├── renderer.rs                 渲染线程：共享 device / 组级 SetWallpaper /
-<<<<<<< HEAD
-│       │   │                              SetGroupGeometry / ComScope / 消息泵 / 16ms 循环
-│       │   ├── window.rs                   NativeWindow：窗口创建 / exstyle 归一 / bounds / Drop
-│       │   └── surface.rs                  SharedDevice（一次解码上传）/ SharedFrames（帧时钟）/
-│       │                                  RenderSurface（每屏 swapchain + offset viewport）
-=======
+│       │   ├── renderer.rs                 渲染线程：共享 device / 组级 SetWallpaper(crossfade) /
 │       │   │                              SetGroupGeometry / FrameCache / ComScope / 消息泵 /
-│       │   │                              oneshot ack / advance_videos / 16ms 循环
+│       │   │                              oneshot ack / advance_videos（fade 冻结 + 去重）/
+│       │   │                              finish_transition（视频 reset 按 Arc 去重）/ 16ms 循环
 │       │   ├── video.rs                    M6：MF SourceReader 流式解码 / RGB32 → 复用纹理 /
-│       │   │                              100ns 帧时钟 / 循环 seek / 暂停冻结
+│       │   │                              100ns 帧时钟 / 循环 seek / 暂停冻结 /
+│       │   │                              M7：reset_clock（fade 结束后从 0 开始）
 │       │   ├── window.rs                   NativeWindow：窗口创建 / exstyle 归一 / bounds / Drop
 │       │   └── surface.rs                  SharedDevice / SharedFrames（图片帧时钟 + ByteSize）/
-│       │                                  WallpaperMedia（Frames | Video）/ RenderSurface
->>>>>>> 63067b3 (feat: add native video decoding via Media Foundation)
+│       │                                  WallpaperMedia（Frames | Video）/ Transition /
+│       │                                  VecDeque fade 队列 / blend + cbuffer 两 pass / RenderSurface
 │       └── DESKTOP_EMBEDDER_TECH_DOC.md
 │
 ├── ctx/
-│   ├── render_coordinator.rs               渲染链路唯一入口（backend / rect / display_mode /
-│   │                                      组几何 / D2 降级 / 路由 / 错误上报）
+│   ├── render_coordinator.rs               渲染链路唯一入口（backend / wallpaper_ids / rect /
+│   │                                      display_mode / 组几何 / D2 降级 / 路由 / 错误上报 /
+│   │                                      M7：跨 Native 换图才下发 crossfade）
 │   ├── window_manager.rs                   WebView 窗口，embed 传 EmbedPolicy::WebView
 │   └── mod.rs                              AppContext 持有 Arc<Mutex<RenderCoordinator>>
 ├── commands/wallpaper_window.rs            create / destroy / hide / show / active_ids 全改走协调器
@@ -611,6 +966,7 @@ src-tauri/src/
 ├── events.rs                               RendererErrorPayload
 └── Cargo.toml                              [target.'cfg(windows)'] 追加 windows 0.61
                                             （D3D11 / Dxgi / DirectComposition / COM / Fxc / Gdi）
+                                            + [profile.dev.package.*] 覆盖（见 3.12）
 ```
 
 前端：`src/api/event.ts` 增 `RENDERER_ERROR` + `RendererErrorPayload` + `EventMap`；`src/pages/main/App.tsx` 单点监听，`ExtendDegraded` 用 `toast.warning`、其余用 `toast.error`。
@@ -619,6 +975,7 @@ src-tauri/src/
 
 ```
 backends:      HashMap<monitor_id, RenderBackend>   ← 当前 active backend
+wallpaper_ids: HashMap<monitor_id, i32>             ← 当前显示的壁纸；crossfade 判定用
 rects:         HashMap<monitor_id, MonitorRect>     ← 所有 active 屏；extend 的 union 由整张表算出
 display_mode:  DisplayMode                          ← 启动时从 app_setting 读，设置变更时同步
 degraded_logged: bool                              ← D2 降级提示只发一次
@@ -627,18 +984,20 @@ selection:     BackendSelection                     ← 进程启动时确定
 
 | 入口 | 行为 |
 |------|------|
-| `ensure_target` | 登记 rect → 查库 → `build_descriptor` → 建 surface / 窗口 → 组级下发首帧 → 刷新全组几何 |
-| `update_wallpaper` | **整组只查库一次**：`apply_backend` 逐屏切 backend → Native 屏一次 `set_wallpaper` 共享帧时钟 / WebView 屏逐屏 emit → `thumbnail-changed` → 刷新全组几何 |
+| `ensure_target` | 登记 rect → 查库 → `build_descriptor` → 建 surface / 窗口 → 组级下发首帧（`crossfade=false`）→ 记录 `wallpaper_ids` → 刷新全组几何 |
+| `update_wallpaper` | **整组只查库一次**：先快照 `previous(backend, wid)` → `apply_backend` 逐屏切 backend → Native 屏一次 `set_wallpaper(crossfade)` 共享帧时钟 / WebView 屏逐屏 emit → 写回 `wallpaper_ids` → `thumbnail-changed` → 刷新全组几何 |
 | `register_monitor` | 在判断「有没有壁纸」之前登记几何并重算 union |
 | `set_display_mode` / `refresh_display_mode` | 更新模式并触发 `refresh_group_geometry()` |
 | `refresh_group_geometry` | 算 union → extend 且全 Native 时下发各屏 `ExtendViewport`，否则全部置 `None`（D2 降级并提示一次） |
-| `destroy_target` | 按 backend 清理，并刷新全组几何 |
-| `clear_wallpaper` / `set_fit_mode` | 按 backend 分流 |
+| `destroy_target` | 清 `wallpaper_ids` + 按 backend 清理，并刷新全组几何 |
+| `clear_wallpaper` / `set_fit_mode` | 清 `wallpaper_ids`（仅 clear）/ 按 backend 分流 |
 | `set_paused` | Native 停帧 + WebView `hide_all` / `show_all` |
 | `dispatch_notifications` | `RenderNotification::Updated/Cleared` 批量派发，DB 阶段收集、短锁内一次性执行 |
 | `active_ids` | Native + WebView 合并去重 |
 
 `RenderNotification` 替代了 `WmNotification`，目的是把「查库 → 决策 → 路由」从 `WindowManager` 锁内搬出去，延续 P1 的锁范围治理。
+
+> `FrameCache<SharedFrames>` **不属于**协调器状态：它持有 D3D11 SRV，只能活在渲染线程 `run()` 的栈上（见 3.12）。协调器只负责下发命令，重复命令在渲染线程侧去重，两边不共享任何 GPU 对象。
 
 ### 6.3 EmbedPolicy：modern 改动要不要保留？对 WebView 有无影响？
 
@@ -672,58 +1031,26 @@ selection:     BackendSelection                     ← 进程启动时确定
 
 ## 七、Git 提交时间线
 
-> 以下为**演进过程**记录。M4 收束时按用户要求把整段历史压缩为**一个** commit 并 force push，因此最终分支上这些中间 commit 不再存在。
+> 当前分支已重建为 16 个语义化提交，merge-base 为 `1929233d5001327583b617ff7f9119f61e55527c`。此前 log / revert / A/B 试错 hash 已不可 checkout；本章只列当前可达提交。
 
+```text
+990e18c  feat: add native wallpaper renderer with D3D11 and DirectComposition
+273046e  feat: add native cross-monitor extend rendering
+c0cc441  perf: cache decoded frames and optimize dev build profile
+f53903d  feat: add native video decoding via Media Foundation
+61d9c48  feat: add native crossfade between wallpapers
+4fdba00  feat: restore WebView capability fallback
+8fc0a1f  fix: sync native wallpapers on display mode change
+1f7b2db  feat: enable DXVA hardware decoding with NV12 shared textures
+85dc97c  perf: reduce frame cache budget to 16MiB
+af00651  refactor: use one global video worker
+bec0b9e  fix: stabilize native video audio output
+594ce4e  fix: avoid green or black frames before first video frame
+7027365  fix: stabilize DXVA output and loop timing
+8db0ce0  perf: release DXVA GPU per video session
+6f831d5  fix: pause video and audio during crossfade
+HEAD    docs: finalize native renderer architecture and validation
 ```
-── M0 ~ M4 主干 ──────────────────────────────────────────────
-d15f251  feat: add native wallpaper renderer contracts
-a6161aa  feat: add native wallpaper renderer thread
-e6660a8  feat: add native wallpaper texture rendering
-e538f36  feat: support fit modes and monitor geometry updates
-d9bb998  feat: route wallpaper updates through native renderer coordinator
-
-── Windows 实机排查：诊断层 ───────────────────────────────────
-2244e91  log: add native renderer pipeline diagnostics
-3783d2a  log: add native renderer loop diagnostics
-f1ee384  log: add native renderer window state diagnostics
-41e8fad  log: dump WorkerW child window z-order
-66d0b72  log: add DWM occlusion and desktop hierarchy diagnostics
-30d8c09  log: add DirectComposition draw loop diagnostics
-4c97fde  log: add backbuffer readback and shader A/B diagnostics
-8694e67  log: add unconditional clear-color heartbeat for window visibility A/B ⭐
-
-── Windows 实机排查：修复层 ───────────────────────────────────
-bc71725  fix: clear popup style for native desktop embedding
-ff799e3  fix: create swapchain after desktop embedding
-051e2a6  fix: normalize native child window styles for DWM composition
-6143350  docs: correct DWM exstyle rationale
-33c9e7b  fix: render native wallpaper through DirectComposition ⭐
-da22a50  fix: disable back-face culling on native wallpaper quad ⭐ 最终修复
-b2a01a0  refactor: remove native renderer troubleshooting diagnostics
-         ↓ M4 收束：EmbedPolicy 隔离 WebView / 悬垂方法重新定性 / 冗余日志清理
-         ↓ 压缩为单个 commit `950229a` + force push
-         ↓ M5：跨屏几何 / 共享 device 与帧时钟 / offset viewport / 全组刷新 / D2 降级
-<<<<<<< HEAD
-         ↓ feat: add native cross-monitor extend rendering（当前版本 ⭐）
-=======
-         ↓ 87b616f feat: add native cross-monitor extend rendering
-         ↓ 0d9144b docs: record Windows validation of native extend and mirror
-         ↓ 性能收束：解码缓存（FrameCache）+ dev profile 优化
-         ↓ d639b63 perf: cache decoded frames and optimize dev build profile
-         ↓ eab5316 docs: document decode cache and dev profile optimization
-         ↓ M6：MediaFoundation 流式视频解码 / 10 个容器 / RGB32 复用纹理 /
-           组级共享播放状态 / oneshot ack 错误回传 / 静音 / 暂停冻结
-         ↓ f9d37ed feat: add native video decoding via Media Foundation（当前版本 ⭐）
->>>>>>> 63067b3 (feat: add native video decoding via Media Foundation)
-```
-
-merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
-
-<<<<<<< HEAD
-> M0~M4 的 21 个中间 commit 已在 M4 收束时压缩；M5 是独立增量提交，未改写历史。
-=======
-> M0~M4 的 21 个中间 commit 已在 M4 收束时压缩；M5（`87b616f`）、实机验证结论（`0d9144b`）、性能收束（`d639b63` / `eab5316`）与 M6 都是独立增量提交，普通 push，未改写历史。
->>>>>>> 63067b3 (feat: add native video decoding via Media Foundation)
 
 ---
 
@@ -760,7 +1087,15 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 - `PCSTR` 接收 `*const u8`；
 - stub `MonitorRect` 需 `Copy`。
 
-验证结果：`rustfmt --edition 2021` 通过、probe 模块树 Windows target `cargo check` 通过、宿主 `src-tauri cargo check --lib` 通过（`Finished dev profile`）。
+验证结果：`rustfmt --edition 2021` 通过、probe 模块树 Windows target `cargo check` 通过、宿主 `src-tauri cargo check --lib` 通过（`Finished dev profile`）。M5 阶段进一步跑了 `cargo test --lib` 42 passed、`tsc --noEmit` 与 `oxlint` 零告警，并在 Windows 实机确认图片 extend / mirror 正常（3.11）——交叉编译只能证明类型正确，画面正确性仍以实机为准。
+
+性能收束阶段（当前对应 `c0cc441`）另跑了完整回归：`cargo fmt --all -- --check`、`cargo test --lib` **50 passed**（新增 8 个 `FrameCache` 单测）、`pnpm exec tsc --noEmit`、`oxlint src` 0 warning / 0 error；并用 `cargo build -v` 抓 rustc 参数，确认 dev profile 覆盖**真的传到了编译器**（`image = -C opt-level=3` / `mini_wallpaper_lib = -C opt-level=1`）——只改 `Cargo.toml` 而不验参数，很容易出现「配了但没生效」。probe 工程改为镜像**项目真实模块层级**（`platform::wallpaper_renderer::frame_cache`）后再跑 Windows target `cargo check`，0 error / 8 个 stub dead_code 警告。项目本体交叉检查仍被 C 工具链挡住（这次是 `ring` 找不到 MSVC 的 `assert.h`，与早前 `lzma-sys` 的 `stdlib.h` 同源：macOS 缺 Windows SDK），与本次代码无关。
+
+M7 阶段回归：`cargo fmt --all --check`、`cargo test --lib` **51 passed**（`crossfade_progress` 边界单测）、`tsc --noEmit`、`oxlint`（118 文件）0 warning / 0 error。probe 同步 blend state / cbuffer / transition 队列后跑 Windows target `cargo check`，0 error / 0 warning；期间抓到一个类型陷阱：`D3D11_COLOR_WRITE_ENABLE_ALL` 是 windows crate 的 newtype，不能直接 `as u8`，必须 `.0 as u8`。
+
+M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报错」单测合并为一个 `unsupported_video_falls_back_only_in_auto`（webm / mkv / flv × Auto / NativeOnly），数量净 -1 但覆盖面扩大。改动只在跨平台 `selection.rs` 与注释，Windows 渲染器代码未动，probe 无需同步。按用户 14:05 的决策，**M6 起实机验证统一后置最终验收**，本阶段不再逐项确认。
+
+控制链路收尾回归：`cargo fmt --all`、`cargo test --lib` 50 passed、probe Windows target check 0 error / 0 warning。改动只在 `setting_effects.rs`（Scheduler 层），Windows 渲染器与前端均未动。副屏跟随与切回独立后的 fitMode 属于实机行为，按统一验收策略记入待办，不在本地确认。
 
 ### 8.5 历史收束
 
@@ -768,29 +1103,33 @@ merge-base：`1929233d5001327583b617ff7f9119f61e55527c`。
 
 ---
 
-## 九、后续优化方向（M6+）
+## 九、后续优化方向（M8+）
 
-**M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。剩余项：
+**M5 已完成**：跨屏几何纯函数 + 6 个单测、`display_mode` 贯通协调器、共享 `ID3D11Device` 与共享帧时钟、逐屏 offset viewport、模式切换与热插拔全组刷新、D2 混合 backend 降级提示。**图片 extend / mirror 已 Windows 实机验证通过（3.11）**，负 viewport 与共享 SRV 两个核心风险已关闭。
+
+**M7 已完成**（见 3.14）：Native↔Native 换图 350ms crossfade，两 pass 预乘 alpha blend，四种媒体组合全覆盖；视频在 fade 期间冻结，to 为视频时 fade 结束才从 0 计时；连续切换走 FIFO 队列，跨 backend / 首帧硬切。画面效果与 M6 视频一并留到 Windows 最终统一验收，**本阶段只完成编译、单测与交叉检查**。
+
+**M8 已完成**（见 3.15）：范围按现状收窄为「Auto 模式 capability fallback 接线」——原清单三条中两条早已满足，不新增设置项、不删 WebView 资产。按壁纸格式自动切 backend 的能力由此真正生效；`selection` 仍在启动阶段固定。按用户要求，M6 起所有实机验证统一后置最终验收，不再逐项确认。
+
+**视频音频方案 A2 已完成**（见 3.17）：明确放弃 MediaPlayer frame server、MediaPlayer audio-only 与 MediaSession 三类高封装方案；视频和音频都走 `IMFSourceReader`，音频 PCM 经 WASAPI shared-mode 输出。共享模型按 display mode 对齐：Independent 每屏一份视频 + 音频，Mirror / Extend 全组各一份。音量、全屏暂停、crossfade 冻结 / reset、低频校准均已接线；无音轨静默降级。编译、单测、Windows probe 交叉检查与前端静态检查全绿，实机项统一留到最终验收。
+
+**性能收束已完成**（当前对应 `c0cc441`，见 3.12）：dev profile 优化把 O0 的 15~85 倍退化拉回正常量级，`FrameCache` 消除重复解码与纹理上传。注意它**没有削减单次解码**，release 下高分辨率大图的 `image::open` 成本仍在，因此下表新增两条 P1。剩余项：
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
-<<<<<<< HEAD
-| **P0** | Native 视频解码（M6） | 用 MediaFoundation 把 `.mp4` / `.m4v` 接进 `DecodedFrame`；`SharedFrames` 模型可直接扩展到视频帧。完成前要么实现解码、要么把这两类扩展名从 `NATIVE_VIDEO_EXTENSIONS` 移出并判为 `WebView`，消除「backend 说支持但解码必失败」的语义裂缝 |
-| **P0** | Windows 实机验收 M5 | 双屏不同分辨率 + 负坐标（主屏在右）、静态图 / GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份、WebView fallback 不回归 |
-| P1 | 渲染命令 ack | mpsc + oneshot 回执，把解码 / surface 失败回传 `renderer-error`，不再只落 renderer thread 日志 |
-=======
-| ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态，`.webm` / `.mkv` 明确报错 |
-| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast |
+| ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态；表外格式的 WebView fallback 见 M8（3.15） |
+| ~~**P1**~~ | ~~WebView fallback 接线（M8）~~ | **已完成（3.15）**：Auto 下表外格式回 WebView，NativeOnly 下报错；页面与事件链原样复用 |
+| **P0** | 剩余实机验收项 | 静态图 extend / mirror 已通过；待补：GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔后 union 重算、显存只占一份（负坐标布局）、WebView fallback 不回归、D2 降级 toast 只弹一次；**M6 新增**：视频跨屏同帧、暂停恢复不跳帧、循环 seek 不卡、解码失败 toast；**M7 新增**：四种 crossfade 组合、extend 接缝明暗一致、连续切换队列每段跑满 350ms；**M8 新增**：Auto 下 webm/mkv 回退 WebView 后能否实际播放、切回 Native 可支持格式时 WebView 窗口销毁、混合 backend 的 D2 降级提示；**控制链路新增**：Mirror/Extend 切换时副屏是否立刻跟随（含 M7 的 350ms crossfade 延迟）、切回 Independent 后从屏 fitMode 是否正确；**音频新增**：默认 0 不突发有声、音量即时生效、Independent 多屏叠加 / Mirror-Extend 单份输出、无音轨视频静音正常、crossfade 冻结结束后从 0、5s 校准无音画漂移、全屏暂停音频同步停止 |
 | **P1** | 按目标分辨率降采样解码 | 当前 `upload_frames` 按原始尺寸建纹理，8K 图在 1080p 屏上仍上传 126MB。用 WIC / 更快的解码器在解码阶段就按目标尺寸取样，是**唯一能真正削减单次 ~75ms（4K JPEG）** 的路；改动最大，需 Windows 实机验证 |
 | **P1** | 解码移出渲染线程 + 保留旧帧 | `upload_frames` 现在同步跑在 `try_recv` 分支，解码期间所有 surface 停帧。改为专用解码线程、新帧就绪前保留上一张，可让切换不再顿；需处理连点取消与命令去重 |
 | P1 | 超大素材的连续命令合并 | 单份 >192MiB 不进缓存（见 5.3），同步模式下仍会重复解码；可在 renderer loop 内把一批连续同 key 的 `SetWallpaper` 合并成一次，无需常驻显存 |
 | ~~P1~~ | ~~渲染命令 ack~~ | **已完成（3.13 / 2.4）**：`ensure_monitor` / `set_wallpaper` 带 oneshot 回执，失败回传 `renderer-error` |
-| P1 | 视频音频 / NV12 硬解 | M6 静音且只接 RGB32；下一步接 IMFSourceReader 音频流 + volume，以及 NV12 → shader YUV 转换 / DXVA device manager 降低 4K 视频 CPU 开销 |
->>>>>>> 63067b3 (feat: add native video decoding via Media Foundation)
+| ~~P1~~ | ~~视频音频~~ | **已完成（3.17）**：audio `SourceReader` + WASAPI shared-mode 输出；Independent 每屏一份，Mirror/Extend 全组一份 |
+| ~~P1~~ | ~~NV12 硬解~~ | **已完成（3.19 / 3.21）**：DXVA SourceReader → D3D11 VideoProcessor → NV12 shared/local texture → shader YUV 转换；`OUTPUTHAZARD` 通过 staging 隔离解决 |
 | P1 | WebView 侧 DPI 偏差 | `WebviewWindowBuilder` 直接接收物理像素，`useExtendViewport` 又除以 `scaleFactor()`；Q2 决定另立条目处理，不在 M5 扩散 |
-| P2 | 运行时动态 backend 切换 | `selection` 可运行时更新，配合设置项暴露（原计划 M8） |
+| P2 | `selection` 运行时切换 | 按壁纸 capability 的自动切换已在 M8 生效；`selection` 本身仍固定在启动阶段，运行时切 NativeOnly/Auto 需新设置项，用户确认不做 |
 | P2 | 设备丢失恢复 | 消费 `DeviceLost`，处理 `DXGI_ERROR_DEVICE_REMOVED` / `ResizeBuffers` 失败后的重建 |
 | P2 | 显示器热插拔事件化 | 用 Tauri 原生显示器事件替代 5s 轮询；`refresh_group_geometry()` 已具备全组刷新能力，只差事件源 |
 | P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |
 | P3 | 契约生成 | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
-| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs` / `geometry.rs` 有测试，renderer 编排与桌面嵌入仍零覆盖 |
+| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 50 passed），renderer 编排与桌面嵌入仍零覆盖 |

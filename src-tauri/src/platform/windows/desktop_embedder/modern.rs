@@ -25,7 +25,10 @@ use super::EmbedPolicy;
 // NC 偏移测量（仅 ModernStrategy 使用）
 // ============================================================
 
-/// NC 偏移测量结果
+/// NC 偏移测量结果：客户区四边相对窗口的隐藏边距，外加客户区尺寸。
+///
+/// 用于判断 SetParent 后 DWM 是否通过 WM_NCCALCSIZE 注入了不可见边框；
+/// 只要四边任一非 0 就需用 MoveWindow 反向补偿，否则壁纸会错位。
 struct NcOffset {
     left: i32,
     top: i32,
@@ -42,6 +45,9 @@ impl NcOffset {
 }
 
 /// 测量窗口的 NC（非客户区）偏移
+///
+/// 用 GetWindowRect / GetClientRect / ClientToScreen 三者差值反推四边边距：
+/// 单独问任何一个 API 都拿不到「被 DWM 注入」的不可见边框。
 unsafe fn measure_nc_offset(hwnd: HWND) -> NcOffset {
     use windows_sys::Win32::Foundation::{POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;

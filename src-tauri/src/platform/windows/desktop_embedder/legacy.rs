@@ -36,6 +36,9 @@ impl EmbedStrategy for LegacyStrategy {
             GetWindowLongPtrW, MoveWindow, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TRANSPARENT,
         };
 
+        // Legacy 路径对 Native / WebView 一视同仁：旧版本的窗口样式本就兼容
+        // SetParent，无需 Modern 策略那种按 policy 清理 WS_POPUP 的修复，
+        // 因此这里显式忽略 policy，保持两条渲染路径行为一致。
         unsafe {
             // 设置鼠标穿透
             let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);

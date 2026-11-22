@@ -57,6 +57,10 @@ pub(crate) fn encode_wide(s: &str) -> Vec<u16> {
 /// - `hwnd`: 要嵌入的窗口句柄
 /// - `monitor_x`, `monitor_y`: 该显示器在虚拟桌面中的左上角坐标
 /// - `monitor_width`, `monitor_height`: 该显示器的物理分辨率
+///
+/// `policy` 会贯穿到具体策略：Native 与 WebView 共用同一套嵌入流程，但窗口
+/// 样式前提不同（见 `EmbedPolicy`）。它是两条渲染路径共存的隔离开关，防止
+/// Native 的样式清理破坏已验证可用的 WebView fallback。
 pub fn embed_in_desktop(
     hwnd: isize,
     monitor_x: i32,

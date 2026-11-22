@@ -13,6 +13,9 @@ const NATIVE_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "m4v", "mov", "avi", "wmv", "asf", "3gp", "3g2", "3gp2", "3gpp",
 ];
 
+/// 决定默认的后端选择策略：debug 构建强制 `NativeOnly`，以便在开发期尽早暴露
+/// 兼容性问题；release 下读取 `MINI_WALLPAPER_RENDERER=native` 可覆盖，
+/// 否则用 `Auto` 在能力不足时自动回退 WebView。
 pub fn default_backend_selection() -> BackendSelection {
     if cfg!(debug_assertions) {
         return BackendSelection::NativeOnly;
@@ -26,11 +29,16 @@ pub fn default_backend_selection() -> BackendSelection {
     }
 }
 
+/// 根据素材类型、文件扩展名与选择策略决定实际渲染后端。
+/// 图片 / GIF 恒为 Native；视频仅在能力表（扩展名）内才走 Native，表外格式
+/// 在 `Auto` 下回退 WebView、`NativeOnly` 下明确报错。
+/// 这是「解码前」的 capability 决策：一旦选定 Native，解码失败只回传错误，不再二次回退。
 pub fn resolve_backend(
     kind: WallpaperKind,
     file_path: &Path,
     selection: BackendSelection,
 ) -> Result<RenderBackend, RendererError> {
+    // 图片 / GIF 的解码能力无需回退，Native 统一处理（与扩展名无关）。
     if matches!(kind, WallpaperKind::Image | WallpaperKind::Gif) {
         return Ok(RenderBackend::Native);
     }
@@ -41,6 +49,8 @@ pub fn resolve_backend(
         .unwrap_or("")
         .to_ascii_lowercase();
 
+    // 容器扩展名在 Native 能力表内，交给 Media Foundation 解码；
+    // 注意这里只判断容器，编码不兼容会在真正的解码阶段失败（见上方常量注释）。
     if NATIVE_VIDEO_EXTENSIONS.contains(&ext.as_str()) {
         return Ok(RenderBackend::Native);
     }

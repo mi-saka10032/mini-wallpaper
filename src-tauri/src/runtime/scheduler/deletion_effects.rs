@@ -61,6 +61,8 @@ impl Scheduler {
         // —— 阶段 1：DB 查询 + 定时器管理（无 wm 锁） ——
         let db = self.db();
         let is_sync = self.resolve_is_sync_mode().await;
+        // 先只收集、不派发：DB 与定时器操作期间不持协调器锁，
+        // 阶段 2 再一次性路由，把锁的持有时间压到最短。
         let mut notifications: Vec<RenderNotification> = Vec::new();
 
         for config in affected_configs {
@@ -170,6 +172,8 @@ impl Scheduler {
         let db = self.db();
         let is_sync = self.resolve_is_sync_mode().await;
         let mut notifications: Vec<RenderNotification> = Vec::new();
+        // 仅表示 DB 的 wallpaper_id 是否被改写：决定是否要让主窗口刷新缩略图，
+        // 与 notifications 是否为空并不等价（定时器调整也可能产生通知）。
         let mut config_changed = false;
 
         for config in bound_configs {
@@ -406,8 +410,11 @@ impl Scheduler {
     }
 }
 
+/// 「当前壁纸已不能继续播放」的落库结果，决定后续发哪种 RenderNotification。
 enum CurrentWallpaperOutcome {
+    /// 收藏夹里还有下一张，DB 已写入新 wallpaper_id。
     Advanced(i32),
+    /// 无可用下一张，DB 的 wallpaper_id 已置空。
     Cleared,
 }
 

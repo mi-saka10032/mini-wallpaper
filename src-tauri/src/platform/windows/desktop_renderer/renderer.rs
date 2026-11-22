@@ -11,7 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
 
-use super::surface::{RenderSurface, SharedDevice};
+use super::surface::{RenderSurface, SharedDevice, SharedFrames};
+use crate::platform::wallpaper_renderer::frame_cache::{cache_key, FrameCache};
 use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 
 /// DirectComposition 是 COM API，renderer thread 必须自己初始化/反初始化 COM。
@@ -186,6 +187,10 @@ fn run(receiver: Receiver<RendererCommand>) {
     };
 
     let mut surfaces: HashMap<String, RenderSurface> = HashMap::new();
+    // 同一张图会因「首次双下发 / 同步模式逐屏下发 / A→B→A 回切」多次到达，
+    // 缓存整条解码 + 纹理上传链。命中时连 started_at 一起复用：动图回切会接着播，
+    // 组内所有 surface 也因此始终持有同一个帧时钟，不会出现跨屏错帧。
+    let mut frame_cache = FrameCache::<SharedFrames>::with_default_budget();
     let mut running = true;
     let mut paused = false;
 
@@ -216,18 +221,22 @@ fn run(receiver: Receiver<RendererCommand>) {
                     path,
                     kind,
                     fit_mode,
-                } => match shared.upload_frames(&path, kind) {
-                    Ok(frames) => {
-                        for monitor_id in monitor_ids {
-                            if let Some(surface) = surfaces.get_mut(&monitor_id) {
-                                surface.set_frames(frames.clone(), fit_mode);
-                            } else {
-                                log::warn!("[Renderer] {} 组换图时原生表面不存在", monitor_id);
+                } => {
+                    let frames = frame_cache
+                        .get_or_insert_with(cache_key(&path), || shared.upload_frames(&path, kind));
+                    match frames {
+                        Ok(frames) => {
+                            for monitor_id in monitor_ids {
+                                if let Some(surface) = surfaces.get_mut(&monitor_id) {
+                                    surface.set_frames(frames.clone(), fit_mode);
+                                } else {
+                                    log::warn!("[Renderer] {} 组换图时原生表面不存在", monitor_id);
+                                }
                             }
                         }
+                        Err(err) => log::error!("原生壁纸解码失败 {:?}: {:#}", path, err),
                     }
-                    Err(err) => log::error!("原生壁纸解码失败 {:?}: {:#}", path, err),
-                },
+                }
                 RendererCommand::SetGroupGeometry { viewports } => {
                     for (monitor_id, viewport) in viewports {
                         if let Some(surface) = surfaces.get_mut(&monitor_id) {

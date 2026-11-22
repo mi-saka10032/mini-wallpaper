@@ -66,3 +66,14 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_SystemInformation",
     "Win32_System_LibraryLoader",
 ] }
+
+# `tauri dev` 是 debug 构建，默认 opt-level=0。实测一张 4K JPEG 的
+# image 解码 + to_rgba8 + decoder.rs 逐像素 RGBA→BGRA 在 O0 下约 1.9s，
+# O3 下约 79ms（15~85 倍），这是 dev 切换壁纸接近 1s 的根因。
+# 第三方依赖开满优化；本项目 crate 只开 O1，保留变量可见与断点可命中。
+# 通配符 "*" 不覆盖 workspace 成员，因此两条都要写，且具体规则优先。
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package."mini-wallpaper"]
+opt-level = 1

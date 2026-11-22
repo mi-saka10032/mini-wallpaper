@@ -36,6 +36,7 @@ use windows::Win32::Graphics::Dxgi::{
 use super::window::NativeWindow;
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
+use crate::platform::wallpaper_renderer::frame_cache::ByteSize;
 use crate::platform::wallpaper_renderer::{ExtendViewport, FitMode, MonitorRect, WallpaperKind};
 use crate::platform::windows::desktop_embedder::EmbedPolicy;
 
@@ -147,6 +148,17 @@ impl SharedFrames {
         }
 
         &self.frames[0]
+    }
+}
+
+/// 缓存按显存字节数淘汰，多帧 GIF / 高分辨率素材会成倍占用；
+/// 这里只统计 GPU 纹理的原始像素量，不含驱动侧的对齐与内部副本。
+impl ByteSize for SharedFrames {
+    fn byte_size(&self) -> usize {
+        self.frames
+            .iter()
+            .map(|frame| frame.width as usize * frame.height as usize * 4)
+            .sum()
     }
 }
 

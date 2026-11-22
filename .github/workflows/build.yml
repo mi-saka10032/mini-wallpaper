@@ -55,6 +55,18 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # turbojpeg 以 cmake feature vendored 编译 libjpeg-turbo，默认 features 含
+      # require-simd，x86_64 的 SIMD 只走 NASM（.asm 源，无 MASM 回退）。
+      # windows-latest 自带 CMake 但不含 NASM，缺它会在 CMake 配置阶段 FATAL_ERROR。
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: Verify native toolchain
+        shell: bash
+        run: |
+          cmake --version
+          nasm -v
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:

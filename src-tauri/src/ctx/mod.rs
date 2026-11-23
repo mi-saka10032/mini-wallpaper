@@ -19,6 +19,8 @@ mod db;
 pub mod reconcile;
 pub mod render_coordinator;
 pub mod toast_manager;
+/// 统一壁纸管理器（架构重整 Phase 2，monitor_id 维度的统一入口）
+pub mod unified_manager;
 pub mod window_manager;
 
 use std::sync::Arc;
@@ -29,6 +31,7 @@ use tokio::sync::Mutex;
 
 use render_coordinator::RenderCoordinator;
 use toast_manager::ToastManager;
+use unified_manager::UnifiedWallpaperManager;
 use window_manager::WallpaperWindowManager;
 
 /// 应用全局上下文
@@ -55,6 +58,12 @@ pub struct AppContext {
     /// 内部持有 per-monitor 的可变状态（backends / wallpaper_ids / 几何），
     /// 因此必须整体加锁：调用方只锁这一个 Mutex，避免与 window_manager 形成双锁持锁。
     pub render_coordinator: Arc<Mutex<RenderCoordinator>>,
+
+    /// 统一壁纸管理器（架构重整 Phase 2）：monitor_id 维度的统一入口，
+    /// 启动时完成显示器枚举与几何登记，后续 action 的 reconcile 派发点。
+    // Phase 2 只在 new() 里构造并 init；Phase 3 的写入源收口才会从 command 读取它派发 diff。
+    #[allow(dead_code)]
+    pub unified_manager: Arc<Mutex<UnifiedWallpaperManager>>,
 
     /// Toast 通知窗口管理器（右下角独立通知窗口）
     pub toast_manager: Arc<Mutex<ToastManager>>,
@@ -84,11 +93,27 @@ impl AppContext {
             coordinator.refresh_display_mode().await;
             coordinator.refresh_volume().await;
         }
+
+        // Phase 2：Rust 侧一次性初始化显示器与渲染目标。失败只记日志不阻断启动——
+        // 前端原有 syncWallpaperWindows 路径仍能兜底建窗，避免 DB/枚举异常直接让应用起不来。
+        let unified_manager = Arc::new(Mutex::new(UnifiedWallpaperManager::new(
+            db.clone(),
+            render_coordinator.clone(),
+            window_manager.clone(),
+        )));
+        {
+            let mut manager = unified_manager.lock().await;
+            if let Err(err) = manager.init().await {
+                log::error!("[UnifiedWallpaperManager] 初始化失败: {:#}", err);
+            }
+        }
+
         let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
 
         Ok(Self {
             window_manager,
             render_coordinator,
+            unified_manager,
             toast_manager,
             app_handle,
             db,

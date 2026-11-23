@@ -15,6 +15,8 @@
 //! - **职责分离**：`ctx` 管"是什么"（状态），`runtime` 管"做什么"（调度）
 
 mod db;
+/// 配置快照与 diff 引擎（架构重整 Phase 1，纯逻辑无 IO，供后续 UnifiedWallpaperManager 消费）
+pub mod reconcile;
 pub mod render_coordinator;
 pub mod toast_manager;
 pub mod window_manager;

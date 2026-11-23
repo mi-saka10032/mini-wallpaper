@@ -247,7 +247,9 @@ Manager::init()
 ```
 Phase 0 ✅ 已落地（Win32 枚举 + DPI，待 Windows 实机核对 rect/dpi）
   ↓
-Phase 1 → commit + 单测（纯逻辑，零实机依赖，可立即开始）
+Phase 1 ✅ 已落地（diff 引擎 + 8 组单测，纯逻辑零实机依赖）
+  ↓
+Phase 2 → commit + Windows 实机（合并 Manager + init 接管，改动最大）
   ↓
 Phase 2 → commit + Windows 实机（Manager + init + 窗口接管 + M18）
   ↓
@@ -272,4 +274,18 @@ Phase 4 → commit + 前端只读化 + 最终验收
 
 验证：`cargo fmt --check` / `cargo check` / `cargo test --lib`（51 passed）全绿；Windows-only 代码用 `/tmp/monitor-geom-probe` 镜像整个模块跑 `cargo check --target x86_64-pc-windows-msvc`，**0 error / 0 warning**。
 
-待 Windows 实机核对：多屏（含负坐标）枚举数量、`device_name` 与 DB `monitor_id` 一致、各屏 `dpi` 与 `scale_factor()` 符合系统缩放设置。之后进入 Phase 1。
+### Phase 1 交付（已完成，未 commit）
+
+| 文件 | 改动 |
+|---|---|
+| `ctx/reconcile.rs`（新） | `MonitorSnapshot` / `GlobalSnapshot` / `ConfigSnapshot`；`ReconcileScope::{One, Many, All}` + `from_written_monitors()`；`ConfigDiff`（Added / Removed / Changed / DisplayModeChanged / VolumeChanged）；`diff_snapshots()`；`patch_observed()` |
+| `ctx/mod.rs` | 注册 `pub mod reconcile` |
+
+关键语义：
+- `MonitorChanged` 把同屏多个字段变化合并成一项；`DisplayModeChanged` 独立成项，**不重复产出 set_fit_mode 等字段动作**（2.3 去重原则）。
+- `patch_observed()` 只推进 `applied` 里的差异，绝不整体覆盖 observed——失败项下次 diff 会重放（C2 重试）、其它屏状态不受影响。
+- scope 由事务写入的 monitor_id 集合推导，`All` 才比较 global 字段。
+
+验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **59 passed**（新增 8 组：七字段全覆盖、scope 单屏隔离、批一次产出 N 屏、global 与字段动作去重、增删屏、失败重放、局部 patch 不动其它屏、scope 推导）。
+
+待 Windows 实机核对 Phase 0 的枚举数量 / `device_name` / `dpi` 后进入 **Phase 2**。

@@ -1235,10 +1235,25 @@ AppContext
 这正是用户 d 的目标态：renderer 子进程受 Manager 管理，与 WebView 窗口对等。
 
 **实施顺序（评审建议：先拉平、后拆进程）**：
-1. **M20a' 结构拉平（前置，纯重构）**：建 `ctx/unified_manager/` 目录 + mod.rs / native.rs /
-   webview.rs，删除两个冗余 struct，字段并入主体；用现有 68 tests + tsc/lint 验证，零行为变化。
+1. **M20a' 结构拉平（前置，纯重构）—— ✅ 已完成（2026-11-23，commit 5464045 / 179a816 / 212905b）**：
+   建 `ctx/unified_manager/` 目录 + mod.rs / native.rs / webview.rs，删除 `RenderCoordinator` /
+   `WallpaperWindowManager` 两个 struct，字段与方法原样并入主体（重复字段 db/app_handle/window_manager
+   合并为一份）；AppContext 从 4 个 manager 收口为 1 个 `unified_manager`；删除无消费者的
+   `UnifiedWallpaperManager::window_manager()` getter。
+   - 合并暴露并修复一处遗留 bug：M19 DeviceLost 清理仍在用已删除的 `app_ctx.window_manager`
+     （`renderer.rs:726`，Windows-only 故本地不编译）→ 改走 `app_ctx.unified_manager`，
+     由 probe 抓出（commit 212905b）。
+   - 验证：cargo fmt/check 0 warning / 68 tests 全绿；重建 Windows probe（真实 ctx/mod.rs +
+     真实三文件 + stub）clean 后 Windows target 编译通过。
 2. **M21 拆进程**：在拉平后的 native.rs 上把 mpsc 换 IPC，加崩溃告警 emit；
    重点验证 Native↔WebView 视频切换过渡（唯一新增跨进程编排点）。
+
+**锁外化评估结论（评审中提出、用户确认取消，2026-11-23 23:47）**：
+曾计划把 `create_window` 残留等待（≤2s）/ `create_and_show` 的 embed（≤1s）/
+`teardown_old_backends` 的 sleep（300ms）移出锁。实际分析后取消，理由：
+① 合并前这些耗时操作本就跨着 UM→RC→WM 三把嵌套锁，合并成一把后被阻塞的调用方集合基本一致，
+   "合并引入新卡顿"是过度担忧；② 真正的锁外化需让 `DesktopRenderer` 暴露 sender clone 或改后台任务，
+   触及 renderer 内部结构，属独立重构，不应塞进纯搬运。若未来要做，单独评估 sender 共享设计。
 
 分步理由：拉平是纯重构可用静态检查验证；拆进程改动大且 Windows-only，两者分开风险低。
 

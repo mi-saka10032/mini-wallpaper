@@ -108,7 +108,7 @@ impl WallpaperWindowManager {
         height: u32,
         extra_query: Option<&str>,
     ) -> Result<Option<CreatedWindow>, String> {
-        let label = format!("wallpaper-{}", sanitize_label(monitor_id));
+        let label = wallpaper_window_label(monitor_id);
 
         // 如果已经存在，先销毁旧的
         if self.windows.contains_key(monitor_id) {
@@ -474,6 +474,12 @@ impl WallpaperWindowManager {
             );
         }
     }
+}
+
+/// 按 monitor_id 推导壁纸窗口 label（与 create_window 使用同一规则）。
+/// 供 Manager 定向推送事件使用，避免两处各写一份命名逻辑。
+pub fn wallpaper_window_label(monitor_id: &str) -> String {
+    format!("wallpaper-{}", sanitize_label(monitor_id))
 }
 
 #[cfg(test)]

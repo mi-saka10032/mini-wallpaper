@@ -24,7 +24,10 @@ fn subclass_map() -> &'static Mutex<HashMap<isize, isize>> {
 }
 
 /// 根据 HWND 查找已注册的原始 WndProc
-fn find_original_wndproc(hwnd: HWND) -> Option<isize> {
+///
+/// 提为 `pub(crate)` 供主窗口热插拔监听（M20）复用同一套映射表；
+/// 两个消费方各自持有自己的 wndproc 函数，但共用 register/restore 生命周期。
+pub(crate) fn find_original_wndproc(hwnd: HWND) -> Option<isize> {
     subclass_map()
         .lock()
         .ok()
@@ -32,7 +35,7 @@ fn find_original_wndproc(hwnd: HWND) -> Option<isize> {
 }
 
 /// 注册子类化信息：记录 HWND 与其原始 WndProc 的映射
-pub(super) fn register_subclass(hwnd: HWND, original_proc: isize) {
+pub(crate) fn register_subclass(hwnd: HWND, original_proc: isize) {
     let hwnd_val = hwnd as isize;
     match subclass_map().lock() {
         Ok(mut map) => {
@@ -63,7 +66,7 @@ pub(super) fn register_subclass(hwnd: HWND, original_proc: isize) {
 ///   成已失效的函数指针并调用，即野指针跳转；同时避免 map 随窗口重建无界增长。
 ///
 /// 未注册过该 HWND（LegacyStrategy 不做子类化）时静默返回。
-pub(super) fn restore_and_unregister(hwnd: HWND) {
+pub(crate) fn restore_and_unregister(hwnd: HWND) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWL_WNDPROC};
 
     let hwnd_val = hwnd as isize;

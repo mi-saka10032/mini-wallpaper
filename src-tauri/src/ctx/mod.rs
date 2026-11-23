@@ -98,6 +98,7 @@ impl AppContext {
         // 前端原有 syncWallpaperWindows 路径仍能兜底建窗，避免 DB/枚举异常直接让应用起不来。
         let unified_manager = Arc::new(Mutex::new(UnifiedWallpaperManager::new(
             db.clone(),
+            app_handle.clone(),
             render_coordinator.clone(),
             window_manager.clone(),
         )));

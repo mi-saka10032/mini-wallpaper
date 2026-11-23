@@ -82,6 +82,7 @@ macro_rules! all_handlers {
             $crate::commands::monitor_config::upsert_monitor_config,
             $crate::commands::monitor_config::delete_monitor_config,
             $crate::commands::monitor_config::start_timers,
+            $crate::commands::monitor_config::get_extend_viewport,
             // app_setting
             $crate::commands::app_setting::get_settings,
             $crate::commands::app_setting::get_setting,

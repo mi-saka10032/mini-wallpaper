@@ -102,6 +102,20 @@ pub async fn delete_monitor_config(
     Ok(())
 }
 
+/// 拉取当前显示器的 extend 视口（壁纸页挂载时主动调用一次）
+///
+/// Rust 按目标屏真实 DPI 把物理坐标换算成 CSS 像素；前端零计算。
+/// 后续几何变化由 `extend-viewport` 事件定向推送。
+#[tauri::command]
+pub async fn get_extend_viewport(
+    ctx: State<'_, AppContext>,
+    monitor_id: String,
+) -> CommandResult<Option<crate::events::ExtendViewportPayload>> {
+    let app_ctx: &AppContext = ctx.inner();
+    let manager = app_ctx.unified_manager.lock().await;
+    Ok(manager.current_extend_viewport(&monitor_id))
+}
+
 /// 启动所有满足轮播条件的定时器（应用启动时由前端调用）
 ///
 /// 委托 Scheduler 的 start_all_carousel_timers 方法，

@@ -27,7 +27,8 @@ use crate::ctx::reconcile::{
 use crate::ctx::render_coordinator::RenderCoordinator;
 use crate::ctx::window_manager::WallpaperWindowManager;
 use crate::dto::app_setting_dto::keys as setting_keys;
-use crate::events::VolumeChangedPayload;
+use crate::events::{ExtendViewportPayload, TypedEmitTo, VolumeChangedPayload};
+use crate::platform::wallpaper_renderer::group_viewports;
 use crate::platform::wallpaper_renderer::{DisplayMode, MonitorRect as RenderRect};
 use crate::services::{app_setting_service, monitor_config_service};
 
@@ -105,6 +106,8 @@ fn action_monitor_id(action: &DispatchAction) -> Option<&str> {
 
 pub struct UnifiedWallpaperManager {
     db: DatabaseConnection,
+    /// 用于按 monitor_id 定向推送 viewport 等事件（M20）。
+    app_handle: tauri::AppHandle,
     coordinator: Arc<Mutex<RenderCoordinator>>,
     /// 供 Phase 3 统一派发 WebView 侧动作；当前 init 仍经 coordinator 间接使用。
     window_manager: Arc<Mutex<WallpaperWindowManager>>,
@@ -116,11 +119,13 @@ pub struct UnifiedWallpaperManager {
 impl UnifiedWallpaperManager {
     pub fn new(
         db: DatabaseConnection,
+        app_handle: tauri::AppHandle,
         coordinator: Arc<Mutex<RenderCoordinator>>,
         window_manager: Arc<Mutex<WallpaperWindowManager>>,
     ) -> Self {
         Self {
             db,
+            app_handle,
             coordinator,
             window_manager,
             slots: HashMap::new(),
@@ -128,14 +133,10 @@ impl UnifiedWallpaperManager {
         }
     }
 
-    /// 一次性初始化：Win32 枚举物理屏 ∩ DB config → 登记 slot → 建渲染目标 → 生成 observed。
+    /// 一次性初始化：建立初始快照 + 按系统物理屏同步 config / slot / 渲染目标。
     ///
-    /// 刻意**只读 DB、不写 DB**：新屏登记（插入 config / 失活消失的屏）属于写入源收口，
-    /// 与 Phase 3 停用前端 `doSyncMonitors` 一起做。首次启动 DB 为空时由前端原有路径
-    /// 完成登记与建窗，Manager 下一次启动再接管，避免出现「两边都写」的中间态。
-    ///
-    /// 非 Windows 平台 `enumerate_monitors()` 返回空集，init 退化为只构建快照，
-    /// 现有前端链路照常工作，因此 macOS 开发构建行为不变。
+    /// 非 Windows 平台 `enumerate_monitors()` 返回空集，只构建快照，
+    /// 现有前端链路照常工作，macOS 开发构建行为不变。
     pub async fn init(&mut self) -> Result<()> {
         let configs = monitor_config_service::get_all(&self.db).await?;
         let display_mode = app_setting_service::get(&self.db, setting_keys::DISPLAY_MODE)
@@ -145,42 +146,117 @@ impl UnifiedWallpaperManager {
             .await?
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(0);
-
         self.observed = build_snapshot(&configs, display_mode, volume);
+
+        // M20 规则 1：init 枚举到的物理屏必定 active=true（新屏 insert，消失的置 false）。
+        // sync_monitors_from_system 内部按「DB → slot → reconcile」顺序执行。
+        self.sync_monitors_from_system().await?;
+        Ok(())
+    }
+
+    /// 以系统当前物理显示器列表为准，同步 DB config + Manager slot + 渲染目标。
+    ///
+    /// M20 硬约束（用户给定）：
+    /// 1. 初始化枚举到的屏 → `active=true`（DB insert / 更新）
+    /// 2. 中途断开的屏 → `active=false`，slot 移除
+    /// 3. 中途插入的屏 → `active=true`，slot 新增
+    ///
+    /// 顺序固定：**先写 DB → 再改 slot → 最后 reconcile**。
+    /// reconcile 从 DB 读 desired，若 slot 先于 DB 变更会得到错误的 diff 基线。
+    pub async fn sync_monitors_from_system(&mut self) -> Result<()> {
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Ok(());
+        }
 
         #[cfg(target_os = "windows")]
         {
-            let by_id: HashMap<_, _> = configs
+            use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
+
+            let physical = enumerate_monitors();
+            let physical_by_id: HashMap<
+                String,
+                crate::platform::windows::monitor_geometry::MonitorInfo,
+            > = physical
+                .into_iter()
+                .map(|info| (info.rect.device_name.clone(), info))
+                .collect();
+
+            // —— 阶段 1：写 DB（唯一事实源） ——
+            // 规则 2：DB 有但物理已消失 → active=false
+            let configs_before = monitor_config_service::get_all(&self.db).await?;
+            for config in &configs_before {
+                if config.active && !physical_by_id.contains_key(&config.monitor_id) {
+                    let req = UpsertMonitorConfigRequest {
+                        monitor_id: config.monitor_id.clone(),
+                        active: Some(false),
+                        ..Default::default()
+                    };
+                    if let Err(e) = monitor_config_service::upsert(&self.db, &req).await {
+                        log::warn!(
+                            "[UnifiedWallpaperManager] 显示器失活写库失败 {}: {}",
+                            config.monitor_id,
+                            e
+                        );
+                    }
+                }
+            }
+            // 规则 1/3：物理存在的屏 → active=true（新屏 insert，已存在的确保 active）
+            for (monitor_id, _) in &physical_by_id {
+                let req = UpsertMonitorConfigRequest {
+                    monitor_id: monitor_id.clone(),
+                    active: Some(true),
+                    ..Default::default()
+                };
+                if let Err(e) = monitor_config_service::upsert(&self.db, &req).await {
+                    log::warn!(
+                        "[UnifiedWallpaperManager] 显示器登记写库失败 {}: {}",
+                        monitor_id,
+                        e
+                    );
+                }
+            }
+
+            // —— 阶段 2：改 slot + 渲染目标 ——
+            // 移除已失活屏的 slot 与渲染目标；登记所有物理屏（含无壁纸的屏，
+            // 保证 extend union 不缺块）。
+            let removed: Vec<String> = self
+                .slots
+                .keys()
+                .filter(|id| !physical_by_id.contains_key(*id))
+                .cloned()
+                .collect();
+            for monitor_id in removed {
+                self.coordinator
+                    .lock()
+                    .await
+                    .destroy_target(&monitor_id)
+                    .await;
+                self.slots.remove(&monitor_id);
+            }
+
+            let configs_after = monitor_config_service::get_all(&self.db).await?;
+            let by_id: HashMap<&str, &crate::entities::monitor_config::Model> = configs_after
                 .iter()
                 .map(|config| (config.monitor_id.as_str(), config))
                 .collect();
-
-            for info in enumerate_monitors() {
-                let (monitor_id, rect, dpi) = to_render_rect(&info);
-                let Some(config) = by_id.get(monitor_id.as_str()) else {
-                    // DB 尚无该屏配置，交给前端原有登记路径，不在 init 里写 DB。
-                    continue;
-                };
-                if !config.active {
-                    continue;
-                }
-
-                // register_monitor 必须在判断「有没有壁纸」之前调用：
-                // 无壁纸的屏也要进 extend union，否则虚拟桌面画布缺一块。
-                let has_target = {
+            for (monitor_id, info) in &physical_by_id {
+                let (_, rect, dpi) = to_render_rect(info);
+                let has_target = if let Some(config) = by_id.get(monitor_id.as_str()) {
                     let mut coordinator = self.coordinator.lock().await;
-                    coordinator.register_monitor(&monitor_id, rect);
+                    coordinator.register_monitor(monitor_id, rect);
                     match config.wallpaper_id {
                         Some(wallpaper_id) => coordinator
-                            .ensure_target(&monitor_id, rect, wallpaper_id)
+                            .ensure_target(monitor_id, rect, wallpaper_id)
                             .await
                             .is_ok(),
                         None => false,
                     }
+                } else {
+                    false
                 };
-
                 self.slots.insert(
-                    monitor_id,
+                    monitor_id.clone(),
                     MonitorSlot {
                         rect,
                         dpi,
@@ -188,12 +264,15 @@ impl UnifiedWallpaperManager {
                     },
                 );
             }
+
+            // —— 阶段 3：一次 reconcile 覆盖本轮全部差异 ——
+            self.reconcile(crate::ctx::reconcile::ReconcileScope::All)
+                .await?;
+            // viewport 需要在 target 变化后重推；reconcile 内部已按动作推过，
+            // 这里补一次保证 slot 几何刚变化的新屏也拿到最新 union。
+            self.push_extend_viewports().await;
+            Ok(())
         }
-
-        #[cfg(not(target_os = "windows"))]
-        let _ = &configs;
-
-        Ok(())
     }
 
     /// 一次 action 的唯一副作用入口：读 DB 全量快照 → diff → 派发 → 局部推进 observed。
@@ -222,6 +301,7 @@ impl UnifiedWallpaperManager {
         // 刚切到同步模式的这一次 diff 就要按新模式整组下发。
         let is_sync = matches!(desired.global.display_mode.as_str(), "mirror" | "extend");
 
+        let mut target_set_changed = false;
         for action in actions {
             let monitor_id_for_log = action_monitor_id(&action).map(str::to_string);
             if let Err(err) = self.dispatch_one(action, is_sync).await {
@@ -231,6 +311,13 @@ impl UnifiedWallpaperManager {
                     err
                 );
             }
+            if monitor_id_for_log.is_some() {
+                target_set_changed = true;
+            }
+        }
+        // 建窗/销毁后 viewport 的 target 集合变了，重算一次并推送。
+        if target_set_changed {
+            self.push_extend_viewports().await;
         }
 
         // 与旧 command 内联顺序一致：set_display_mode 必须在 fit_mode 之前，
@@ -248,6 +335,9 @@ impl UnifiedWallpaperManager {
                 .lock()
                 .await
                 .broadcast_display_mode_changed(&desired.global.display_mode);
+            // 切到 extend 时前端需要 viewport；切走时推一次也不会被消费（前端按
+            // displayMode 过滤）。几何未变，但 target 状态可能刚变化，故重推一次。
+            self.push_extend_viewports().await;
         }
 
         // 全部动作执行完后才推进 observed；派发失败的 diff 未被计入 applied，
@@ -328,6 +418,52 @@ impl UnifiedWallpaperManager {
             }
         }
         Ok(())
+    }
+
+    /// 重算整组 viewport 并按 monitor_id 定向推送给每个壁纸窗口。
+    ///
+    /// 用 Rust 侧 `GetDpiForMonitor` 拿到的真实 DPI 把物理坐标换算成 CSS 像素，
+    /// 前端直接用于 style、零计算——这是 M18 的最终修复。
+    /// 只在 slot 几何变化（init / 热插拔）与 display_mode 切换时调用，不进每帧热路径。
+    pub async fn push_extend_viewports(&self) {
+        let monitors: Vec<(String, RenderRect)> = self
+            .slots
+            .iter()
+            .map(|(id, slot)| (id.clone(), slot.rect))
+            .collect();
+        let Some(viewports) = group_viewports(&monitors) else {
+            return;
+        };
+        for (monitor_id, viewport) in viewports {
+            let Some(slot) = self.slots.get(&monitor_id) else {
+                continue;
+            };
+            if !slot.has_target {
+                continue;
+            }
+            let label = crate::ctx::window_manager::wallpaper_window_label(&monitor_id);
+            let payload = ExtendViewportPayload::from_physical(viewport, slot.dpi);
+            if let Err(err) = self.app_handle.typed_emit_to(&label, &payload) {
+                log::warn!(
+                    "[UnifiedWallpaperManager] 推送 viewport 失败 {}: {}",
+                    monitor_id,
+                    err
+                );
+            }
+        }
+    }
+
+    /// 供壁纸页挂载时主动拉取一次当前 viewport（事件可能在 React 订阅前发出）。
+    pub fn current_extend_viewport(&self, monitor_id: &str) -> Option<ExtendViewportPayload> {
+        let slot = self.slots.get(monitor_id)?;
+        let monitors: Vec<(String, RenderRect)> = self
+            .slots
+            .iter()
+            .map(|(id, slot)| (id.clone(), slot.rect))
+            .collect();
+        let viewports = group_viewports(&monitors)?;
+        let (_, viewport) = viewports.into_iter().find(|(id, _)| id == monitor_id)?;
+        Some(ExtendViewportPayload::from_physical(viewport, slot.dpi))
     }
 
     pub fn observed(&self) -> &ConfigSnapshot {

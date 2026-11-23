@@ -8,3 +8,4 @@
 pub mod desktop_embedder;
 pub mod desktop_renderer;
 pub mod monitor_geometry;
+pub mod monitor_hotplug;

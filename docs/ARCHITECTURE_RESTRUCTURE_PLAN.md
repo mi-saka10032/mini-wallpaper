@@ -355,3 +355,78 @@ M20 → Rust 热插拔事件监听 + 前端显示器参数只读 + useExtendView
 验证：`cargo fmt/check`（0 warning）/ `test --lib` **68 passed**；前端 tsc + lint 全绿；Windows target 用 `/tmp/m19-probe` 验证 `state::<AppContext>()` → `window_manager.lock().destroy_all()` 类型链（**probe 抓到并修正了一处双重 lock bug**），0 error。
 
 M19 不通知前端：前端显示器参数已降级为只读，窗口销毁后由下一次 `ensure_target` 命令重建；M20 事件化后统一处理。
+
+---
+
+## 附录：M20 评审（2026-11-23 19:37 确认）
+
+> M20 是架构重构级任务，是**唯一剩余 P1（M18 WebView DPI）的落点**，也是三项挂起需求的汇集点。
+> 用户已确认三个决策点：事件源 A（主窗口 WndProc 子类化）、建窗换算与 viewport 下发一起修、热插拔真正闭环。
+
+### 根因
+
+`useExtendViewport.ts` 用 `getCurrentWindow().scaleFactor()`（**本窗口** DPI）去除 `availableMonitors()` 返回的**物理像素** union。多屏不同 DPI 时，每个壁纸窗口用各自 scale 除整组坐标 → 接缝必然错位。
+
+Native renderer 走的是另一条链：Win32 物理 rect → `union_rect` / `group_viewports` → 物理坐标裁剪。两条链各算各的，`render_coordinator.rs:28` 的注释已承认这个风险。
+
+### 已具备的基础设施
+
+| 设施 | 位置 | 状态 |
+|---|---|---|
+| `group_viewports()` 纯函数（物理坐标 union + 每屏 offset）+ 单测 | `platform/wallpaper_renderer/geometry.rs:56` | ✅ 可直接复用 |
+| `ExtendViewport` 类型（camelCase serde，字段齐全） | `contracts.rs:170` | ✅ 可直接做事件 payload |
+| WndProc 子类化框架 + 成对 register/restore | `desktop_embedder/wndproc.rs` | ✅ 需提升 `pub(crate)` 可见性 |
+| 主窗口 HWND 获取 | `setup.rs:15` / `tray.rs:116` | ✅ 有先例 |
+
+### 决策
+
+| # | 决策点 | 结论 | 理由 |
+|---|---|---|---|
+| 1 | 事件源 | **主窗口 WndProc 子类化** | `subclass_wndproc` 常态路径是 `CallWindowProcW(original_proc, …)` 转发回 tao，`DefWindowProcW` 只是映射缺失的异常兜底。register/restore 成对时不存在"未注册窗口期"；主窗口是应用单例，卸载必定伴随注销 |
+| 2 | 建窗换算 | **核实后确认无需改** | tao 的 `scale_factor()` 来自 `GetDpiForWindow`（窗口自身所在屏 DPI），而 `WebviewWindowBuilder::build()` 发生在嵌入之前，此时 `logical_rect()` 用目标屏 DPI 换算是对的。真正的 bug 只在嵌入后 WebView 侧 `scaleFactor()` 拿到主屏 DPI。**Phase 2 实现无需修改**，M20 只修 viewport 下发 |
+| 3 | 热插拔闭环 | **真正闭环，自动写 DB** | active 变更对 Manager 有直接影响，Monitor 管理遵循下面三条规则 |
+
+### Monitor 管理规则（用户给定，硬约束）
+
+1. **初始化**：`init` 枚举到的 monitor 必定 `active=true`（DB 与 slot 同步登记）
+2. **中途断开**：事件触发 → DB `active=false` → Manager `slots.remove(mid)` → `reconcile(One(mid))` 派发销毁
+3. **中途插入**：事件触发 → DB `active=true`（新屏 insert config）→ Manager `slots.insert(mid, slot)` → `reconcile(One(mid))` 派发建窗
+
+> 注意顺序：**先写 DB，再改 slot，最后 reconcile**。reconcile 从 DB 读 desired，若 slot 先于 DB 变更会得到错误的 diff 基线。
+
+### 实施分期
+
+| 期 | 内容 | 可验证性 |
+|---|---|---|
+| M20a ✅ | `ExtendViewportPayload`（目标屏 DPI 算好 CSS 像素）+ `get_extend_viewport` command + `useExtendViewport` 退化为订阅；`logical_rect()` 不变 | tsc/lint/68 tests 全绿 |
+| M20b ✅ | 主窗口 WndProc 子类化监听 `WM_DISPLAYCHANGE` / `WM_DPICHANGED`；tokio unbounded channel + 300ms debounce；主窗口 Destroy 事件注销；WndProc 回调只 `send(())` | `m20-hotplug-probe` Windows target 0 error（抓到并修复 HWND 非 Send 的 static 错误） |
+| M20c ✅ | `sync_monitors_from_system()` 实现三条规则；init 调用它（规则 1）；顺序固定 DB → slot → reconcile | `um-win-probe` Windows target 0 error |
+| M20d ⬜ | 联调验收：热插拔 + 多 DPI + extend 接缝 + 新屏自动建窗 | Windows 实机（整套改造最终验收） |
+
+### 风险与处置
+
+| 风险 | 处置 |
+|---|---|
+| 注销晚于 HWND 失效 | 挂主窗口 `Destroy` 事件，复用现有 `restore_and_unregister` |
+| 同步 WndProc 回调不能 await / 查 DB | 回调只 `try_send` 到 mpsc，异步侧消费 |
+| 插拔瞬间消息风暴 | 异步侧 300ms debounce 合并，再一次枚举 + reconcile |
+| viewport 事件早于 WebView 建窗 | 事件按 `monitor_id` emit_to；新窗建好后由 init 路径补发一次当前 viewport |
+
+### M20 实施记录（2026-11-23 19:43）
+
+| 文件 | 改动 |
+|---|---|
+| `events.rs` | `ExtendViewportPayload` + `from_physical(ExtendViewport, dpi)`：用目标屏 DPI 把物理坐标换成 CSS 像素，前端零计算 |
+| `ctx/unified_manager.rs` | 加 `app_handle`；`push_extend_viewports()` 按 label 定向推送；`current_extend_viewport()` 供挂载拉取；`sync_monitors_from_system()` 实现三条规则；init 改为调用它 |
+| `commands/monitor_config.rs` | 新增 `get_extend_viewport` command |
+| `ctx/window_manager.rs` | 新增 `wallpaper_window_label()`（建窗与事件推送共用命名） |
+| `platform/windows/monitor_hotplug.rs`（新） | 主窗口 WndProc 子类化：只拦截 `WM_DISPLAYCHANGE` / `WM_DPICHANGED` 投信，其余 `CallWindowProcW` 转发；`start`/`stop` 幂等 |
+| `platform/windows/desktop_embedder/wndproc.rs` | register/find/restore 提为 `pub(crate)` 供热插拔复用 |
+| `setup.rs` | `start_monitor_hotplug()`：300ms debounce + 调 `sync_monitors_from_system()`；主窗口 Destroy 时注销 |
+| 前端 `event.ts` / `config.ts` / `monitorConfig.ts` / `useExtendViewport.ts` | 订阅 `extend-viewport` + 挂载拉一次，删除 availableMonitors / scaleFactor 计算 |
+
+**两处 probe 抓到并修复的真 bug**：
+1. `hotplug_wndproc` 里把 `HWND`（裸指针、非 Send）存进 `static OnceLock` → 改为存 `isize`。
+2. `SetWindowLongPtrW(..., hotplug_wndproc as isize)` 触发 `function_casts_as_integer` → 改为先转 `*const ()` 再转 `isize`。
+
+验证：cargo fmt/check(0 warning)/test(68 passed)、tsc/lint 全绿；`m20-hotplug-probe` 与 `um-win-probe` Windows target 均 0 error。整项目 Windows check 仍被 `ring` 的 C 编译挡住（缺 `assert.h` / Windows SDK），用 probe 覆盖变更模块。

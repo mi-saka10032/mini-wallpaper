@@ -17,7 +17,6 @@ use log::{error, warn};
 use sea_orm::TransactionTrait;
 
 use super::Scheduler;
-use crate::ctx::render_coordinator::RenderNotification;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
@@ -26,6 +25,22 @@ use crate::services::{app_setting_service, collection_service, monitor_config_se
 
 impl Scheduler {
     // ==================== 公共入口方法（供 Command 层调用） ====================
+
+    /// 一批删除联动写库完成后的统一收尾：一次 reconcile 覆盖全部受影响屏，
+    /// 再通知主窗口刷新 config。scope 取 All，因为删除联动可能影响多屏。
+    async fn finish_deletion_reconcile(&self) {
+        let manager = self.unified_manager();
+        let mut guard = manager.lock().await;
+        if let Err(e) = guard
+            .reconcile(crate::ctx::reconcile::ReconcileScope::All)
+            .await
+        {
+            warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
+        }
+        drop(guard);
+        let wm = self.window_manager();
+        wm.lock().await.notify_config_refreshed();
+    }
 
     /// 从 DB 读取 display_mode 并判断是否为同步模式（mirror / extend）
     ///
@@ -59,13 +74,8 @@ impl Scheduler {
             return;
         }
 
-        // —— 阶段 1：DB 查询 + 定时器管理（无 wm 锁） ——
+        // —— 阶段 1：DB 写入 + 定时器管理（无渲染锁） ——
         let db = self.db();
-        let is_sync = self.resolve_is_sync_mode().await;
-        // 先只收集、不派发：DB 与定时器操作期间不持协调器锁，
-        // 阶段 2 再一次性路由，把锁的持有时间压到最短。
-        let mut notifications: Vec<RenderNotification> = Vec::new();
-
         for config in affected_configs {
             let mid = &config.monitor_id;
             let key = carousel_key(mid);
@@ -75,17 +85,18 @@ impl Scheduler {
                     Self::handle_current_wallpaper_removed_inner(
                         &db,
                         self,
-                        &mut notifications,
                         config,
                         cid,
                         deleted_ids,
-                        is_sync,
                     )
                     .await;
                 }
                 None => {
                     self.stop(&key);
-                    notifications.push(RenderNotification::Cleared(mid.clone(), is_sync));
+                    // 无收藏夹时把 wallpaper_id 写空，交给 reconcile 派发清屏。
+                    if let Err(e) = monitor_config_service::clear_wallpaper_id(&db, mid).await {
+                        warn!("[Scheduler] 清空 wallpaper_id 失败 {}: {}", mid, e);
+                    }
                 }
             }
         }
@@ -96,15 +107,8 @@ impl Scheduler {
             .collect();
         Self::check_orphaned_timers_inner(&db, self, &affected_mids).await;
 
-        // —— 阶段 2：批量路由通知 ——
-        {
-            let coordinator = self.render_coordinator();
-            let mut guard = coordinator.lock().await;
-            guard.dispatch_notifications(notifications).await;
-        }
-        let wm = self.window_manager();
-        let wm_guard = wm.lock().await;
-        wm_guard.notify_config_refreshed();
+        // —— 阶段 2：一次 reconcile 统一派发全部窗口副作用 ——
+        self.finish_deletion_reconcile().await;
     }
 
     /// 收藏夹删除后的联动处理
@@ -121,29 +125,14 @@ impl Scheduler {
             return;
         }
 
-        // —— 阶段 1：定时器管理 + 收集通知（无 wm 锁） ——
-        let is_sync = self.resolve_is_sync_mode().await;
-        let mut notifications: Vec<RenderNotification> = Vec::new();
-
+        // 定时器管理：collection_service::delete 已置空 monitor_config.collection_id，
+        // 这里只停定时器；壁纸窗口的清屏/切换由 reconcile 从 DB diff 出来统一派发。
         for config in affected_configs {
-            let mid = &config.monitor_id;
-            let key = carousel_key(mid);
-            self.stop(&key);
-
-            if config.wallpaper_id.is_none() {
-                notifications.push(RenderNotification::Cleared(mid.clone(), is_sync));
-            }
+            self.stop(&carousel_key(&config.monitor_id));
         }
 
-        // —— 阶段 2：批量路由通知 ——
-        {
-            let coordinator = self.render_coordinator();
-            let mut guard = coordinator.lock().await;
-            guard.dispatch_notifications(notifications).await;
-        }
-        let wm = self.window_manager();
-        let wm_guard = wm.lock().await;
-        wm_guard.notify_config_refreshed();
+        // —— 一次 reconcile 统一派发全部窗口副作用 ——
+        self.finish_deletion_reconcile().await;
     }
 
     /// 从收藏夹移除壁纸后的联动处理
@@ -169,12 +158,9 @@ impl Scheduler {
             return false;
         }
 
-        // —— 阶段 1：DB 查询 + 定时器管理（无 wm 锁） ——
+        // —— 阶段 1：DB 写入 + 定时器管理（无渲染锁） ——
         let db = self.db();
-        let is_sync = self.resolve_is_sync_mode().await;
-        let mut notifications: Vec<RenderNotification> = Vec::new();
-        // 仅表示 DB 的 wallpaper_id 是否被改写：决定是否要让主窗口刷新缩略图，
-        // 与 notifications 是否为空并不等价（定时器调整也可能产生通知）。
+        // 仅表示 DB 的 wallpaper_id 是否被改写，决定是否让主窗口刷新缩略图。
         let mut config_changed = false;
 
         for config in bound_configs {
@@ -190,34 +176,20 @@ impl Scheduler {
                 let changed = Self::handle_current_wallpaper_removed_inner(
                     &db,
                     self,
-                    &mut notifications,
                     config,
                     collection_id,
                     removing_ids,
-                    is_sync,
                 )
                 .await;
                 config_changed = config_changed || changed;
-            } else {
-                if self.is_running(&key) {
-                    Self::manage_timer_by_collection_inner(&db, self, mid, collection_id, false)
-                        .await;
-                }
+            } else if self.is_running(&key) {
+                Self::manage_timer_by_collection_inner(&db, self, mid, collection_id, false).await;
             }
         }
 
-        // —— 阶段 2：批量路由通知 ——
-        if config_changed || !notifications.is_empty() {
-            {
-                let coordinator = self.render_coordinator();
-                let mut guard = coordinator.lock().await;
-                guard.dispatch_notifications(notifications).await;
-            }
-            if config_changed {
-                let wm = self.window_manager();
-                let wm_guard = wm.lock().await;
-                wm_guard.notify_config_refreshed();
-            }
+        // —— 阶段 2：一次 reconcile 统一派发全部窗口副作用 ——
+        if config_changed {
+            self.finish_deletion_reconcile().await;
         }
 
         config_changed
@@ -326,34 +298,28 @@ impl Scheduler {
 
     /// 处理"当前播放的壁纸被移除"场景
     ///
-    /// 逻辑：尝试从收藏夹获取下一张可用壁纸，
-    /// - 有下一张 → 更新 DB + 通知窗口 + 管理定时器
-    /// - 无下一张 → 先把 wallpaper_id 写空，成功后再清空窗口并停止定时器
-    ///
-    /// 返回 true 表示 config 发生了变更。写库失败时返回 false，窗口保持原状。
+    /// 架构重整 Phase 5：本 helper 只负责写 DB + 管定时器，不再收集渲染通知；
+    /// 渲染副作用由外层公共入口在数据落库后调一次 reconcile 统一派发。
+    /// 返回 true 表示 config 发生了变更。写库失败时返回 false。
     ///
     /// 注意：使用 `&mut Scheduler` 而非 `&mut self` 以避免借用冲突
     async fn handle_current_wallpaper_removed_inner(
         db: &sea_orm::DatabaseConnection,
         sched: &mut Scheduler,
-        notifications: &mut Vec<RenderNotification>,
         config: &monitor_config::Model,
         collection_id: i32,
         removed_ids: &HashSet<i32>,
-        is_sync: bool,
     ) -> bool {
         let mid = &config.monitor_id;
         let key = carousel_key(mid);
 
         match persist_current_wallpaper_removal(db, config, collection_id, removed_ids).await {
-            Some(CurrentWallpaperOutcome::Advanced(next_wid)) => {
-                notifications.push(RenderNotification::Updated(mid.clone(), next_wid, is_sync));
+            Some(CurrentWallpaperOutcome::Advanced) => {
                 Self::manage_timer_by_collection_inner(db, sched, mid, collection_id, true).await;
                 true
             }
             Some(CurrentWallpaperOutcome::Cleared) => {
                 sched.stop(&key);
-                notifications.push(RenderNotification::Cleared(mid.clone(), is_sync));
                 true
             }
             None => false,
@@ -424,10 +390,11 @@ impl Scheduler {
     }
 }
 
-/// 「当前壁纸已不能继续播放」的落库结果，决定后续发哪种 RenderNotification。
+/// 「当前壁纸已不能继续播放」的落库结果。
+/// 渲染副作用不再由本模块决定：reconcile 会从 DB diff 出 wallpaper_id 的变更。
 enum CurrentWallpaperOutcome {
     /// 收藏夹里还有下一张，DB 已写入新 wallpaper_id。
-    Advanced(i32),
+    Advanced,
     /// 无可用下一张，DB 的 wallpaper_id 已置空。
     Cleared,
 }
@@ -456,7 +423,7 @@ async fn persist_current_wallpaper_removal(
                 error!("[Scheduler] 更新 wallpaper_id 失败 {}: {}", mid, e);
                 return None;
             }
-            Some(CurrentWallpaperOutcome::Advanced(next_wid))
+            Some(CurrentWallpaperOutcome::Advanced)
         }
         _ => {
             if let Err(e) = monitor_config_service::clear_wallpaper_id(db, mid).await {

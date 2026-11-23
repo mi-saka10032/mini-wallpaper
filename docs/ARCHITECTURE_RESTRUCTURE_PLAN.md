@@ -188,10 +188,10 @@ Manager::init()
   - `action_dispatch.rs`：只改 `is_enabled`（timer 字段，不进快照），**无需 reconcile**
 - ✅ 前端停用：`monitorConfigStore.init()` 改为只读拉取；`upsert` / `upsertAll` / `syncConfigToAll` / `useMonitorSettings` 删除 `syncWallpaperWindows` 调用；`syncMonitors` 退化为 fetchConfigs
 
-**Phase 3 剩余（明确列出，不假装完成）**：
-- `deletion_effects` 的另外三处（`on_wallpapers_deleted` / `on_collection_deleted` / `on_wallpapers_removed_from_collection`）仍走旧的 `RenderNotification` → `dispatch_notifications` 批量派发路径。它们改的 wallpaper_id 与 reconcile 读取的是同一份 DB，不会产生值冲突，但**仍是一条并存的副作用路径**，留待 Phase 5 与 M19 一起收口。
-- `set_setting` command 的 `app_setting_service::set` 尚未接入事务（单条写本身原子，display_mode 的批量 config 写已由 `update_monitors_batch` 事务化）。
-- 新屏登记（DB 中无 config 的物理屏）仍未由 Rust 写入；首次启动由前端原路径兜底，热插拔 M20 后统一处理。
+**Phase 3 剩余的处置（Phase 5 已收口前两项）**：
+- ✅ `deletion_effects` 三处已改为「写 DB + 一次 reconcile」：helper 不再收集通知，公共入口统一调 `finish_deletion_reconcile()`；`RenderNotification` enum 与 `dispatch_notifications` 已删除；`on_wallpapers_deleted` 的无收藏夹分支补了 `clear_wallpaper_id` 落库（原实现只发通知不改 DB，留下 DB 指向已删壁纸的不一致）。
+- ⬜ `set_setting` command 的 `app_setting_service::set` 尚未接入事务（单条写本身原子，display_mode 的批量 config 写已事务化）——非阻塞，留待后续。
+- ⬜ 新屏登记（DB 中无 config 的物理屏）仍未由 Rust 写入；热插拔 M20 后统一处理。
 
 ### Phase 4：前端只读化（已落地，未 commit）
 
@@ -278,7 +278,9 @@ Phase 3 ✅ 已落地（reconcile 派发 + 主要写入源收口 + 前端停用�
   ↓
 Phase 4 ✅ 已落地（前端编排与对外窗口 commands 全量删除；useExtendViewport 依赖 M20 未做）
   ↓
-Phase 5 → 剩余收口：deletion_effects 三处 RenderNotification 路径、M19（DeviceLost 清 WebView）
+Phase 5 ✅ 已落地（deletion_effects 三处收口 + RenderNotification 下线 + M19 DeviceLost 清 WebView）
+  ↓
+M20 → Rust 热插拔事件监听 + 前端显示器参数只读 + useExtendViewport 改造（唯一剩余 P1 的落点）
 ```
 
 ---
@@ -339,3 +341,17 @@ Phase 5 → 剩余收口：deletion_effects 三处 RenderNotification 路径、M
 验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **68 passed**；前端 `npx tsc --noEmit` 与 `pnpm lint`（0 warning / 0 error）；Windows target 用镜像 probe（`um-win-probe`）验证 reconcile 全部派发方法类型正确，**0 error / 0 warning**。
 
 **Phase 3 尚未完成的部分见 3 节末尾**，不把它算作已交付。待 Windows 实机验收后进入 Phase 4 前端彻底清理。
+
+### Phase 5 交付（已落地，未 commit）
+
+| 文件 | 改动 |
+|---|---|
+| `runtime/scheduler/deletion_effects.rs` | 三处公共入口改为「写 DB + 一次 `finish_deletion_reconcile()`」；helper 去掉 notifications 参数；`CurrentWallpaperOutcome::Advanced` 去掉 payload；无收藏夹分支补 `clear_wallpaper_id` 落库 |
+| `ctx/render_coordinator.rs` | 删除 `RenderNotification` enum 与 `dispatch_notifications()` |
+| `runtime/scheduler/mod.rs` | 删除 `render_coordinator()` 访问器（成为孤儿） |
+| `ctx/window_manager.rs` | 新增 `destroy_all()`（M19） |
+| `platform/windows/desktop_renderer/renderer.rs` | DeviceLost 分支 `tauri::async_runtime::spawn` 清理全部 WebView 壁纸窗口；补 `tauri::Manager` import |
+
+验证：`cargo fmt/check`（0 warning）/ `test --lib` **68 passed**；前端 tsc + lint 全绿；Windows target 用 `/tmp/m19-probe` 验证 `state::<AppContext>()` → `window_manager.lock().destroy_all()` 类型链（**probe 抓到并修正了一处双重 lock bug**），0 error。
+
+M19 不通知前端：前端显示器参数已降级为只读，窗口销毁后由下一次 `ensure_target` 命令重建；M20 事件化后统一处理。

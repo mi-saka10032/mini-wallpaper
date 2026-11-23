@@ -27,6 +27,7 @@ use crate::platform::wallpaper_renderer::frame_cache::{
 use crate::platform::wallpaper_renderer::{
     ExtendViewport, FitMode, MonitorRect, RendererErrorCode, WallpaperKind,
 };
+use tauri::Manager;
 
 /// 在途的一次性图片解码：worker 线程完成后，结果经 `decode_tx` 回到渲染线程 attach。
 /// 只活到结果回收；过期 generation 的结果被丢弃，ack 仍回 Ok 避免误报 error。
@@ -714,6 +715,17 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                 if let Err(err) = app_handle.typed_emit(&payload) {
                     log::warn!("[Renderer] DeviceLost 事件发送失败: {}", err);
                 }
+                // M19：WebView2 同样走 GPU 合成，设备丢失时一并释放其壁纸窗口。
+                // 这里在渲染线程内，取 AppContext 只能经 AppHandle 的 state，
+                // 且 window_manager 是 tokio Mutex，故 spawn 到 async runtime 清理。
+                // 不通知前端：前端显示器参数已降级为只读，窗口销毁后由下一次
+                // ensure_target 命令重建（M20 热插拔事件化后统一处理）。
+                let cleanup_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let app_ctx = cleanup_handle.state::<crate::ctx::AppContext>();
+                    app_ctx.window_manager.lock().await.destroy_all();
+                    log::info!("[Renderer] DeviceLost 已清理全部 WebView 壁纸窗口");
+                });
             }
         }
 

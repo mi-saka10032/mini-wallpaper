@@ -48,18 +48,6 @@ use crate::platform::wallpaper_renderer::{
 };
 use crate::services::{app_setting_service, monitor_config_service, wallpaper_service};
 
-/// 批量通知指令，供数据库阶段收集、短锁内一次性派发
-///
-/// 这样把「改 DB / 管定时器」与「路由到 renderer」拆成两个阶段：
-/// 前者不持协调器锁，后者才短暂持锁，避免长事务期间阻塞其它渲染操作。
-pub enum RenderNotification {
-    /// (monitor_id, wallpaper_id, is_sync)
-    /// `is_sync` 决定是否整组下发（mirror/extend），不是「是否同步等待」。
-    Updated(String, i32, bool),
-    /// (monitor_id, is_sync)：清空壁纸，同样按 is_sync 决定作用范围。
-    Cleared(String, bool),
-}
-
 /// extend 组降级时使用的 code；前端据此改用 warning 级 toast。
 const CODE_EXTEND_DEGRADED: &str = "ExtendDegraded";
 
@@ -448,20 +436,6 @@ impl RenderCoordinator {
                             e
                         );
                     }
-                }
-            }
-        }
-    }
-
-    /// 批量派发已收集的通知，锁的持有范围由调用方收窄
-    pub async fn dispatch_notifications(&mut self, notifications: Vec<RenderNotification>) {
-        for notification in notifications {
-            match notification {
-                RenderNotification::Updated(mid, wid, is_sync) => {
-                    self.update_wallpaper(&mid, wid, is_sync).await;
-                }
-                RenderNotification::Cleared(mid, is_sync) => {
-                    self.clear_wallpaper(&mid, is_sync).await;
                 }
             }
         }

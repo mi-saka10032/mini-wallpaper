@@ -1182,6 +1182,60 @@ M21 的 IPC 只需传 `RendererCommand` 的序列化 + 请求 id / 回执 id（�
 **实施位置**：不在 `main()`（main 只有 `mini_wallpaper_lib::run()`，renderer 依赖的 D3D11 device /
 显示器几何需 Tauri 初始化后才有），应在 `setup::init` 里 spawn，与 `spawn_manager_init` 同位置。
 
+#### M21 评审结论（2026-11-23 23:02）
+
+**用户三点决策**：
+1. **子进程崩溃不自动恢复**：写 error 日志 + emit 事件，前端监听并弹 error 告警。与 M13 DeviceLost
+   "只清理不自动恢复"哲学一致，省掉最复杂的崩溃后重建逻辑。
+2. **main 作为统一协调者**：用户结论正确（main 协调 renderer 子进程 + WebView 窗口），但需一个修正——
+   今天 WebView 壁纸窗口是 main 进程里的 `WebviewWindow` 对象（仅 Chromium 渲染进程独立），
+   不是"已跨进程"；M21 是把 Native 这一侧**新拆出去**。因此 Native↔WebView 互切今日在
+   `RenderCoordinator` 内同进程完成，拆开后 `apply_backend` / `teardown_old_backends`
+   要跨进程协调（先建新、再销毁旧的顺序经 IPC 保证）——这是 M21 唯一真正新增的复杂度。
+3. **不做兼容**：直接发布，不考虑协议版本兼容。
+
+**结构拉平（用户 a/b/d 提议，评审确认正确）**：
+
+当前嵌套（取证）：
+```
+AppContext
+├─ window_manager: Arc<Mutex<WallpaperWindowManager>>          ← 独立
+├─ render_coordinator: Arc<Mutex<RenderCoordinator>>           ← 内部又持 window_manager + renderer
+└─ unified_manager: Arc<Mutex<UnifiedWallpaperManager>>        ← 内部又持 coordinator + window_manager
+```
+`RenderCoordinator` 内部还嵌着 `DesktopRenderer`（渲染线程 + Sender），确实是三层嵌套、
+两个冗余 struct——与用户最初"打平为一个主体 manager"的重构目标不符。
+
+目标态：
+```
+AppContext
+├─ db / app_handle / toast_manager / backup_lock
+└─ unified_manager: Arc<Mutex<UnifiedWallpaperManager>>        ← 唯一主体
+   ├─ mod.rs          主体：db / slots / observed / reconcile / 路由决策
+   ├─ native.rs       impl 块：renderer IPC 客户端（M21 后）
+   └─ webview.rs      impl 块：WebView 窗口创建/销毁/事件推送
+```
+- `RenderCoordinator` / `WallpaperWindowManager` 删除，字段与方法并入主体，按渲染链路分文件。
+- `selection`（backend 策略）与 `resolve_backend` 路由决策**必须归主体 mod.rs**，
+  native.rs / webview.rs 只放"怎么执行"，不放"选哪个"——否则等于合并后仍嵌一个隐形协调器。
+- 并发代价：合并成一把大锁；但 Phase 3 已把所有写入源收口成"事务写 + 一次 reconcile"、
+  action 都是短操作，可接受。**硬约束**：`create_and_show` 的 1 秒同步嵌入必须在锁外
+  （现实现即如此），拉平时保留该模式。
+
+**用户 c 提议的修正**：renderer 子进程与 WebView 窗口无直接联动（帧不出子进程、事件不进子进程）
+这点正确；但二者共享同一组 `MonitorSlot` 几何与 `display_mode`，共同上游正是
+`UnifiedWallpaperManager`（M20 已由其算好 viewport 推给两边）。故表述修正为：
+"renderer 与 WebView 无直接联动，只接受 UnifiedWallpaperManager 的统一编排"——
+这正是用户 d 的目标态：renderer 子进程受 Manager 管理，与 WebView 窗口对等。
+
+**实施顺序（评审建议：先拉平、后拆进程）**：
+1. **M20a' 结构拉平（前置，纯重构）**：建 `ctx/unified_manager/` 目录 + mod.rs / native.rs /
+   webview.rs，删除两个冗余 struct，字段并入主体；用现有 68 tests + tsc/lint 验证，零行为变化。
+2. **M21 拆进程**：在拉平后的 native.rs 上把 mpsc 换 IPC，加崩溃告警 emit；
+   重点验证 Native↔WebView 视频切换过渡（唯一新增跨进程编排点）。
+
+分步理由：拉平是纯重构可用静态检查验证；拆进程改动大且 Windows-only，两者分开风险低。
+
 ### M22：恢复单 GPU 串行渲染链路（双链路并存，env 切换）
 
 目标：恢复被废弃的「单 GPU device 串行服务多屏 VideoSession」方案，但**不删除**当前的

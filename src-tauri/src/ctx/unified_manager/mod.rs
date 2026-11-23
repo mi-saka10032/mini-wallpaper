@@ -24,8 +24,11 @@ use crate::ctx::reconcile::{
     diff_snapshots, patch_observed, plan_dispatch, ConfigSnapshot, DispatchAction, GlobalSnapshot,
     MonitorSnapshot, ReconcileScope, DEFAULT_DISPLAY_MODE,
 };
-use crate::ctx::render_coordinator::RenderCoordinator;
-use crate::ctx::window_manager::WallpaperWindowManager;
+pub mod native;
+pub mod webview;
+
+pub use native::RenderCoordinator;
+pub use webview::WallpaperWindowManager;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::events::{ExtendViewportPayload, TypedEmitTo, VolumeChangedPayload};
 use crate::platform::wallpaper_renderer::group_viewports;
@@ -441,7 +444,7 @@ impl UnifiedWallpaperManager {
             if !slot.has_target {
                 continue;
             }
-            let label = crate::ctx::window_manager::wallpaper_window_label(&monitor_id);
+            let label = webview::wallpaper_window_label(&monitor_id);
             let payload = ExtendViewportPayload::from_physical(viewport, slot.dpi);
             if let Err(err) = self.app_handle.typed_emit_to(&label, &payload) {
                 log::warn!(

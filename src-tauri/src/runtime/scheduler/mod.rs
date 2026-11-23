@@ -30,7 +30,7 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::ctx::window_manager::WallpaperWindowManager;
+use crate::ctx::unified_manager::WallpaperWindowManager;
 use crate::ctx::AppContext;
 
 // re-export TaskSpawner，保持外部引用路径 `crate::runtime::scheduler::TaskSpawner` 兼容

@@ -17,11 +17,9 @@
 mod db;
 /// 配置快照与 diff 引擎（架构重整 Phase 1，纯逻辑无 IO，供后续 UnifiedWallpaperManager 消费）
 pub mod reconcile;
-pub mod render_coordinator;
 pub mod toast_manager;
-/// 统一壁纸管理器（架构重整 Phase 2，monitor_id 维度的统一入口）
+/// 统一壁纸管理器：主体 + native（渲染链路）/ webview（窗口链路）两个 impl 文件
 pub mod unified_manager;
-pub mod window_manager;
 
 use std::sync::Arc;
 
@@ -29,10 +27,8 @@ use anyhow::Result;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 
-use render_coordinator::RenderCoordinator;
 use toast_manager::ToastManager;
-use unified_manager::UnifiedWallpaperManager;
-use window_manager::WallpaperWindowManager;
+use unified_manager::{RenderCoordinator, UnifiedWallpaperManager, WallpaperWindowManager};
 
 /// 应用全局上下文
 ///

@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { availableMonitors } from "@tauri-apps/api/window";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import type { Wallpaper } from "@/api/config";
 import { INTERVAL_PRESETS } from "@/hooks/useMonitorConfig";
-import { syncWallpaperWindows } from "@/stores/monitorSync";
 
 export function useMonitorSettings() {
   // Store
@@ -66,13 +64,10 @@ export function useMonitorSettings() {
       await updateSetting(SETTING_KEYS.DISPLAY_MODE, newDisplayMode, selectedMonitorId);
 
       if (newDisplayMode === "mirror" || newDisplayMode === "extend") {
+        // 后端 set_setting → Manager reconcile 已统一下发所有显示器，
+        // 前端只需刷新展示数据，不再创建壁纸窗口。
         const fetchConfigs = useMonitorConfigStore.getState().fetchConfigs;
         await fetchConfigs();
-
-        // 后端已将壁纸配置同步到所有显示器，需为尚未创建窗口的显示器创建壁纸窗口
-        const configs = useMonitorConfigStore.getState().configs;
-        const monitors = await availableMonitors();
-        await syncWallpaperWindows(configs, monitors);
       }
     },
     [updateSetting, selectedMonitorId],

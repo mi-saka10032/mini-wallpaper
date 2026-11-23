@@ -10,8 +10,6 @@ use log::{info, warn};
 
 use super::Scheduler;
 use crate::dto::app_setting_dto::keys as setting_keys;
-use crate::events::VolumeChangedPayload;
-use crate::platform::wallpaper_renderer::DisplayMode;
 use crate::runtime::tasks::carousel::{carousel_key, CarouselTask};
 use crate::runtime::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
 use crate::services::{collection_service, monitor_config_service};
@@ -42,17 +40,18 @@ impl Scheduler {
                 }
             }
             setting_keys::GLOBAL_VOLUME => {
-                let volume = value.parse::<u32>().unwrap_or(0).min(100);
-                // 两个消费方缺一不可：Native renderer 走 set_volume，
-                // WebView 页面靠广播的 VolumeChangedPayload 自行更新。
-                let coordinator = self.render_coordinator();
-                coordinator.lock().await.set_volume(volume);
-                let wm = self.window_manager();
-                let mgr = wm.lock().await;
-                mgr.broadcast(&VolumeChangedPayload {
-                    volume: volume as f64,
-                });
-                info!("[Scheduler] 音量已更新: {}%", volume);
+                // 音量是全局字段，Manager 的 reconcile 会 diff 出 VolumeChanged，
+                // 一次派发同时更新 Native renderer 与广播到所有 WebView 窗口。
+                let manager = self.unified_manager();
+                let mut guard = manager.lock().await;
+                if let Err(e) = guard
+                    .reconcile(crate::ctx::reconcile::ReconcileScope::All)
+                    .await
+                {
+                    warn!("[Scheduler] 音量 reconcile 失败: {}", e);
+                } else {
+                    info!("[Scheduler] 音量已更新: {}", value);
+                }
             }
             setting_keys::DISPLAY_MODE => {
                 self.apply_display_mode_side_effect(value, monitor_id).await;
@@ -86,16 +85,10 @@ impl Scheduler {
         info!("[Scheduler] display_mode 变更: {}", display_mode);
 
         let db = self.db();
-        let wm = self.window_manager();
 
-        // M5：display_mode 必须同步给渲染协调器，否则 Native 侧切到 extend
-        // 只是 DB 里改了个字符串，视口仍按 independent 逐屏渲染。
-        if let Some(mode) = DisplayMode::parse(display_mode) {
-            let coordinator = self.render_coordinator();
-            let mut guard = coordinator.lock().await;
-            guard.set_display_mode(mode);
-        }
-
+        // 架构重整 Phase 3：display_mode 的渲染副作用（set_display_mode、配置同步、
+        // 整组重下发、WebView 广播）全部由 UnifiedWallpaperManager 的一次 reconcile 承担。
+        // 这里只保留无法从「窗口状态 diff」推导的部分：timer 的启停策略。
         let configs = match monitor_config_service::get_all(&db).await {
             Ok(c) => c,
             Err(e) => {
@@ -109,27 +102,43 @@ impl Scheduler {
             return;
         }
 
+        // mirror/extend：以基准屏配置单事务同步到所有从属屏，再触发一次 reconcile。
+        // independent：DB 无批量变更，直接触发一次 reconcile 让所有屏按新 is_sync 重下发。
+        if matches!(display_mode, "mirror" | "extend") {
+            let primary_mid = monitor_id.unwrap_or_else(|| {
+                active_configs
+                    .first()
+                    .map(|c| c.monitor_id.as_str())
+                    .unwrap_or("")
+            });
+            if let Some(source) = active_configs.iter().find(|c| c.monitor_id == primary_mid) {
+                let targets: Vec<String> = active_configs
+                    .iter()
+                    .filter(|c| c.monitor_id != primary_mid)
+                    .map(|c| c.monitor_id.clone())
+                    .collect();
+                if let Err(e) =
+                    monitor_config_service::update_monitors_batch(&db, source, &targets).await
+                {
+                    warn!("[Scheduler] 批量同步配置失败: {}", e);
+                    return;
+                }
+            }
+        }
+
+        {
+            let manager = self.unified_manager();
+            let mut guard = manager.lock().await;
+            if let Err(e) = guard
+                .reconcile(crate::ctx::reconcile::ReconcileScope::All)
+                .await
+            {
+                warn!("[Scheduler] display_mode reconcile 失败: {}", e);
+            }
+        }
+
         match display_mode {
             "independent" => {
-                // 只通知实际存在的 WebView 壁纸窗口；纯 Native 组没有 label
-                {
-                    let mgr = wm.lock().await;
-                    mgr.broadcast_display_mode_changed("independent");
-                }
-
-                // 与 mirror/extend 的整组重下发对称：WebView 页面靠 loadConfig 重读
-                // fitMode，Native surface 在同步模式下被 sync_config_from 改过 DB 却
-                // 没收到通知，切回独立后必须按最新 config 重下发，否则保留旧 fitMode。
-                {
-                    let coordinator = self.render_coordinator();
-                    let guard = coordinator.lock().await;
-                    for config in &active_configs {
-                        guard
-                            .set_fit_mode(&config.monitor_id, Some(config.fit_mode.as_str()), false)
-                            .await;
-                    }
-                }
-
                 // 恢复所有满足条件的定时器
                 for config in &active_configs {
                     let key = carousel_key(&config.monitor_id);
@@ -153,52 +162,15 @@ impl Scheduler {
                 }
             }
             "mirror" | "extend" => {
-                // 步骤 1: 以 monitor_id 为基准，同步配置到所有从属 monitor
                 let primary_mid = monitor_id.unwrap_or_else(|| {
                     active_configs
                         .first()
                         .map(|c| c.monitor_id.as_str())
                         .unwrap_or("")
                 });
-
                 let primary_config = active_configs.iter().find(|c| c.monitor_id == primary_mid);
-                if let Some(source) = primary_config {
-                    for config in &active_configs {
-                        if config.monitor_id == primary_mid {
-                            continue;
-                        }
-                        if let Err(e) = monitor_config_service::sync_config_from(
-                            &db,
-                            &config.monitor_id,
-                            source,
-                        )
-                        .await
-                        {
-                            warn!("[Scheduler] 同步配置到 {} 失败: {}", config.monitor_id, e);
-                        }
-                    }
 
-                    // 步骤 1.5：Native 侧整组重下发，补上 backend 复刻缺失的一步。
-                    // WebView 页面收到 display-mode-changed 会自己 loadConfig 重读 DB，
-                    // 而 renderer 只收到 viewport 更新：sync_config_from 改了从屏 DB 的
-                    // wallpaper_id，surface 却仍挂着旧壁纸，切模式时从屏就不会立刻跟随。
-                    // is_sync=true 让 resolve_targets 覆盖整组，一次下发即可。
-                    let coordinator = self.render_coordinator();
-                    let mut guard = coordinator.lock().await;
-                    match source.wallpaper_id {
-                        Some(wid) => guard.update_wallpaper(primary_mid, wid, true).await,
-                        None => guard.clear_wallpaper(primary_mid, true).await,
-                    }
-                }
-
-                // 步骤 2: 只通知实际存在的 WebView 壁纸窗口切换渲染模式。
-                // Native 侧的视口已由上面的 set_display_mode 重算。
-                {
-                    let mgr = wm.lock().await;
-                    mgr.broadcast_display_mode_changed(display_mode);
-                }
-
-                // 步骤 3: 定时器管理 — 仅保留主 monitor 的定时器，停止所有从属定时器
+                // 定时器管理（Phase 3 范围排除）：仅保留主 monitor 的定时器
                 for config in &active_configs {
                     if config.monitor_id != primary_mid {
                         let key = carousel_key(&config.monitor_id);

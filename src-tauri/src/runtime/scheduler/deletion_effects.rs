@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 
 use log::{error, warn};
+use sea_orm::TransactionTrait;
 
 use super::Scheduler;
 use crate::ctx::render_coordinator::RenderNotification;
@@ -273,9 +274,17 @@ impl Scheduler {
             }
         };
 
-        // 更新 DB
+        // 架构重整 Phase 3：单条 DB 写入 + 一次 reconcile 统一下发，
+        // 不再由本模块手动调 coordinator（is_sync 由 Manager 从 display_mode 推导）。
+        let txn = match db.begin().await {
+            Ok(t) => t,
+            Err(e) => {
+                error!("[Scheduler] 开启事务失败: {}", e);
+                return false;
+            }
+        };
         if let Err(e) =
-            monitor_config_service::update_wallpaper_id(&db, &config.monitor_id, wid).await
+            monitor_config_service::update_wallpaper_id(&txn, &config.monitor_id, wid).await
         {
             error!(
                 "[Scheduler] 更新 wallpaper_id 失败 {}: {}",
@@ -283,15 +292,20 @@ impl Scheduler {
             );
             return false;
         }
+        if let Err(e) = txn.commit().await {
+            error!("[Scheduler] 提交 wallpaper_id 失败: {}", e);
+            return false;
+        }
 
-        // 按 backend 路由通知（Native 渲染 / WebView 事件），is_sync 由 display_mode 决定
+        let manager = self.unified_manager();
+        let mut guard = manager.lock().await;
+        if let Err(e) = guard
+            .reconcile(crate::ctx::reconcile::ReconcileScope::One(
+                config.monitor_id.clone(),
+            ))
+            .await
         {
-            let is_sync = self.resolve_is_sync_mode().await;
-            let coordinator = self.render_coordinator();
-            let mut guard = coordinator.lock().await;
-            guard
-                .update_wallpaper(&config.monitor_id, wid, is_sync)
-                .await;
+            warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
         }
 
         // 如果有运行中的定时器，重置计时

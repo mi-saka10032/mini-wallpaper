@@ -1150,6 +1150,48 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 
 **本轮架构重整（Phase 0~5 + M18/M19/M20）已实机验收通过**，含混合 backend、热插拔恢复、多 DPI viewport。至此 M10~M20 全部闭环，无遗留任务。
 
+## 十、下一批 M 任务（2026-11-23 22:22 用户提出，待评审）
+
+> 前一批 M10~M20 已全部闭环。以下两项由用户指定恢复，均为**下一项 M 任务**级别，
+> 实施前需单独评审方案（本轮仅登记 + 回答技术提问，不改代码）。
+
+### M21：Native renderer 独立子进程
+
+目标：把 Native renderer / decoder 拆到独立常驻子进程，实现
+① main 主进程内存账面隔离（记账更清晰）；② 与 main 主进程的正式故障/生命周期隔离。
+
+历史结论（`NATIVE_RENDERER_ARCHITECTURE_REVIEW.md` 第 8 节）：**不推荐作为降低总内存的首选**——
+它改善账面和隔离，不降低总内存，且引入 IPC、共享纹理句柄传递、句柄生命周期、崩溃恢复、
+额外进程基础开销，共享 DLL / driver pool 可能重复计入。现由用户重新提出，优先级为隔离与记账，
+不再是省内存。共享纹理跨进程需 `D3D11_RESOURCE_MISC_SHARED_NTHANDLE` +
+`IDXGIResource1::CreateSharedHandle` + `DuplicateHandle` + `ID3D11Device1::OpenSharedResource1`
+（旧的 `GetSharedHandle` 已不推荐）。
+
+### M22：恢复单 GPU 串行渲染链路（双链路并存，env 切换）
+
+目标：恢复被废弃的「单 GPU device 串行服务多屏 VideoSession」方案，但**不删除**当前的
+VideoSession 独立 GPU 链路；两套代码并存，通过环境变量在启动时选择接入哪套，方便实时 A/B 对照。
+
+- 当前实现：`VideoSession::new` 每次 `WorkerGpu::new(renderer_device)`，每 session 独占
+  D3D11 device / device manager / staging texture（`video.rs:863`）。
+- 废案实现：全局唯一 `VideoWorker` + 内部多个 `VideoSession`，共享一个 D3D11 device /
+  context / device manager / video context（本文第九节 9.1）。
+- 历史否决原因：首视频 cache 峰值不降、旧 cache 跨视频长期留存（两轮 A/B）。
+- 本次恢复目的：不是替代，而是**可对照验证**——env 切换 + 两种链路共存。
+
+**音频归属澄清（用户提问，已取证确认）**：音频由 `AudioPlayback` 承担，挂在 `VideoPlayback` 上
+（`video.rs:268/319`），SourceReader 只解码视频流。independent 每屏一个 VideoPlayback → 各自一份
+WASAPI；mirror/extend 多屏共享同一个 `Arc<Mutex<VideoPlayback>>` → 自然共用一份 WASAPI。
+**关键**：这个归属是 `VideoPlayback` 的 Arc 共享关系决定的，**与单 GPU / 多 GPU 链路无关**。
+M22 恢复单 GPU 链路时 GPU 变共享，但 VideoPlayback 仍是 per 屏 handle、Arc 共享规则不变，
+**音频逻辑无需改动**。
+
+**子进程时机/通道澄清（用户提问）**：不建议在 `main()` 里启动——main 只有 `mini_wallpaper_lib::run()`，
+renderer 依赖 D3D11 device / 窗口句柄 / 显示器几何，都需 Tauri 初始化后才有；应在 `setup::init`
+里 spawn（与 `spawn_manager_init` 同位置）。通信不能用 std `mpsc`（进程内语义），须走 IPC：
+命名管道 / 本地 socket 传控制命令，共享纹理走 NT handle 体系。这是 M21 相对"线程换进程"的最大增量。
+
+
 ### 拔显示器后 40MB 内存延迟回落（2026-11-23 实机分析，结论：不修）
 
 **现象**（用户实机，纯 Native 双视频 independent 模式）：

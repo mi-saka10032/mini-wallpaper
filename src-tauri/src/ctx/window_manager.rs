@@ -98,8 +98,8 @@ impl WallpaperWindowManager {
     ///
     /// 桌面嵌入含最长 1 秒的 Win32 同步调用，不能在本方法内执行，否则会
     /// 让调用方持有的 wm 锁跨越这段耗时。嵌入与 show 由调用方在锁外编排。
-    /// 返回 None 表示同 label 窗口仍存在、跳过创建。
-    pub fn create_window(
+    /// async：同 label 窗口残留时需等待 Tauri 运行时完成销毁（热插拔恢复场景）。
+    pub async fn create_window(
         &mut self,
         monitor_id: &str,
         x: i32,
@@ -115,13 +115,30 @@ impl WallpaperWindowManager {
             self.destroy_window(monitor_id);
         }
 
-        // 检查 Tauri 运行时中是否仍存在同 label 的窗口实例（如 F5 刷新导致的销毁延迟）
+        // Tauri 运行时中可能仍残留同 label 的窗口实例：
+        // `window.close()` 是异步的，热插拔断开→恢复（实机错误2）时，
+        // 断开已把窗口从 self.windows 移除、WebView2 进程也已销毁，
+        // 但 Tauri 的窗口表尚未清理。旧代码直接跳过创建，导致该屏永不绘制。
+        // 这里主动再 close 一次并等待运行时真正移除，超时才报错让上层重试。
         if self.app_handle.get_webview_window(&label).is_some() {
             warn!(
-                "WebviewWindow '{}' 仍存在于运行时中（可能尚未完成销毁），跳过创建",
+                "WebviewWindow '{}' 仍存在于运行时中（可能尚未完成销毁），主动关闭并等待",
                 label
             );
-            return Ok(None);
+            if let Some(window) = self.app_handle.get_webview_window(&label) {
+                let _ = window.close();
+            }
+            let mut gone = false;
+            for _ in 0..20 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if self.app_handle.get_webview_window(&label).is_none() {
+                    gone = true;
+                    break;
+                }
+            }
+            if !gone {
+                return Err(format!("壁纸窗口 '{}' 销毁超时，无法重建", label));
+            }
         }
 
         let url = match extra_query {
@@ -205,7 +222,8 @@ impl WallpaperWindowManager {
         height: u32,
     ) -> Result<(), String> {
         let created = self
-            .create_window(monitor_id, x, y, width, height, None)?
+            .create_window(monitor_id, x, y, width, height, None)
+            .await?
             .ok_or_else(|| format!("壁纸窗口 {} 已存在，跳过创建", monitor_id))?;
 
         #[cfg(target_os = "windows")]

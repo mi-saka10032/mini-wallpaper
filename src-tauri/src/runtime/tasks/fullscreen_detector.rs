@@ -55,8 +55,8 @@ impl TaskSpawner for FullscreenDetectionTask {
                     // 同时暂停 / 恢复渲染协调器：Native 停帧，WebView 隐藏窗口。
                     // 前端的 useFullscreenPause 只负责暂停 video 元素，覆盖不到原生渲染。
                     let app_ctx: &AppContext = app.state::<AppContext>().inner();
-                    let coordinator = app_ctx.render_coordinator.lock().await;
-                    coordinator.set_paused(is_fullscreen).await;
+                    let manager = app_ctx.unified_manager.lock().await;
+                    manager.set_paused(is_fullscreen).await;
 
                     was_fullscreen = is_fullscreen;
                 }

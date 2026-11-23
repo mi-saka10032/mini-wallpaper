@@ -30,7 +30,6 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::ctx::unified_manager::WallpaperWindowManager;
 use crate::ctx::AppContext;
 
 // re-export TaskSpawner，保持外部引用路径 `crate::runtime::scheduler::TaskSpawner` 兼容
@@ -66,12 +65,6 @@ impl Scheduler {
     pub(super) fn db(&self) -> DatabaseConnection {
         let app_ctx: &AppContext = self.app.state::<AppContext>().inner();
         app_ctx.db.clone()
-    }
-
-    /// 从 AppHandle 获取 window_manager（clone Arc 后脱离 self 生命周期）
-    pub(super) fn window_manager(&self) -> Arc<Mutex<WallpaperWindowManager>> {
-        let app_ctx: &AppContext = self.app.state::<AppContext>().inner();
-        app_ctx.window_manager.clone()
     }
 
     /// 从 AppHandle 获取 unified_manager：所有渲染副作用的唯一派发入口。

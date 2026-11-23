@@ -37,9 +37,8 @@ impl Scheduler {
         {
             warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
         }
-        drop(guard);
-        let wm = self.window_manager();
-        wm.lock().await.notify_config_refreshed();
+        // 结构拉平后 notify_config_refreshed 已在同一个 manager 上，无需换锁。
+        guard.notify_config_refreshed();
     }
 
     /// 从 DB 读取 display_mode 并判断是否为同步模式（mirror / extend）

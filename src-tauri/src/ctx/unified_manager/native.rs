@@ -27,83 +27,28 @@
 //! D2：extend 组内 backend 不全是 Native 时降级为 M4 的逐屏独立渲染并提示一次，
 //! 避免 Rust 侧几何与 WebView 侧 `useExtendViewport` 两套坐标在接缝处对不上。
 
+//! Native 渲染链路 impl
+//!
+//! 原 `RenderCoordinator` 的全部字段与方法原样搬入 `UnifiedWallpaperManager`，
+//! 本文件只承载"Native 侧怎么执行"的 impl 块；backend 路由决策仍归主体 mod.rs。
+
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use sea_orm::DatabaseConnection;
-use tauri::AppHandle;
-use tokio::sync::Mutex;
 
-use super::webview::WallpaperWindowManager;
+use super::UnifiedWallpaperManager;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::wallpaper;
 use crate::events::{RendererErrorPayload, ThumbnailChangedPayload, TypedEmit};
 use crate::platform::wallpaper_renderer::{
-    default_backend_selection, group_viewports, resolve_backend, union_rect, BackendSelection,
-    DesktopRenderer, DisplayMode, ExtendViewport, FitMode, MonitorRect, RenderBackend,
-    RendererError, RendererErrorCode, WallpaperKind,
+    group_viewports, resolve_backend, union_rect, DisplayMode, ExtendViewport, FitMode,
+    MonitorRect, RenderBackend, RendererError, RendererErrorCode, WallpaperKind,
 };
 use crate::services::{app_setting_service, monitor_config_service, wallpaper_service};
 
-/// extend 组降级时使用的 code；前端据此改用 warning 级 toast。
-const CODE_EXTEND_DEGRADED: &str = "ExtendDegraded";
-
-/// 渲染协调器：壁纸渲染链路的唯一入口
-pub struct RenderCoordinator {
-    db: DatabaseConnection,
-    app_handle: AppHandle,
-    window_manager: Arc<Mutex<WallpaperWindowManager>>,
-    renderer: DesktopRenderer,
-    /// backend 路由策略（Auto / NativeOnly），启动时由构建配置与环境变量决定。
-    /// 它决定「原生不支持的格式」是回退 WebView 还是直接报错。
-    selection: BackendSelection,
-    /// monitor_id -> 当前 active backend
-    ///
-    /// 是路由的依据：换图、fitMode、清屏都按这里记录的值选择 Native 命令或 WebView 事件。
-    /// apply_backend 会就地改写它，所以跨 backend 判断必须提前快照。
-    backends: HashMap<String, RenderBackend>,
-    /// monitor_id -> 当前正在显示的壁纸 id；用于判定换图是否触发 crossfade。
-    /// 与 renderer 侧的 transition 队列解耦：这里只决定要不要 fade，不跟踪 fade 进度。
-    wallpaper_ids: HashMap<String, i32>,
-    /// monitor_id -> 显示器几何；extend 的 union 由整张表算出
-    ///
-    /// 即使某屏没有壁纸也要登记，否则虚拟桌面画布会缺一块。
-    rects: HashMap<String, MonitorRect>,
-    /// 当前显示模式，决定 resolve_targets 的作用范围与整组视口是否启用。
-    display_mode: DisplayMode,
-    /// 降级提示只发一次，恢复为全 Native 时重置
-    degraded_logged: bool,
-}
-
-impl RenderCoordinator {
-    /// 构造协调器：启动 renderer 线程并初始化默认 backend 策略与空状态表。
-    ///
-    /// 此处不访问 DB；display_mode / 音量的首次同步由 AppContext::new 显式调用，
-    /// 避免在构造函数里做异步 I/O。renderer 线程启动失败则整个协调器创建失败。
-    pub fn new(
-        db: DatabaseConnection,
-        app_handle: AppHandle,
-        window_manager: Arc<Mutex<WallpaperWindowManager>>,
-    ) -> Result<Self> {
-        // renderer 线程持有 app_handle 用于设备丢失时直接上报事件，故先 clone 再存入自身字段。
-        let renderer = DesktopRenderer::start(app_handle.clone())?;
-        Ok(Self {
-            db,
-            app_handle,
-            window_manager,
-            renderer,
-            selection: default_backend_selection(),
-            backends: HashMap::new(),
-            wallpaper_ids: HashMap::new(),
-            rects: HashMap::new(),
-            display_mode: DisplayMode::Independent,
-            degraded_logged: false,
-        })
-    }
-
+impl UnifiedWallpaperManager {
     // ==================== 公共入口 ====================
 
     /// 从 app_setting 读取 display_mode；启动时与设置变更后各调用一次。
@@ -189,8 +134,7 @@ impl RenderCoordinator {
                 }
             }
             RenderBackend::WebView => {
-                let mut wm = self.window_manager.lock().await;
-                wm.create_and_show(
+                self.create_and_show(
                     monitor_id,
                     rect.x,
                     rect.y,
@@ -251,8 +195,7 @@ impl RenderCoordinator {
                 }
             }
             Some(RenderBackend::WebView) | None => {
-                let mut wm = self.window_manager.lock().await;
-                wm.destroy_window(monitor_id);
+                self.destroy_window(monitor_id);
             }
         }
         self.refresh_group_geometry();
@@ -315,8 +258,7 @@ impl RenderCoordinator {
             match self.backends.get(mid).copied() {
                 Some(RenderBackend::Native) => native_mids.push(mid.clone()),
                 _ => {
-                    let wm = self.window_manager.lock().await;
-                    if let Err(e) = wm.update_window(mid, wallpaper_id) {
+                    if let Err(e) = self.update_window(mid, wallpaper_id) {
                         log::warn!("[RenderCoordinator] 壁纸更新失败 {}: {}", mid, e);
                     }
                 }
@@ -399,8 +341,7 @@ impl RenderCoordinator {
                     }
                 }
                 RenderBackend::WebView => {
-                    let wm = self.window_manager.lock().await;
-                    wm.notify_wallpaper_cleared(&mid, false);
+                    self.notify_wallpaper_cleared(&mid, false);
                 }
             }
         }
@@ -428,8 +369,7 @@ impl RenderCoordinator {
                     }
                 }
                 RenderBackend::WebView => {
-                    let wm = self.window_manager.lock().await;
-                    if let Err(e) = wm.notify_fit_mode_changed(&mid, fit_mode.as_str()) {
+                    if let Err(e) = self.notify_fit_mode_changed(&mid, fit_mode.as_str()) {
                         log::warn!(
                             "[RenderCoordinator] WebView fitMode 更新失败 {}: {}",
                             mid,
@@ -446,11 +386,10 @@ impl RenderCoordinator {
         if let Err(e) = self.renderer.set_paused(paused) {
             log::warn!("[RenderCoordinator] 原生渲染暂停切换失败: {}", e);
         }
-        let wm = self.window_manager.lock().await;
         if paused {
-            wm.hide_all();
+            self.hide_all();
         } else {
-            wm.show_all();
+            self.show_all();
         }
     }
 
@@ -554,7 +493,7 @@ impl RenderCoordinator {
         let payload = RendererErrorPayload {
             monitor_id: None,
             wallpaper_id: None,
-            code: CODE_EXTEND_DEGRADED.to_string(),
+            code: super::CODE_EXTEND_DEGRADED.to_string(),
             message: "跨屏拼接需要整组使用原生渲染，当前已降级为逐屏独立显示".to_string(),
         };
         if let Err(e) = self.app_handle.typed_emit(&payload) {
@@ -647,8 +586,7 @@ impl RenderCoordinator {
                     .await?;
             }
             RenderBackend::WebView => {
-                let mut wm = self.window_manager.lock().await;
-                wm.create_and_show(
+                self.create_and_show(
                     monitor_id,
                     rect.x,
                     rect.y,
@@ -693,8 +631,7 @@ impl RenderCoordinator {
                     }
                 }
                 RenderBackend::WebView => {
-                    let mut wm = self.window_manager.lock().await;
-                    wm.destroy_window(&mid);
+                    self.destroy_window(&mid);
                 }
             }
         }

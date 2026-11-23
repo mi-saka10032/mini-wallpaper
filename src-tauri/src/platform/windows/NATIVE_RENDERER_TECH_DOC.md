@@ -1215,7 +1215,13 @@ AppContext
    ├─ native.rs       impl 块：renderer IPC 客户端（M21 后）
    └─ webview.rs      impl 块：WebView 窗口创建/销毁/事件推送
 ```
-- `RenderCoordinator` / `WallpaperWindowManager` 删除，字段与方法并入主体，按渲染链路分文件。
+- `RenderCoordinator` / `WallpaperWindowManager` 删除，**字段与方法原样搬运**进主体，按渲染链路分文件。
+  "冗余"仅指 struct 外壳多余，**不代表内部判断状态与逻辑多余**——`backends` / `wallpaper_ids` /
+  `rects` / `display_mode` / `degraded_logged` / `windows` 及 `apply_backend` /
+  `teardown_old_backends` / `resolve_targets` / `create_and_show` 等方法**全部保留语义**，不得简化掉。
+- **搬运中合并的重复字段**（这才是"多余出来的代码逻辑"）：三 struct 中 `db`（2 处）、
+  `app_handle`（3 处）、`window_manager`（2 处）重复持有 → 合并为一份，删除多余的 clone 与
+  跨 struct 传递。除此之外不删任何字段/逻辑。
 - `selection`（backend 策略）与 `resolve_backend` 路由决策**必须归主体 mod.rs**，
   native.rs / webview.rs 只放"怎么执行"，不放"选哪个"——否则等于合并后仍嵌一个隐形协调器。
 - 并发代价：合并成一把大锁；但 Phase 3 已把所有写入源收口成"事务写 + 一次 reconcile"、

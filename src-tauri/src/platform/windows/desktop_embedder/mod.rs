@@ -21,7 +21,9 @@ mod legacy;
 mod modern;
 mod strategy;
 mod version;
-mod wndproc;
+// 提为 pub(crate)：M20 主窗口热插拔监听（monitor_hotplug）复用 register/find/restore，
+// 两者共用同一份 HWND → 原始 WndProc 映射表，保证注销路径一致。
+pub(crate) mod wndproc;
 mod workerw;
 
 use anyhow::{bail, Context, Result};

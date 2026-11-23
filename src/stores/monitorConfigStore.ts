@@ -1,11 +1,9 @@
 import { create } from "zustand";
-import { availableMonitors } from "@tauri-apps/api/window";
 import { listen, EVENTS } from "@/api/event";
 import type { MonitorConfig } from "@/api/config";
 import { getMonitorConfigs, upsertMonitorConfig, deleteMonitorConfig } from "@/api/monitorConfig";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
-import { syncWallpaperWindows, doSyncMonitors } from "./monitorSync";
 
 interface MonitorConfigState {
   configs: MonitorConfig[];
@@ -66,9 +64,12 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
 
     set({ loading: true });
     try {
-      await doSyncMonitors(set);
+      // 架构重整 Phase 3：显示器检测与壁纸窗口创建已由 Rust 侧
+      // UnifiedWallpaperManager 在 setup 阶段完成，前端只读取配置用于展示。
+      const configs = await getMonitorConfigs();
+      set({ configs });
 
-      // 壁纸窗口创建完成后，启动所有满足条件的轮播定时器
+      // 启动所有满足条件的轮播定时器
       try {
         await invoke(COMMANDS.START_TIMERS);
       } catch (e) {
@@ -99,12 +100,9 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
   },
 
   syncMonitors: async () => {
-    set({ loading: true });
-    try {
-      await doSyncMonitors(set);
-    } finally {
-      set({ loading: false });
-    }
+    // 前端热插拔功能已取消：显示器参数只读，变更由 Rust 侧事件驱动。
+    // 保留空实现以兼容既有调用点，后续 M20 会彻底移除该入口。
+    await useMonitorConfigStore.getState().fetchConfigs();
   },
 
   fetchConfigs: async () => {
@@ -129,13 +127,7 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       return { configs: [...state.configs, config] };
     });
 
-    // 设置了 wallpaperId 时，触发壁纸窗口同步（按需创建尚未存在的窗口）
-    if (params.wallpaperId) {
-      const monitors = await availableMonitors();
-      const configs = useMonitorConfigStore.getState().configs;
-      await syncWallpaperWindows(configs, monitors);
-    }
-
+    // 壁纸窗口副作用由后端 upsert command 内的 reconcile 完成，前端不再编排。
     return config;
   },
 
@@ -173,12 +165,7 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       return { configs: updated };
     });
 
-    // 同步壁纸窗口
-    if (source.wallpaper_id) {
-      const monitors = await availableMonitors();
-      const configs = useMonitorConfigStore.getState().configs;
-      await syncWallpaperWindows(configs, monitors);
-    }
+    // 壁纸窗口副作用由后端逐条 upsert 触发的 reconcile 完成，前端不再编排。
   },
 
   upsertAll: async (params) => {
@@ -203,12 +190,7 @@ export const useMonitorConfigStore = create<MonitorConfigState>((set) => ({
       return { configs: updated };
     });
 
-    // 设置了 wallpaperId 时，触发壁纸窗口同步
-    if (params.wallpaperId) {
-      const monitors = await availableMonitors();
-      const configs = useMonitorConfigStore.getState().configs;
-      await syncWallpaperWindows(configs, monitors);
-    }
+    // 壁纸窗口副作用由后端逐条 upsert 触发的 reconcile 完成，前端不再编排。
   },
 
   remove: async (id, _monitorId) => {

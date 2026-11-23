@@ -78,7 +78,7 @@ action (单 monitor upsert / 批量 display_mode / volume / 轮播 tick / 删除
 
 | action | 事务内容 | scope | diff 产出 / 派发 |
 |---|---|---|---|
-| 单 monitor upsert | 1 条 config | `One(mid)` | 该屏字段差异 → 单屏 set / update / timer |
+| 单 monitor upsert | 1 条 config | `One(mid)` | 该屏窗口字段差异 → 单屏 set / update（timer 仍由 Scheduler 处理） |
 | **display_mode（批量）** | `app_setting.display_mode` + **N 条 config**（原 `sync_config_from` 的 6 字段 × N 屏） | `All` | `DisplayModeChanged` + N 屏字段差异 → **组级批量** `update_monitors`，共用同一帧时钟 |
 | volume | `app_setting.global_volume` | `All` | `VolumeChanged` → set_volume + 全 WebView 广播 |
 | 轮播 tick / 删除联动 | 单条或批量 config | 按写入条数 | 对应字段差异 |
@@ -88,8 +88,12 @@ action (单 monitor upsert / 批量 display_mode / volume / 轮播 tick / 删除
 
 ### 2.3 字段 → 动作映射
 
-**快照输入**：`monitor_configs` 全表 + `app_setting` 白名单（`display_mode`、`global_volume`）。
-其余 key 不进快照：`theme` / `language` / `close_to_tray` / `accent_color` / 回收站两项无副作用；`pause_on_fullscreen`、5 个 `shortcut_*` 归 Scheduler 不动。
+**快照输入**：`monitor_configs` 的**窗口相关 3 字段**（`wallpaper_id` / `fit_mode` / `active`）+ `app_setting` 白名单（`display_mode`、`global_volume`）。
+
+排除项：
+- `id` / `updated_at`：代理主键与时间戳，纳入会让任何写入都产出伪差异。
+- `collection_id` / `play_mode` / `play_interval` / `is_enabled`：**只服务轮播定时器，归 Scheduler**（`manage_carousel_timer` / `should_start_timer`），且 `carousel.rs:99` 每次 tick 动态重读 config，不产生窗口动作。轮播换图最终写 `wallpaper_id`，仍会被 3 字段 diff 捕获。本次重整范围是「窗口调整相关副作用」，timer 不在其中。
+- `app_setting` 其余 key：`theme` / `language` / `close_to_tray` / `accent_color` / 回收站两项无副作用；`pause_on_fullscreen`、5 个 `shortcut_*` 归 Scheduler 不动。
 
 | 变更字段 | 动作 |
 |---|---|
@@ -98,8 +102,8 @@ action (单 monitor upsert / 批量 display_mode / volume / 轮播 tick / 删除
 | `active` true→false | 销毁该屏 surface + webview |
 | `wallpaper_id` 变更 / 置空 | resolve_backend → 渲染更新 / clear_wallpaper |
 | `fit_mode` 变更 | set_fit_mode |
-| `collection_id` / `play_mode` / `play_interval` / `is_enabled` | 管理轮播 timer |
-| **`DisplayModeChanged`** | 按 independent / mirror / extend 分支执行**整段编排**（组级重下发、timer 管理、WebView 广播）；diff 只负责发现变化 |
+| ~~`collection_id` / `play_mode` / `play_interval` / `is_enabled`~~ | **不进快照**：timer 归 Scheduler，本次不收编 |
+| **`DisplayModeChanged`** | 按 independent / mirror / extend 分支执行**整段编排**（组级重下发、timer 组策略委托 Scheduler、WebView 广播）；diff 只负责发现变化 |
 | `VolumeChanged` | set_volume + `VolumeChangedPayload` 广播 |
 
 **实现注意（动作去重）**：`DisplayModeChanged` 的编排里原有"逐屏 `set_fit_mode`"（`setting_effects.rs:126-130`），而同一次 diff 里 N 屏的 `fit_mode` 字段差异也会产出 `set_fit_mode`。二者必须去重，否则重复派发。原则：**字段级差异交给字段动作，编排只做无法从字段推导的部分**（组级帧时钟、display_mode 广播、timer 组策略）。
@@ -222,6 +226,7 @@ Manager::init()
 
 ### 4.4 范围排除
 
+- **轮播定时器副作用**（`collection_id` / `play_mode` / `play_interval` / `is_enabled`）——归 Scheduler 现有路径，不进 Manager 快照、不由 reconcile 派发；本次只收编窗口调整副作用
 - renderer 线程内部改造（mpsc → 轮询、依赖注入、"渲染控制面/渲染面解耦"）——下一个重构 part
 - Rust 热插拔事件监听 / 前端参数只读化 → **M20**
 - `selection` 运行时切换 —— 用户已确认不做
@@ -247,7 +252,7 @@ Manager::init()
 ```
 Phase 0 ✅ 已落地（Win32 枚举 + DPI，待 Windows 实机核对 rect/dpi）
   ↓
-Phase 1 ✅ 已落地（diff 引擎 + 8 组单测，纯逻辑零实机依赖）
+Phase 1 ✅ 已落地（diff 引擎 + 9 组单测，纯逻辑零实机依赖）
   ↓
 Phase 2 → commit + Windows 实机（合并 Manager + init 接管，改动最大）
   ↓
@@ -265,7 +270,7 @@ Phase 4 → commit + 前端只读化 + 最终验收
 1. **统一化**：所有 action（含 volume、普通 upsert、轮播 tick、删除联动）全部走「事务写 + 一次 `reconcile()`」，彻底取消旁路直接注入。✅
 2. **scope 分级**：monitor 级 → 单 `monitor_id`；global 级 → 全部 `monitor_id`。✅ 实现上由事务写入的 monitor_id 集合推导，并覆盖 mirror/extend 的组级场景（见 2.1）。
 
-### Phase 0 交付（已完成，未 commit）
+### Phase 0 交付（已提交 `9a47d09`）
 
 | 文件 | 改动 |
 |---|---|
@@ -274,11 +279,11 @@ Phase 4 → commit + 前端只读化 + 最终验收
 
 验证：`cargo fmt --check` / `cargo check` / `cargo test --lib`（51 passed）全绿；Windows-only 代码用 `/tmp/monitor-geom-probe` 镜像整个模块跑 `cargo check --target x86_64-pc-windows-msvc`，**0 error / 0 warning**。
 
-### Phase 1 交付（已完成，未 commit）
+### Phase 1 交付（已提交 `52813ba` + 字段收敛修正）
 
 | 文件 | 改动 |
 |---|---|
-| `ctx/reconcile.rs`（新） | `MonitorSnapshot` / `GlobalSnapshot` / `ConfigSnapshot`；`ReconcileScope::{One, Many, All}` + `from_written_monitors()`；`ConfigDiff`（Added / Removed / Changed / DisplayModeChanged / VolumeChanged）；`diff_snapshots()`；`patch_observed()` |
+| `ctx/reconcile.rs`（新） | `MonitorSnapshot`（**仅 `wallpaper_id` / `fit_mode` / `active` 三字段**）/ `GlobalSnapshot` / `ConfigSnapshot`；`ReconcileScope::{One, Many, All}` + `from_written_monitors()`；`ConfigDiff`（Added / Removed / Changed / DisplayModeChanged / VolumeChanged）；`diff_snapshots()`；`patch_observed()` |
 | `ctx/mod.rs` | 注册 `pub mod reconcile` |
 
 关键语义：
@@ -286,6 +291,6 @@ Phase 4 → commit + 前端只读化 + 最终验收
 - `patch_observed()` 只推进 `applied` 里的差异，绝不整体覆盖 observed——失败项下次 diff 会重放（C2 重试）、其它屏状态不受影响。
 - scope 由事务写入的 monitor_id 集合推导，`All` 才比较 global 字段。
 
-验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **59 passed**（新增 8 组：七字段全覆盖、scope 单屏隔离、批一次产出 N 屏、global 与字段动作去重、增删屏、失败重放、局部 patch 不动其它屏、scope 推导）。
+验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **60 passed**（新增 9 组：三字段全覆盖、轮播换图经 wallpaper_id 捕获、scope 单屏隔离、批一次产出 N 屏、global 与字段动作去重、增删屏、失败重放、局部 patch 不动其它屏、scope 推导）。
 
 待 Windows 实机核对 Phase 0 的枚举数量 / `device_name` / `dpi` 后进入 **Phase 2**。

@@ -16,18 +16,19 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 不反向依赖渲染契约，也避免每处 Default 各写一份字面量。
 pub const DEFAULT_DISPLAY_MODE: &str = "independent";
 
-/// `monitor_configs` 表中影响渲染的字段快照。
+/// `monitor_configs` 表中**影响壁纸窗口**的字段快照。
 ///
-/// 不含 `id`（代理主键）与 `updated_at`（时间戳变化不代表渲染状态变化）——
-/// 把后者纳入快照会让任何一次写入都产出伪差异。
+/// 只保留 3 个字段，理由有两类：
+/// - `id` / `updated_at`：代理主键与时间戳，变化不代表渲染状态变化，纳入会产出伪差异。
+/// - `collection_id` / `play_mode` / `play_interval` / `is_enabled`：只服务轮播定时器，
+///   由 Scheduler 现有路径消费（`manage_carousel_timer` / `should_start_timer`），
+///   且 `carousel.rs` 每次 tick 动态重读 config，不产生任何窗口动作。
+///   轮播换图最终写的是 `wallpaper_id`，仍会被本快照捕获。
+/// 本次重整的范围是「窗口调整相关副作用」，timer 不在其中，不进快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonitorSnapshot {
     pub wallpaper_id: Option<i32>,
-    pub collection_id: Option<i32>,
     pub fit_mode: String,
-    pub play_mode: String,
-    pub play_interval: i32,
-    pub is_enabled: bool,
     pub active: bool,
 }
 
@@ -38,11 +39,7 @@ pub struct MonitorSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MonitorField {
     WallpaperId,
-    CollectionId,
     FitMode,
-    PlayMode,
-    PlayInterval,
-    IsEnabled,
     Active,
 }
 
@@ -144,20 +141,8 @@ fn changed_fields(old: &MonitorSnapshot, new: &MonitorSnapshot) -> Vec<MonitorFi
     if old.wallpaper_id != new.wallpaper_id {
         fields.push(WallpaperId);
     }
-    if old.collection_id != new.collection_id {
-        fields.push(CollectionId);
-    }
     if old.fit_mode != new.fit_mode {
         fields.push(FitMode);
-    }
-    if old.play_mode != new.play_mode {
-        fields.push(PlayMode);
-    }
-    if old.play_interval != new.play_interval {
-        fields.push(PlayInterval);
-    }
-    if old.is_enabled != new.is_enabled {
-        fields.push(IsEnabled);
     }
     if old.active != new.active {
         fields.push(Active);
@@ -256,11 +241,7 @@ mod tests {
     fn monitor(wid: Option<i32>) -> MonitorSnapshot {
         MonitorSnapshot {
             wallpaper_id: wid,
-            collection_id: None,
             fit_mode: "cover".to_string(),
-            play_mode: "sequential".to_string(),
-            play_interval: 300,
-            is_enabled: true,
             active: true,
         }
     }
@@ -276,28 +257,40 @@ mod tests {
     }
 
     #[test]
-    fn changed_fields_covers_every_render_field() {
+    fn changed_fields_covers_all_window_fields() {
         let old = monitor(Some(1));
         let mut new = old.clone();
         new.wallpaper_id = Some(2);
-        new.collection_id = Some(7);
         new.fit_mode = "contain".to_string();
-        new.play_mode = "random".to_string();
-        new.play_interval = 60;
-        new.is_enabled = false;
         new.active = false;
 
         assert_eq!(
             changed_fields(&old, &new),
             vec![
                 MonitorField::WallpaperId,
-                MonitorField::CollectionId,
                 MonitorField::FitMode,
-                MonitorField::PlayMode,
-                MonitorField::PlayInterval,
-                MonitorField::IsEnabled,
                 MonitorField::Active,
             ]
+        );
+    }
+
+    #[test]
+    fn carousel_next_wallpaper_is_captured_via_wallpaper_id() {
+        // 轮播 tick 最终写的是 wallpaper_id。timer 字段不进快照，
+        // 窗口更新依然会被 diff 捕获，证明 3 字段不会漏掉轮播换图。
+        let observed = snapshot(&["DISPLAY1"], Some(1));
+        let desired = snapshot(&["DISPLAY1"], Some(2));
+        let diffs = diff_snapshots(
+            &observed,
+            &desired,
+            &ReconcileScope::One("DISPLAY1".to_string()),
+        );
+        assert_eq!(
+            diffs,
+            vec![ConfigDiff::MonitorChanged {
+                monitor_id: "DISPLAY1".to_string(),
+                fields: vec![MonitorField::WallpaperId],
+            }]
         );
     }
 

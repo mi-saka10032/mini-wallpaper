@@ -174,13 +174,24 @@ Manager::init()
 - 建窗按目标屏 DPI 做物理→逻辑换算（**M18 / B3**）
 - 直接切：`syncWallpaperWindows`、`create_wallpaper_window` command 的窗口编排停用
 
-### Phase 3：action 事务收口
+### Phase 3：action 事务收口（已落地，部分收尾待 Phase 5）
 
-- 新增 `update_monitors_batch(...)`：单事务写 N 条，替换 `sync_config_from` 唯一调用点
-- `set_setting` command 改为事务写（`app_setting_service::set` 接入 txn）+ commit 后一次 `reconcile()`
-- 5 个写入源全部改为「事务写 + 一次 reconcile」；删除 command 的 4 条内联副作用、`RenderNotification` 路径
-- `setting_effects.rs` 按 key 白名单部分摘除：仅 `DISPLAY_MODE` / `GLOBAL_VOLUME` 改走 action；`PAUSE_ON_FULLSCREEN`、5 个 `SHORTCUT_*` 归 Scheduler 不动
-- **验收矩阵**：写入源 × 副作用逐格确认，确保每个 action 恰好一次 reconcile
+- ✅ service 泛型化：`upsert` / `get_all` / `get_by_monitor_id` / `update_wallpaper_id` / `clear_wallpaper_id` / `sync_config_from` / `wallpaper_service::get_active_by_id` 由 `&DatabaseConnection` 改为 `&C: ConnectionTrait`，支持在事务内复用
+- ✅ 新增 `update_monitors_batch(...)`：单事务写 N 条，替换 `sync_config_from` 在 setting_effects 的逐条调用点
+- ✅ `ctx::reconcile` 增加 `DispatchAction` + `plan_dispatch()`：diff → 动作映射可脱离 Windows 单测（fit_mode 先于壁纸；新增屏只发一次 EnsureTarget）
+- ✅ `UnifiedWallpaperManager::reconcile(scope)`：读 DB 快照 → diff → 逐动作派发 → `patch_observed` 局部推进；display_mode 的 `set_display_mode` 在所有 fit_mode 之前执行
+- ✅ 写入源收口：
+  - `upsert_monitor_config` command：4 条内联渲染副作用 → 一次 `reconcile(One(mid))`（timer 仍归 Scheduler）
+  - `setting_effects` `GLOBAL_VOLUME` / `DISPLAY_MODE`：渲染副作用 → `reconcile(All)`；`PAUSE_ON_FULLSCREEN` 与 5 个 `SHORTCUT_*` 原样保留
+  - `carousel.rs`：本屏 + 同步模式从屏的 wallpaper_id 写入收进单事务，commit 后一次 reconcile
+  - `deletion_effects.rs` `switch_wallpaper`：更新 + commit + reconcile(One)
+  - `action_dispatch.rs`：只改 `is_enabled`（timer 字段，不进快照），**无需 reconcile**
+- ✅ 前端停用：`monitorConfigStore.init()` 改为只读拉取；`upsert` / `upsertAll` / `syncConfigToAll` / `useMonitorSettings` 删除 `syncWallpaperWindows` 调用；`syncMonitors` 退化为 fetchConfigs
+
+**Phase 3 剩余（明确列出，不假装完成）**：
+- `deletion_effects` 的另外三处（`on_wallpapers_deleted` / `on_collection_deleted` / `on_wallpapers_removed_from_collection`）仍走旧的 `RenderNotification` → `dispatch_notifications` 批量派发路径。它们改的 wallpaper_id 与 reconcile 读取的是同一份 DB，不会产生值冲突，但**仍是一条并存的副作用路径**，留待 Phase 5 与 M19 一起收口。
+- `set_setting` command 的 `app_setting_service::set` 尚未接入事务（单条写本身原子，display_mode 的批量 config 写已由 `update_monitors_batch` 事务化）。
+- 新屏登记（DB 中无 config 的物理屏）仍未由 Rust 写入；首次启动由前端原路径兜底，热插拔 M20 后统一处理。
 
 ### Phase 4：前端只读化
 
@@ -258,9 +269,11 @@ Phase 2 ✅ 已落地（Manager 骨架 + init + M18 DPI 换算，待 Windows 实
   ↓
 Phase 2 → commit + Windows 实机（Manager + init + 窗口接管 + M18）
   ↓
-Phase 3 → commit + Windows 实机（action 事务收口 + 验收矩阵）
+Phase 3 ✅ 已落地（reconcile 派发 + 主要写入源收口 + 前端停用，待 Windows 实机验收）
   ↓
-Phase 4 → commit + 前端只读化 + 最终验收
+Phase 4 → 前端彻底清理（删 setInterval / monitorSync.ts / 对外窗口 commands）
+  ↓
+Phase 5 → 剩余收口：deletion_effects 三处 RenderNotification 路径、M19（DeviceLost 清 WebView）
 ```
 
 ---
@@ -303,4 +316,21 @@ Phase 4 → commit + 前端只读化 + 最终验收
 
 验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **65 passed**（新增 M18 换算 3 组、Manager 快照 2 组）。Windows-only 分支用 `/tmp/wm-dpi-probe`、`/tmp/um-win-probe` 分别跑 `cargo check --target x86_64-pc-windows-msvc`，**均 0 error / 0 warning**。
 
-待 Windows 实机核对 Phase 0 的枚举数量 / `device_name` / `dpi`，以及 M18 换算后高 DPI 屏窗口尺寸与接缝。之后进入 **Phase 3**（写入源事务收口 + 字段级 reconcile 派发）。
+### Phase 3 交付（已落地，未 commit）
+
+| 文件 | 改动 |
+|---|---|
+| `services/monitor_config_service.rs` | 写 API 泛型化到 `ConnectionTrait`；新增 `update_monitors_batch` |
+| `services/wallpaper_service.rs` | `get_active_by_id` 泛型化 |
+| `ctx/reconcile.rs` | `DispatchAction` + `plan_dispatch()` + 3 组单测 |
+| `ctx/unified_manager.rs` | `reconcile(scope)` + `dispatch_one()` |
+| `runtime/scheduler/mod.rs` | `unified_manager()` 访问器 |
+| `runtime/scheduler/setting_effects.rs` | volume / display_mode 渲染副作用改走 reconcile；保留 timer 管理 |
+| `runtime/scheduler/deletion_effects.rs` | switch_wallpaper 路径事务 + reconcile |
+| `runtime/tasks/carousel.rs` | 轮播写入单事务 + commit 后 reconcile |
+| `commands/monitor_config.rs` | upsert 的 4 条内联副作用 → 一次 reconcile |
+| `stores/monitorConfigStore.ts` / `hooks/useMonitorSettings.ts` | 前端停用窗口编排，改为只读展示 |
+
+验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **68 passed**；前端 `npx tsc --noEmit` 与 `pnpm lint`（0 warning / 0 error）；Windows target 用镜像 probe（`um-win-probe`）验证 reconcile 全部派发方法类型正确，**0 error / 0 warning**。
+
+**Phase 3 尚未完成的部分见 3 节末尾**，不把它算作已交付。待 Windows 实机验收后进入 Phase 4 前端彻底清理。

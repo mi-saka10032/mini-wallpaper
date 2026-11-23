@@ -478,6 +478,8 @@ shader 因此改成输出预乘色（`color.rgb *= fade_alpha; color.a = fade_al
 
 **边界**：WebView 仍只是**解码前** capability fallback——分流依据是容器在不在 MF 支持表，不是这次解码成不成功。选定 Native 后 SourceReader 失败只回 `DecodeFailed`，不会二次回退。回退后能否播放取决于 Chromium：WebM（VP8/VP9）通常可用，MKV 支持有限，可能仍黑屏；这属于实机验收项。不因为 M8 恢复 fallback 就修改 M6 的错误语义或 M7 的动画语义。
 
+> **后续变更（2026-11-22，M8 验收后）**：上表与接线方式描述的是 M8 当时的状态——debug 构建曾默认 `NativeOnly`。Auto fallback 实机验收通过后，已移除 debug 构建的强制 NativeOnly：`default_backend_selection()` 现在 debug / release 行为一致，**默认统一为 `Auto`**，仅显式设置环境变量 `MINI_WALLPAPER_RENDERER=native` 才切到 `NativeOnly`（用于单独验证原生链路）。因此 `selection` 的启动期取值来源只剩环境变量，不再有 debug/release 分支。
+
 ### 3.16 控制链路收尾：display_mode 切换时副屏不跟随（2026-11-20）
 
 **用户报告**：Windows 上从 MonitorConfig 选择 Mirror / Extend 时，副屏**不总是**立刻跟随切换。顺带要求审计「原本发往 WebView 页面的 DisplayMode / FitMode / 播放暂停」是否已被 Native backend 完整复刻，覆盖页面、快捷键、托盘三个来源。
@@ -893,7 +895,7 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 | **视频播放状态只在 renderer 线程推进** | 视频用 `Arc<Mutex<VideoPlayback>>`，组级每帧只 advance 一次；不进 `FrameCache` | 与图片的 `SharedFrames` 是两套机制：视频是流式常驻一个播放状态，不是全帧缓存。跨屏同帧由「同一 Arc + 一次推进」保证，见 3.13 |
 | **WebView / Native 坐标系差异** | 物理像素（Native）vs 逻辑像素（WebView CSS，除以 `scaleFactor()`）；`WebviewWindowBuilder` 直接接收物理值存在既有 DPI 偏差 | Q2 决定 M5 只保证 Native 内部统一，WebView 侧 DPI 另立条目；D2 保证同一组不会混用两套坐标 |
 | **混合 backend 时 extend 降级** | D2：组内出现非 Native backend 时整组退回逐屏独立渲染 | 若未来要求混合组也拼接，需先统一两套几何与帧时钟；17:27 决策明确不重写 WebView 侧行为 |
-| **selection 仍固定在启动阶段** | M8 已让 `apply_backend` 按每次壁纸的 capability 跨 backend 切换；但 `selection` 本身在 `RenderCoordinator::new` 时固定 | 用户确认方案 A：不新增设置项，不做运行时切 NativeOnly/Auto |
+| **selection 仍固定在启动阶段** | M8 已让 `apply_backend` 按每次壁纸的 capability 跨 backend 切换；但 `selection` 本身在 `RenderCoordinator::new` 时固定，取值来自 `default_backend_selection()`：默认 `Auto`，仅 `MINI_WALLPAPER_RENDERER=native` 时为 `NativeOnly`（debug / release 一致，不再有 debug 强制 NativeOnly 分支） | 用户确认方案 A：不新增设置项，不做运行时切 NativeOnly/Auto。理由：该开关实为开发者调试工具（单独验证原生链路），普通用户关掉 WebView fallback 只会让更多格式播不了；而运行时切换要处理设置持久化与已切 WebView 壁纸的状态一致性，收益与风险不对称 |
 | **WebView fallback 可播性依赖 Chromium** | Auto 下 MF 容器表外的格式回退到 `wallpaper.html`；WebM（VP8/VP9）通常可用，MKV 支持有限 | 回退成功 ≠ 一定能播；仍只是 capability fallback，不是解码失败兜底。Auto fallback 已实机验收通过（用户确认，2026-11-22）：WebView 可正常播放、可与 Native 双向切换且资源正常释放 |
 | **音频只做低频校准** | 音频线程在 EOF 自行 seek 0，renderer 每 5s 校准漂移，阈值 100ms | 不引入统一 Presentation Clock；用户确认低频校准即可，见 3.17 |
 | **无 HTML 网页壁纸** | 产品边界决策 | 见 1.3 |
@@ -1120,18 +1122,21 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 | ~~**P0**~~ | ~~Native 视频解码（M6）~~ | **已完成（3.13）**：MF SourceReader 流式解码 10 个容器，RGB32 → 复用纹理，组级共享播放状态；表外格式的 WebView fallback 见 M8（3.15） |
 | ~~**P1**~~ | ~~WebView fallback 接线（M8）~~ | **已完成（3.15）**：Auto 下表外格式回 WebView，NativeOnly 下报错；页面与事件链原样复用 |
 | ~~**P0**~~ | ~~剩余实机验收项~~ | **已全部实机验收通过（用户确认，2026-11-22）**：静态图（GIF / 动态 WebP 接缝同帧、`independent ↔ extend ↔ mirror` 不重启切换、热插拔 union 重算、显存单份、WebView fallback 不回归、D2 toast 只弹一次）、视频（跨屏同帧、暂停恢复、循环 seek、解码失败 toast）、crossfade（四种组合、接缝明暗一致、连续切换 350ms）、Auto fallback（表外格式回退可播、切回 Native 时 WebView 窗口销毁、混合 backend D2 提示）、控制链路（副屏跟随、切回 Independent 的 fitMode）与音频全项（默认静音、音量即时、共享模型、无音轨、fade 冻结 / reset、5s 校准、全屏暂停）均已确认。验收中暴露的跨 backend 硬切露底、WebView→Native 视频闪烁、fullscreen_detector 误报三个问题已修复并复验通过 |
-| **P1** | 按目标分辨率降采样解码 | 当前 `upload_frames` 按原始尺寸建纹理，8K 图在 1080p 屏上仍上传 126MB。用 WIC / 更快的解码器在解码阶段就按目标尺寸取样，是**唯一能真正削减单次 ~75ms（4K JPEG）** 的路；改动最大，需 Windows 实机验证 |
-| **P1** | 解码移出渲染线程 + 保留旧帧 | `upload_frames` 现在同步跑在 `try_recv` 分支，解码期间所有 surface 停帧。改为专用解码线程、新帧就绪前保留上一张，可让切换不再顿；需处理连点取消与命令去重 |
-| P1 | 超大素材的连续命令合并 | 单份 >192MiB 不进缓存（见 5.3），同步模式下仍会重复解码；可在 renderer loop 内把一批连续同 key 的 `SetWallpaper` 合并成一次，无需常驻显存 |
+| ~~**P1**~~ | ~~按目标分辨率降采样解码（M11）~~ | **已完成**：`image.rs` 用 turbojpeg 的 DCT 缩放（M/8 档位）按目标尺寸解码；`decode_target_size` 在 extend 生效时取 union、否则取单屏最大；cache key 带目标尺寸。Windows 实机（用户确认，2026-11-23）：10240×5760 → 2K、2/8 档，decode_ms 700→500ms。注：image 0.25 已用 zune-jpeg 与 libjpeg-turbo 性能相当，纯解码无 speedup，收益全在 DCT 缩放 + BGRX 直出省一次整帧拷贝；大图内存峰值从 236MB 降到 14.7MB |
+| ~~**P1**~~ | ~~解码移出渲染线程 + 保留旧帧（M10）~~ | **已完成**：新增 `image.rs` 一次性解码 worker，`renderer.rs` cache miss 时 spawn、命中直接 attach；旧帧在解码期间持续 Present 不冻结；`generation` + `inflight_by_key` 处理连点取消与同图去重；退出时 join 在途 worker 并对等待 ack 回 Err |
+| ~~P1~~ | ~~超大素材的连续命令合并（M12）~~ | **已闭环（随 M10 完成）**：`renderer.rs` 的 `inflight_by_key` 已把连续同 key 的 `SetWallpaper` 合并成一次解码、多 ack 全回；超大素材虽不入 FrameCache 仍走同一套合并，无独立增量 |
 | ~~P1~~ | ~~渲染命令 ack~~ | **已完成（3.13 / 2.4）**：`ensure_monitor` / `set_wallpaper` 带 oneshot 回执，失败回传 `renderer-error` |
 | ~~P1~~ | ~~视频音频~~ | **已完成（3.17）**：audio `SourceReader` + WASAPI shared-mode 输出；Independent 每屏一份，Mirror/Extend 全组一份 |
 | ~~P1~~ | ~~NV12 硬解~~ | **已完成（3.19 / 3.21）**：DXVA SourceReader → D3D11 VideoProcessor → NV12 shared/local texture → shader YUV 转换；`OUTPUTHAZARD` 通过 staging 隔离解决 |
-| P1 | WebView 侧 DPI 偏差 | `WebviewWindowBuilder` 直接接收物理像素，`useExtendViewport` 又除以 `scaleFactor()`；Q2 决定另立条目处理，不在 M5 扩散 |
-| P2 | `selection` 运行时切换 | 按壁纸 capability 的自动切换已在 M8 生效；`selection` 本身仍固定在启动阶段，运行时切 NativeOnly/Auto 需新设置项，用户确认不做 |
-| P2 | 设备丢失恢复 | 消费 `DeviceLost`，处理 `DXGI_ERROR_DEVICE_REMOVED` / `ResizeBuffers` 失败后的重建 |
-| P2 | 显示器热插拔事件化 | 用 Tauri 原生显示器事件替代 5s 轮询；`refresh_group_geometry()` 已具备全组刷新能力，只差事件源 |
-| P2 | 帧率自适应 | 静态图无需 16ms 循环，可在纹理不变时降到按需 Present |
-| P3 | 契约生成 | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
-| P3 | 单元测试覆盖 | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 50 passed），renderer 编排与桌面嵌入仍零覆盖 |
+| P1 | WebView 侧 DPI 偏差（M18） | `WebviewWindowBuilder.position()/inner_size()` 只收**逻辑像素**（Tauri 2.10 源码注释确认），而 `create_wallpaper_window` 传的是物理像素 `MonitorRect`；scaleFactor=1 时数值相同故未暴露，高 DPI 屏上 WebView 壁纸窗口尺寸/位置偏差 scaleFactor 倍。**已下调至 M14 之后**：M14 将整条热插拔链路迁到 Rust 并用 Win32 API（`GetMonitorInfoW` + `GetDpiForMonitor`）取得每屏物理矩形与准确 DPI，M18 的换算复用这套数据；若现在靠前端从 `availableMonitors()` 取 scaleFactor 传回建窗，M14 落地后该传参链路即作废。仍是唯一剩余的 P1 项 |
+| P2 | `selection` 运行时切换 | 按壁纸 capability 的自动切换已在 M8 生效；`selection` 仍固定在启动阶段（默认 `Auto`，仅 `MINI_WALLPAPER_RENDERER=native` 切 `NativeOnly`，debug / release 一致，无 debug 强制分支），运行时切换需新设置项，**用户确认不做**：该开关面向开发者验证原生链路，对普通用户无价值，且切换涉及持久化与已切 WebView 壁纸的状态一致性，收益风险不对称 |
+| ~~P2~~ | ~~设备丢失恢复（M13）~~ | **已完成（仅清理，不自动恢复）**：`surface.rs::is_device_lost` 识别 `DEVICE_REMOVED` / `DEVICE_RESET` / `DRIVER_INTERNAL_ERROR`；renderer 上报 DeviceLost 事件、drain 全部 surface、drop SharedDevice（连带 video worker join）、清空 FrameCache；保留 renderer 线程，下次命令由 `ensure_shared` 惰性重建。**WebView 窗口清理另立 M19**（renderer 与窗口管理器尚无对接通道） |
+| **最末级** | 显示器热插拔事件化（M14） | 取消前端 5s 轮询，整条监听链路迁到 Rust：用 Win32 API 检测显示器（`EnumDisplayMonitors` / `GetMonitorInfoW` / `GetDpiForMonitor`）与事件（`WM_DISPLAYCHANGE` / `WM_DPICHANGED`），壁纸窗口创建/销毁与几何刷新的**同步编排常驻 Rust，前端仅展示**。是架构重构，待单独评估。M18（WebView DPI 换算）已并入本任务：复用 Rust 侧同一份 DPI 数据，避免前端再搭一套传参链路 |
+| ~~P2~~ | ~~帧率自适应（M15）~~ | **已完成**：`surface.rs::needs_continuous_frames` 区分视频 / fade / 动图，renderer 主循环按 `has_motion` 选 16ms 或 100ms（`STALE_TICK_MS`）唤醒；静态壁纸 CPU 下降 |
+| P3 | 契约生成（M17） | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
+| **最末级** | 设备丢失时清理 WebView 窗口（M19） | 用户新增：WebView2 也走 GPU 合成，DeviceLost 时其渲染进程同样可能受影响，从内存管理角度应清理；当前 renderer 与 WallpaperWindowManager 无对接通道，待 M14 架构重构后一并处理 |
+| P3 | 单元测试覆盖（M16） | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 51 passed，M13 新增 `frame_cache.clear` 单测），renderer 编排与桌面嵌入仍零覆盖 |
 
 **P0 收尾结论**：截至 2026-11-22，上表 P0 项（含 M6~M8 新增项及控制链路 / 音频项）全部实机验收通过，Native 方案进入交付状态；剩余均为 P1 / P2 / P3 优化 backlog，不阻塞交付。
+
+**M 编号与优先级合并说明**：本表为唯一事实源，M10~M19 是原 P1/P2/P3 backlog 的里程碑编号，2026-11-23 合并进本表以免维护两份清单。已完成：M10 / M11 / M12（随 M10 闭环）/ M13 / M15；未做：M14（架构重构，最末级）/ M18（唯一剩余 P1，已并入 M14）/ M16 / M17（P3 非阻塞）/ M19（最末级，依赖 M14 的窗口管理对接）。M14 目标：取消轮询、整条链路迁 Rust、Win32 API 检测显示器与 DPI、同步编排常驻 Rust、前端仅展示；M18 的 DPI 换算复用 M14 的 Rust 侧数据，不单独在前端搭传参链路。

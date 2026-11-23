@@ -193,13 +193,18 @@ Manager::init()
 - `set_setting` command 的 `app_setting_service::set` 尚未接入事务（单条写本身原子，display_mode 的批量 config 写已由 `update_monitors_batch` 事务化）。
 - 新屏登记（DB 中无 config 的物理屏）仍未由 Rust 写入；首次启动由前端原路径兜底，热插拔 M20 后统一处理。
 
-### Phase 4：前端只读化
+### Phase 4：前端只读化（已落地，未 commit）
 
-- `monitorConfigStore.init()` 退化为只读展示；删除 `useMonitorHotPlug.ts` 的 setInterval
-- `upsert` / `upsertAll` / `syncConfigToAll` 只保留业务字段
-- `monitorSync.ts` 的 `doSyncMonitors` / `syncWallpaperWindows` 整段删除
-- 删除 `create_wallpaper_window` / `destroy_wallpaper_window` 对外 commands
-- `useExtendViewport.ts` 改为消费 Rust 推送的物理 viewport + DPI
+- ✅ `monitorConfigStore.init()` 退化为只读拉取（Phase 3 已做）；`syncMonitors` 退化为 `fetchConfigs`
+- ✅ `upsert` / `upsertAll` / `syncConfigToAll` / `useMonitorSettings` 删除窗口编排（Phase 3 已做）
+- ✅ 删除 `hooks/useMonitorHotPlug.ts`（5s 轮询）及 `App.tsx` 调用
+- ✅ 删除 `stores/monitorSync.ts`（`doSyncMonitors` / `syncWallpaperWindows` / `activeWallpaperWindows`）——Phase 3 后已成孤儿
+- ✅ 删除 `api/wallpaperWindow.ts`、`api/config.ts` 里 6 个窗口 command 常量 + CommandMap 项 + 2 个 DTO 接口
+- ✅ 删除 Rust `commands/wallpaper_window.rs`、`dto/wallpaper_window_dto.rs` 及 mod/handler 注册
+- ✅ 清理孤儿方法 `RenderCoordinator::active_ids()` / `WallpaperWindowManager::get_active_window_ids()`
+- ⬜ `useExtendViewport.ts` 改为消费 Rust 推送的物理 viewport + DPI —— 依赖 M20 的事件通道，留待后续
+
+> 热插拔能力在 M20 落地前完全不响应（init 只在启动执行一次），这是明确的临时回归。
 
 > **已知行为变化**：删除前端热插拔后，显示器插拔在 **M20** 落地前完全不响应（init 只在启动执行一次）。这是明确的临时回归。
 
@@ -271,7 +276,7 @@ Phase 2 → commit + Windows 实机（Manager + init + 窗口接管 + M18）
   ↓
 Phase 3 ✅ 已落地（reconcile 派发 + 主要写入源收口 + 前端停用，待 Windows 实机验收）
   ↓
-Phase 4 → 前端彻底清理（删 setInterval / monitorSync.ts / 对外窗口 commands）
+Phase 4 ✅ 已落地（前端编排与对外窗口 commands 全量删除；useExtendViewport 依赖 M20 未做）
   ↓
 Phase 5 → 剩余收口：deletion_effects 三处 RenderNotification 路径、M19（DeviceLost 清 WebView）
 ```

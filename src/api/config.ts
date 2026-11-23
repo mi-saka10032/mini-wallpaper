@@ -54,13 +54,6 @@ export const COMMANDS = {
   GET_DATA_SIZE: "get_data_size",
   // fullscreen
   INIT_FULLSCREEN_DETECTION: "init_fullscreen_detection",
-  // wallpaper window
-  CREATE_WALLPAPER_WINDOW: "create_wallpaper_window",
-  DESTROY_WALLPAPER_WINDOW: "destroy_wallpaper_window",
-  DESTROY_ALL_WALLPAPER_WINDOWS: "destroy_all_wallpaper_windows",
-  HIDE_WALLPAPER_WINDOWS: "hide_wallpaper_windows",
-  SHOW_WALLPAPER_WINDOWS: "show_wallpaper_windows",
-  GET_ACTIVE_WALLPAPER_WINDOWS: "get_active_wallpaper_windows",
   CLOSE_TOAST_WINDOW: "close_toast_window",
 } as const;
 
@@ -328,21 +321,6 @@ export interface ImportBackupReq {
   zipPath: string;
 }
 
-/** 创建壁纸窗口请求 */
-export interface CreateWallpaperWindowReq {
-  monitorId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  extraQuery?: string;
-}
-
-/** 销毁壁纸窗口请求 */
-export interface DestroyWallpaperWindowReq {
-  monitorId: string;
-}
-
 // ==================== Command 入参/出参类型映射 ====================
 
 /** Command 入参/出参类型映射 */
@@ -482,30 +460,6 @@ export interface CommandMap {
   [COMMANDS.INIT_FULLSCREEN_DETECTION]: {
     params: Record<string, never>;
     result: void;
-  };
-  [COMMANDS.CREATE_WALLPAPER_WINDOW]: {
-    params: { req: CreateWallpaperWindowReq };
-    result: void;
-  };
-  [COMMANDS.DESTROY_WALLPAPER_WINDOW]: {
-    params: { req: DestroyWallpaperWindowReq };
-    result: void;
-  };
-  [COMMANDS.DESTROY_ALL_WALLPAPER_WINDOWS]: {
-    params: Record<string, never>;
-    result: void;
-  };
-  [COMMANDS.HIDE_WALLPAPER_WINDOWS]: {
-    params: Record<string, never>;
-    result: void;
-  };
-  [COMMANDS.SHOW_WALLPAPER_WINDOWS]: {
-    params: Record<string, never>;
-    result: void;
-  };
-  [COMMANDS.GET_ACTIVE_WALLPAPER_WINDOWS]: {
-    params: Record<string, never>;
-    result: string[];
   };
   [COMMANDS.CLOSE_TOAST_WINDOW]: {
     params: { label: string };

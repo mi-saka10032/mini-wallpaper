@@ -402,11 +402,6 @@ impl WallpaperWindowManager {
         }
     }
 
-    /// 获取当前所有已创建壁纸窗口的 monitor_id 列表
-    pub fn get_active_window_ids(&self) -> Vec<String> {
-        self.windows.keys().cloned().collect()
-    }
-
     /// 通知指定壁纸窗口清空壁纸显示
     ///
     /// 当壁纸被删除且无后续壁纸可切换时，通知壁纸窗口清除当前壁纸（显示黑屏）。

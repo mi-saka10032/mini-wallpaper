@@ -93,16 +93,36 @@ impl WinRect {
     }
 }
 
+/// 枚举显示器得到的完整信息：物理几何 + 该屏有效 DPI。
+///
+/// `rect` 里的坐标恒为物理像素；`dpi` 是 `MDT_EFFECTIVE_DPI`，
+/// 用于把物理像素换算成 Tauri WebviewWindowBuilder 需要的逻辑像素。
+/// 非 Windows 平台不会产出该结构体，但定义保持跨平台可见，便于上层类型统一。
+#[derive(Debug, Clone)]
+pub struct MonitorInfo {
+    pub rect: MonitorRect,
+    pub dpi: u32,
+}
+
+impl MonitorInfo {
+    /// DPI 缩放系数（96 DPI = 1.0）。查询失败时回落到的 96 也自然得到 1.0。
+    #[inline]
+    pub fn scale_factor(&self) -> f64 {
+        self.dpi as f64 / 96.0
+    }
+}
+
 // ===================== Windows 实现 =====================
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use super::{MonitorRect, WinRect, HWND};
-    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use super::{MonitorInfo, MonitorRect, WinRect, HWND};
+    use windows_sys::Win32::Foundation::{BOOL, LPARAM, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HMONITOR, MONITORINFOEXW,
-        MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
+        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HDC, HMONITOR,
+        MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
     };
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow, GetWindowRect,
         GetWindowTextW,
@@ -279,11 +299,57 @@ mod imp {
             _ => false,
         }
     }
+
+    /// 枚举当前所有物理显示器，返回各自几何 + 有效 DPI。
+    ///
+    /// 用 EnumDisplayMonitors 而不是按坐标逐个 MonitorFromPoint，才能完整覆盖
+    /// 负坐标布局、多屏不同 DPI、非矩形排列的虚拟桌面。device_name 仍由
+    /// read_monitor_info 从 MONITORINFOEXW 取得，与 DB monitor_id 同源。
+    pub fn enumerate_monitors() -> Vec<MonitorInfo> {
+        let mut monitors: Vec<MonitorInfo> = Vec::new();
+        unsafe {
+            EnumDisplayMonitors(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                Some(collect_monitor),
+                &mut monitors as *mut Vec<MonitorInfo> as LPARAM,
+            );
+        }
+        monitors
+    }
+
+    /// 回调只负责把 HMONITOR 解析成几何 + DPI 追加到 Vec，不做业务判定。
+    /// 单屏查询失败时跳过该屏并返回 TRUE 继续枚举，避免一块坏屏拖垮整组。
+    unsafe extern "system" fn collect_monitor(
+        monitor: HMONITOR,
+        _hdc: HDC,
+        _clip: *mut RECT,
+        data: LPARAM,
+    ) -> BOOL {
+        let out = &mut *(data as *mut Vec<MonitorInfo>);
+        let Some(rect) = (unsafe { read_monitor_info(monitor) }) else {
+            return 1;
+        };
+
+        let mut dpi_x = 0u32;
+        let mut dpi_y = 0u32;
+        // GetDpiForMonitor 返回 HRESULT，S_OK 为 0。失败或非法的 0 值回落到
+        // 96 DPI（scale_factor=1.0），保证 shcore 异常时该屏不会从枚举里消失。
+        let dpi = if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) == 0
+            && dpi_x > 0
+        {
+            dpi_x
+        } else {
+            96
+        };
+        out.push(MonitorInfo { rect, dpi });
+        1
+    }
 }
 
 #[cfg(target_os = "windows")]
 pub use imp::{
-    cursor_pos, foreground_window, is_own_wallpaper_window, is_shell_window,
+    cursor_pos, enumerate_monitors, foreground_window, is_own_wallpaper_window, is_shell_window,
     monitor_info_from_point, monitor_info_from_window, primary_monitor_info, window_rect,
 };
 
@@ -291,10 +357,15 @@ pub use imp::{
 
 #[cfg(not(target_os = "windows"))]
 mod imp_stub {
-    use super::{MonitorRect, WinRect};
+    use super::{MonitorInfo, MonitorRect, WinRect};
 
     /// 非 Windows 平台占位类型，仅用于让签名通过编译
     pub type HWND = *mut std::ffi::c_void;
+
+    /// 非 Windows 平台没有 Win32 显示器枚举，返回空集由上层按无屏处理。
+    pub fn enumerate_monitors() -> Vec<MonitorInfo> {
+        Vec::new()
+    }
 
     pub fn foreground_window() -> Option<HWND> {
         None
@@ -335,7 +406,7 @@ mod imp_stub {
 
 #[cfg(not(target_os = "windows"))]
 pub use imp_stub::{
-    cursor_pos, foreground_window, is_own_wallpaper_window, is_shell_window,
+    cursor_pos, enumerate_monitors, foreground_window, is_own_wallpaper_window, is_shell_window,
     monitor_info_from_point, monitor_info_from_window, primary_monitor_info, window_class_name,
     window_rect, HWND,
 };

@@ -13,7 +13,6 @@ import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { publish, Signal, usePubSubStore } from "@/stores/pubsubStore";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { listen, EVENTS } from "@/api/event";
-import { useMonitorHotPlug } from "@/hooks/useMonitorHotPlug";
 import { useWebGuard } from "@/hooks/useWebGuard";
 import { useAccentColor } from "@/hooks/useAccentColor";
 import { useStartupUpdateCheck } from "@/hooks/useStartupUpdateCheck";
@@ -78,7 +77,6 @@ export const AppShell: React.FC = () => {
 
 const App: React.FC = () => {
   const { t } = useTranslation();
-  useMonitorHotPlug();
   useWebGuard();
   useAccentColor(); // 初始化主题色（启动时应用持久化的 accent color）
   useStartupUpdateCheck(); // 启动后台静默检查更新（最新/失败均无提示）

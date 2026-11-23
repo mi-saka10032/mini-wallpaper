@@ -6,6 +6,5 @@ pub mod shortcut_dto;
 pub mod tag_dto;
 pub mod validated;
 pub mod wallpaper_dto;
-pub mod wallpaper_window_dto;
 
 pub use validated::Validated;

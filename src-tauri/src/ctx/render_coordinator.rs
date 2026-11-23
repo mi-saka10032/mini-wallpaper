@@ -480,18 +480,6 @@ impl RenderCoordinator {
         }
     }
 
-    /// 当前已创建的渲染目标 monitor_id 列表（两种 backend 合并）
-    pub async fn active_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.backends.keys().cloned().collect();
-        let wm = self.window_manager.lock().await;
-        for id in wm.get_active_window_ids() {
-            if !ids.contains(&id) {
-                ids.push(id);
-            }
-        }
-        ids
-    }
-
     // ==================== 内部辅助 ====================
 
     /// 壁纸变更的目标集合：同步模式取所有已登记显示器，独立模式仅指定显示器

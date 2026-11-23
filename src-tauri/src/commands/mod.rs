@@ -9,7 +9,6 @@ pub mod shortcut;
 pub mod tag;
 pub mod toast;
 pub mod wallpaper;
-pub mod wallpaper_window;
 
 // 重导出所有 command 函数，便于 rust-analyzer 提供跳转支持（IDE 导航用途）
 #[allow(unused_imports)]
@@ -47,12 +46,6 @@ pub use wallpaper::{
     get_wallpaper, get_wallpapers, import_wallpaper_bytes, import_wallpapers, purge_wallpapers,
     restore_wallpapers, save_video_thumbnail,
 };
-#[allow(unused_imports)]
-pub use wallpaper_window::{
-    create_wallpaper_window, destroy_all_wallpaper_windows, destroy_wallpaper_window,
-    get_active_wallpaper_windows, hide_wallpaper_windows, show_wallpaper_windows,
-};
-
 /// 聚合所有 command，供 lib.rs 一行调用
 macro_rules! all_handlers {
     () => {
@@ -103,13 +96,6 @@ macro_rules! all_handlers {
             $crate::commands::backup::get_data_size,
             // fullscreen
             $crate::commands::fullscreen::init_fullscreen_detection,
-            // wallpaper_window
-            $crate::commands::wallpaper_window::create_wallpaper_window,
-            $crate::commands::wallpaper_window::destroy_wallpaper_window,
-            $crate::commands::wallpaper_window::destroy_all_wallpaper_windows,
-            $crate::commands::wallpaper_window::hide_wallpaper_windows,
-            $crate::commands::wallpaper_window::show_wallpaper_windows,
-            $crate::commands::wallpaper_window::get_active_wallpaper_windows,
             // toast
             $crate::commands::toast::close_toast_window,
             // tag

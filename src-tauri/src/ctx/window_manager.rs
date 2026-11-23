@@ -255,6 +255,19 @@ impl WallpaperWindowManager {
         }
     }
 
+    /// 销毁全部壁纸窗口（设备丢失时的内存清理）。
+    ///
+    /// DeviceLost 只会清掉 renderer 侧 D3D11 资源，WebView2 也走 GPU 合成，
+    /// 其渲染进程同样可能受影响；从内存管理角度应一并释放。
+    /// 直接 close 而不走 reconcile：DB 未变化，diff 产不出销毁动作。
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn destroy_all(&mut self) {
+        let monitor_ids: Vec<String> = self.windows.keys().cloned().collect();
+        for monitor_id in monitor_ids {
+            self.destroy_window(&monitor_id);
+        }
+    }
+
     /// 隐藏所有壁纸窗口（全屏暂停时使用）
     pub fn hide_all(&self) {
         for label in self.windows.values() {

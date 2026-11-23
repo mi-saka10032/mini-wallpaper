@@ -110,28 +110,25 @@ action (单 monitor upsert / 批量 display_mode / volume / 轮播 tick / 删除
 
 ### 2.4 UnifiedWallpaperManager
 
+**Phase 2 实际落地形态：组合复用**，不物理搬动 `RenderCoordinator`（782 行）与 `WallpaperWindowManager`（431 行）的 Windows-only 渲染代码。Manager 作为统一入口持有二者的 `Arc<Mutex<…>>`，init 复用 `ensure_target` 建目标；两者边界待 Phase 3 收口调用点后再合并。
+
 ```rust
 struct MonitorSlot {
-    rect: MonitorRect,         // Win32 GetMonitorInfoW，物理像素
-    dpi: u32,                  // GetDpiForMonitor（M18 用）
-    backend: RenderBackend,
-    webview_label: Option<String>,
-    current_wallpaper_id: Option<i32>,
-    current_fit_mode: String,
+    rect: RenderRect,   // 物理像素虚拟桌面坐标 x/y/width/height
+    dpi: u32,           // 目标屏 GetDpiForMonitor（M18 换算用）
+    has_target: bool,   // 是否已有渲染目标
 }
 
 struct UnifiedWallpaperManager {
     db: DatabaseConnection,
-    app_handle: AppHandle,
-    renderer: DesktopRenderer,     // 本次不改其内部
+    coordinator: Arc<Mutex<RenderCoordinator>>,
+    window_manager: Arc<Mutex<WallpaperWindowManager>>,  // Phase 3 统一派发 WebView 动作
     slots: HashMap<String, MonitorSlot>,
-    display_mode: DisplayMode,     // 与 slots 同级
-    volume: u32,
-    observed: ConfigSnapshot,     // 由每次 reconcile 成功后推进
+    observed: ConfigSnapshot,   // init 生成初始状态，后续 reconcile 成功后推进
 }
 ```
 
-`Arc<tokio::sync::Mutex<…>>` 包裹，写入点经 `app.state::<AppContext>()` 取用（合并现有 `render_coordinator()` / `window_manager()` 为 `unified_manager()`）。
+`Arc<tokio::sync::Mutex<…>>` 包裹，注册为 `AppContext::unified_manager`。init 失败只记 error 不阻断启动，前端原有 `syncWallpaperWindows` 路径仍能兜底。
 
 ### 2.5 init（一次性，随 ctx 初始化）
 
@@ -139,14 +136,17 @@ struct UnifiedWallpaperManager {
 Manager::init()
   1. MonitorAPI 方法：EnumDisplayMonitors + GetMonitorInfoW + GetDpiForMonitor
      → Vec<MonitorInfo { device_name, rect, dpi }>          [B1/B2]
-  2. 读 DB 方法：monitor_configs 全表 + app_setting 白名单
-  3. reconcile 物理屏 ∩ DB（单事务）
-       物理有 / DB 无 → 插入 config(active=true) 并登记 slot
-       DB active / 物理无 → 置 active=false
-       均有 → 更新 slot 的 rect / dpi
-  4. 仅 wallpaper_id 非空的 slot → 创建 surface/webview + 首帧
-  5. 生成初始 observed
+  2. 读 DB 方法：monitor_configs 全表 + app_setting 白名单 → 生成初始 observed
+  3. 物理屏 ∩ DB：DB 有该屏且 active → 登记 slot（rect/dpi）
+       register_monitor 先于「有没有壁纸」判断，保证无壁纸的屏也进 extend union
+  4. 仅 wallpaper_id 非空 → coordinator.ensure_target() 建 surface/webview + 首帧
 ```
+
+**Phase 2 刻意只读 DB、不写 DB**：新屏登记（插入 config / 失活消失的屏）属于写入源收口，与 Phase 3 停用前端 `doSyncMonitors` 一起做，避免两边都写。首次启动 DB 为空时由前端原路径完成登记与建窗，Manager 下一次启动接管。
+
+前端不会重复建窗：`syncWallpaperWindows` 先调 `getActiveWallpaperWindows()`（`monitorSync.ts:30`）恢复已有窗口集合，并在 `:51` 跳过已存在的 monitor；Manager 经 `ensure_target` 建的目标会进入 `coordinator.active_ids()`。
+
+非 Windows 平台 `enumerate_monitors()` 返回空集，init 退化为只构建快照，现有前端链路照常工作。
 
 后续调度**只读 DB**，不再调 MonitorAPI。
 
@@ -254,7 +254,7 @@ Phase 0 ✅ 已落地（Win32 枚举 + DPI，待 Windows 实机核对 rect/dpi�
   ↓
 Phase 1 ✅ 已落地（diff 引擎 + 9 组单测，纯逻辑零实机依赖）
   ↓
-Phase 2 → commit + Windows 实机（合并 Manager + init 接管，改动最大）
+Phase 2 ✅ 已落地（Manager 骨架 + init + M18 DPI 换算，待 Windows 实机验收）
   ↓
 Phase 2 → commit + Windows 实机（Manager + init + 窗口接管 + M18）
   ↓
@@ -293,4 +293,14 @@ Phase 4 → commit + 前端只读化 + 最终验收
 
 验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **60 passed**（新增 9 组：三字段全覆盖、轮播换图经 wallpaper_id 捕获、scope 单屏隔离、批一次产出 N 屏、global 与字段动作去重、增删屏、失败重放、局部 patch 不动其它屏、scope 推导）。
 
-待 Windows 实机核对 Phase 0 的枚举数量 / `device_name` / `dpi` 后进入 **Phase 2**。
+### Phase 2 交付（已落地，未 commit）
+
+| 文件 | 改动 |
+|---|---|
+| `ctx/unified_manager.rs`（新） | `MonitorSlot { rect, dpi, has_target }`；`UnifiedWallpaperManager`（组合持有 coordinator / window_manager / slots / observed）；`init()`；`build_snapshot()` 纯函数 |
+| `ctx/mod.rs` | 注册模块、`AppContext` 增 `unified_manager` 字段、`new()` 里构造并 await `init()`（失败只记 error 不阻断启动） |
+| `ctx/window_manager.rs` | **M18**：`logical_rect()` 把物理矩形按目标屏 `scale_factor` 换算为逻辑像素再传给 `WebviewWindowBuilder`；`monitor_scale_factor()` 从 `enumerate_monitors()` 取目标屏 DPI，非 Windows 回落 1.0；`embed_target` 仍保留物理坐标 |
+
+验证：`cargo fmt --check` / `cargo check`（0 warning）/ `cargo test --lib` **65 passed**（新增 M18 换算 3 组、Manager 快照 2 组）。Windows-only 分支用 `/tmp/wm-dpi-probe`、`/tmp/um-win-probe` 分别跑 `cargo check --target x86_64-pc-windows-msvc`，**均 0 error / 0 warning**。
+
+待 Windows 实机核对 Phase 0 的枚举数量 / `device_name` / `dpi`，以及 M18 换算后高 DPI 屏窗口尺寸与接缝。之后进入 **Phase 3**（写入源事务收口 + 字段级 reconcile 派发）。

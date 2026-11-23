@@ -94,8 +94,8 @@ pub async fn get_by_id(db: &DatabaseConnection, id: i32) -> Result<Option<wallpa
 }
 
 /// 根据 ID 获取单个正常壁纸（回收站内的视为不存在）
-pub async fn get_active_by_id(
-    db: &DatabaseConnection,
+pub async fn get_active_by_id<C: sea_orm::ConnectionTrait>(
+    db: &C,
     id: i32,
 ) -> Result<Option<wallpaper::Model>> {
     active()

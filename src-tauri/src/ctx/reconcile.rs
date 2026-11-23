@@ -204,6 +204,110 @@ pub fn diff_snapshots(
     diffs
 }
 
+/// 派发动作：reconcile 把 diff 翻译成这些动作再交给 Manager 执行。
+///
+/// 单独抽出来是为了让「diff → 动作」的映射可脱离 Windows 单测：
+/// 真正的副作用（renderer / WebView）只在 Manager 侧执行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchAction {
+    EnsureTarget {
+        monitor_id: String,
+        wallpaper_id: Option<i32>,
+        fit_mode: String,
+    },
+    DestroyTarget {
+        monitor_id: String,
+    },
+    UpdateWallpaper {
+        monitor_id: String,
+        wallpaper_id: i32,
+    },
+    ClearWallpaper {
+        monitor_id: String,
+    },
+    SetFitMode {
+        monitor_id: String,
+        fit_mode: String,
+    },
+    SetDisplayMode {
+        mode: String,
+    },
+    SetVolume {
+        volume: u32,
+    },
+}
+
+/// 把 diff 列表转成派发动作列表。
+///
+/// 顺序固定：先 set_fit_mode（换图前的样式），再壁纸变更，最后 active 翻转
+/// （销毁/创建目标）——与旧 command 内联副作用的顺序一致，避免过渡帧样式跳变。
+pub fn plan_dispatch(diffs: &[ConfigDiff], desired: &ConfigSnapshot) -> Vec<DispatchAction> {
+    use DispatchAction::*;
+    let mut actions = Vec::new();
+
+    for diff in diffs {
+        match diff {
+            ConfigDiff::MonitorAdded { monitor_id } => {
+                let Some(config) = desired.monitors.get(monitor_id) else {
+                    continue;
+                };
+                // 新屏一律走 EnsureTarget：它内部会同时登记几何、按 capability
+                // 选 backend 并渲染首帧，不需要再叠加 SetFitMode / UpdateWallpaper。
+                actions.push(EnsureTarget {
+                    monitor_id: monitor_id.clone(),
+                    wallpaper_id: config.wallpaper_id,
+                    fit_mode: config.fit_mode.clone(),
+                });
+            }
+            ConfigDiff::MonitorChanged { monitor_id, fields } => {
+                let Some(config) = desired.monitors.get(monitor_id) else {
+                    continue;
+                };
+                // 样式先于壁纸：换图时先按新 fit_mode 建目标，避免过渡帧样式跳变。
+                if fields.contains(&MonitorField::FitMode) {
+                    actions.push(SetFitMode {
+                        monitor_id: monitor_id.clone(),
+                        fit_mode: config.fit_mode.clone(),
+                    });
+                }
+                if fields.contains(&MonitorField::WallpaperId) {
+                    match config.wallpaper_id {
+                        Some(wallpaper_id) => actions.push(UpdateWallpaper {
+                            monitor_id: monitor_id.clone(),
+                            wallpaper_id,
+                        }),
+                        None => actions.push(ClearWallpaper {
+                            monitor_id: monitor_id.clone(),
+                        }),
+                    }
+                }
+                if fields.contains(&MonitorField::Active) {
+                    if config.active {
+                        actions.push(EnsureTarget {
+                            monitor_id: monitor_id.clone(),
+                            wallpaper_id: config.wallpaper_id,
+                            fit_mode: config.fit_mode.clone(),
+                        });
+                    } else {
+                        actions.push(DestroyTarget {
+                            monitor_id: monitor_id.clone(),
+                        });
+                    }
+                }
+            }
+            ConfigDiff::MonitorRemoved { monitor_id } => actions.push(DestroyTarget {
+                monitor_id: monitor_id.clone(),
+            }),
+            ConfigDiff::DisplayModeChanged { to, .. } => {
+                actions.push(SetDisplayMode { mode: to.clone() })
+            }
+            ConfigDiff::VolumeChanged { to, .. } => actions.push(SetVolume { volume: *to }),
+        }
+    }
+
+    actions
+}
+
 /// 只推进「已成功应用」的差异项到 observed。
 ///
 /// 绝不整体覆盖：scoped reconcile 若整体替换快照，会抹掉其它屏已确认的状态；
@@ -423,6 +527,62 @@ mod tests {
         patch_observed(&mut current, &desired, &diffs);
         assert_eq!(current.monitors["DISPLAY1"].wallpaper_id, Some(9));
         assert_eq!(current.monitors["DISPLAY2"].wallpaper_id, Some(1));
+    }
+
+    #[test]
+    fn dispatch_plan_maps_wallpaper_and_fit_mode_in_order() {
+        let observed = snapshot(&["DISPLAY1"], Some(1));
+        let mut desired = observed.clone();
+        desired.monitors.get_mut("DISPLAY1").unwrap().wallpaper_id = Some(2);
+        desired.monitors.get_mut("DISPLAY1").unwrap().fit_mode = "fill".to_string();
+        let diffs = diff_snapshots(&observed, &desired, &ReconcileScope::All);
+
+        assert_eq!(
+            plan_dispatch(&diffs, &desired),
+            vec![
+                DispatchAction::SetFitMode {
+                    monitor_id: "DISPLAY1".to_string(),
+                    fit_mode: "fill".to_string(),
+                },
+                DispatchAction::UpdateWallpaper {
+                    monitor_id: "DISPLAY1".to_string(),
+                    wallpaper_id: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn dispatch_plan_for_added_monitor_is_single_ensure_target() {
+        let observed = ConfigSnapshot::default();
+        let desired = snapshot(&["DISPLAY1"], Some(7));
+        let diffs = diff_snapshots(&observed, &desired, &ReconcileScope::All);
+        assert_eq!(
+            plan_dispatch(&diffs, &desired),
+            vec![DispatchAction::EnsureTarget {
+                monitor_id: "DISPLAY1".to_string(),
+                wallpaper_id: Some(7),
+                fit_mode: "cover".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn dispatch_plan_keeps_global_actions_separate() {
+        let observed = snapshot(&["DISPLAY1"], Some(1));
+        let mut desired = observed.clone();
+        desired.global.display_mode = "extend".to_string();
+        desired.global.volume = 30;
+        let diffs = diff_snapshots(&observed, &desired, &ReconcileScope::All);
+        assert_eq!(
+            plan_dispatch(&diffs, &desired),
+            vec![
+                DispatchAction::SetDisplayMode {
+                    mode: "extend".to_string()
+                },
+                DispatchAction::SetVolume { volume: 30 },
+            ]
+        );
     }
 
     #[test]

@@ -9,10 +9,12 @@
 //! `spawn` 接收调度器注入的 `AppHandle`，按需获取 db / window_manager 等共享资源。
 
 use log::{error, warn};
+use sea_orm::TransactionTrait;
 use tauri::Manager;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
+use crate::ctx::reconcile::ReconcileScope;
 use crate::ctx::AppContext;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::runtime::scheduler::TaskSpawner;
@@ -47,7 +49,7 @@ impl TaskSpawner for CarouselTask {
             let ctx = app.state::<AppContext>();
             let app_ctx: &AppContext = ctx.inner();
             let db = app_ctx.db.clone();
-            let render_coordinator = app_ctx.render_coordinator.clone();
+            let unified_manager = app_ctx.unified_manager.clone();
 
             // 查询 config 获取轮播参数
             let config = match monitor_config_service::get_by_monitor_id(&db, &mid).await {
@@ -119,13 +121,19 @@ impl TaskSpawner for CarouselTask {
                 .await
                 {
                     Ok(Some(new_wid)) => {
-                        // 同步模式下既要改所有从屏的 DB，也要让协调器覆盖整组下发；
-                        // 两者靠同一个 is_sync 保持一致。
+                        // 架构重整 Phase 3：DB 写入（本屏 + 同步模式下的从屏）收进单事务，
+                        // commit 后由 Manager 一次 reconcile 统一下发，不再逐条改 DB + 手动通知。
                         let is_sync = display_mode == "mirror" || display_mode == "extend";
 
-                        // 1. 更新当前 monitor 的 DB 记录
+                        let txn = match db.begin().await {
+                            Ok(t) => t,
+                            Err(e) => {
+                                error!("[Carousel] Failed to begin transaction: {}", e);
+                                continue;
+                            }
+                        };
                         if let Err(e) =
-                            monitor_config_service::update_wallpaper_id(&db, &mid, new_wid).await
+                            monitor_config_service::update_wallpaper_id(&txn, &mid, new_wid).await
                         {
                             error!(
                                 "[Carousel] Failed to update wallpaper_id for {}: {}",
@@ -133,14 +141,12 @@ impl TaskSpawner for CarouselTask {
                             );
                             continue;
                         }
-
-                        // 2. 同步模式下同步更新所有从属 monitor 的 DB 记录
                         if is_sync {
-                            if let Ok(all_configs) = monitor_config_service::get_all(&db).await {
+                            if let Ok(all_configs) = monitor_config_service::get_all(&txn).await {
                                 for config in &all_configs {
                                     if config.active && config.monitor_id != mid {
                                         if let Err(e) = monitor_config_service::update_wallpaper_id(
-                                            &db,
+                                            &txn,
                                             &config.monitor_id,
                                             new_wid,
                                         )
@@ -150,16 +156,25 @@ impl TaskSpawner for CarouselTask {
                                                 "[Carousel] Failed to sync wallpaper_id for {}: {}",
                                                 config.monitor_id, e
                                             );
+                                            continue;
                                         }
                                     }
                                 }
                             }
                         }
+                        if let Err(e) = txn.commit().await {
+                            error!("[Carousel] Failed to commit wallpaper advance: {}", e);
+                            continue;
+                        }
 
-                        // 3. 按 backend 路由通知（Native 渲染 / WebView 事件），同步策略内聚在协调器
-                        {
-                            let mut coordinator = render_coordinator.lock().await;
-                            coordinator.update_wallpaper(&mid, new_wid, is_sync).await;
+                        let scope = if is_sync {
+                            ReconcileScope::All
+                        } else {
+                            ReconcileScope::One(mid.clone())
+                        };
+                        let mut manager = unified_manager.lock().await;
+                        if let Err(e) = manager.reconcile(scope).await {
+                            error!("[Carousel] Reconcile failed for {}: {}", mid, e);
                         }
                     }
                     Ok(None) => {

@@ -80,4 +80,12 @@ impl Scheduler {
         let app_ctx: &AppContext = self.app.state::<AppContext>().inner();
         app_ctx.render_coordinator.clone()
     }
+
+    /// 从 AppHandle 获取 unified_manager：所有渲染副作用的唯一派发入口。
+    pub(super) fn unified_manager(
+        &self,
+    ) -> Arc<Mutex<crate::ctx::unified_manager::UnifiedWallpaperManager>> {
+        let app_ctx: &AppContext = self.app.state::<AppContext>().inner();
+        app_ctx.unified_manager.clone()
+    }
 }

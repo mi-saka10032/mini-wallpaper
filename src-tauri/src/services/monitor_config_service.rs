@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    Set, TransactionTrait,
+};
 
 use crate::{
     dto::monitor_config_dto::UpsertMonitorConfigRequest, entities::monitor_config,
@@ -12,7 +15,7 @@ use crate::{
 /// 壁纸在语义上应视为不存在。数据库层面 `deleted_at` 不会阻止此处写入，因此把校验
 /// 收归到 service 写入入口，使「回收站壁纸不可上桌」成为后端不变量，而非仅靠前端
 /// 视图约定（前端状态滞后、双屏并发、未来新增入口都可能绕过 UI 限制）。
-async fn ensure_wallpaper_settable(db: &DatabaseConnection, wallpaper_id: i32) -> Result<()> {
+async fn ensure_wallpaper_settable<C: ConnectionTrait>(db: &C, wallpaper_id: i32) -> Result<()> {
     let exists = wallpaper_service::get_active_by_id(db, wallpaper_id)
         .await?
         .is_some();
@@ -26,7 +29,7 @@ async fn ensure_wallpaper_settable(db: &DatabaseConnection, wallpaper_id: i32) -
 }
 
 /// 获取所有显示器配置
-pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<monitor_config::Model>> {
+pub async fn get_all<C: ConnectionTrait>(db: &C) -> Result<Vec<monitor_config::Model>> {
     monitor_config::Entity::find()
         .all(db)
         .await
@@ -34,8 +37,8 @@ pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<monitor_config::Mode
 }
 
 /// 根据 monitor_id 获取配置（唯一）
-pub async fn get_by_monitor_id(
-    db: &DatabaseConnection,
+pub async fn get_by_monitor_id<C: ConnectionTrait>(
+    db: &C,
     monitor_id: &str,
 ) -> Result<Option<monitor_config::Model>> {
     monitor_config::Entity::find()
@@ -51,8 +54,8 @@ pub async fn get_by_monitor_id(
 /// collection_id: 关联的收藏夹（用于轮播，可与 wallpaper_id 共存）
 /// clear_collection: 显式清空 collection_id（切换到单张模式时使用）
 /// active: 显示器是否当前物理可用
-pub async fn upsert(
-    db: &DatabaseConnection,
+pub async fn upsert<C: ConnectionTrait>(
+    db: &C,
     req: &UpsertMonitorConfigRequest,
 ) -> Result<monitor_config::Model> {
     // 写入前守卫：拒绝把不存在或回收站内的壁纸设为桌面壁纸（覆盖 update / insert 两个分支）
@@ -120,8 +123,8 @@ pub async fn upsert(
 }
 
 /// 仅更新 wallpaper_id（定时器内部调用，不触发定时器逻辑）
-pub async fn update_wallpaper_id(
-    db: &DatabaseConnection,
+pub async fn update_wallpaper_id<C: ConnectionTrait>(
+    db: &C,
     monitor_id: &str,
     wallpaper_id: i32,
 ) -> Result<monitor_config::Model> {
@@ -143,8 +146,8 @@ pub async fn update_wallpaper_id(
 }
 
 /// 清空显示器当前壁纸。收藏夹绑定保持不变。
-pub async fn clear_wallpaper_id(
-    db: &DatabaseConnection,
+pub async fn clear_wallpaper_id<C: ConnectionTrait>(
+    db: &C,
     monitor_id: &str,
 ) -> Result<monitor_config::Model> {
     let existing = get_by_monitor_id(db, monitor_id)
@@ -202,8 +205,8 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
 /// 将 source config 的配置（除 id/monitor_id/active 外）同步到目标 monitor
 ///
 /// 用于 mirror/extend 模式下，以基准显示器的配置覆盖从属显示器。
-pub async fn sync_config_from(
-    db: &DatabaseConnection,
+pub async fn sync_config_from<C: ConnectionTrait>(
+    db: &C,
     target_monitor_id: &str,
     source: &monitor_config::Model,
 ) -> Result<monitor_config::Model> {
@@ -224,6 +227,28 @@ pub async fn sync_config_from(
         .await
         .context("Failed to sync monitor config")?;
     Ok(model)
+}
+
+/// 在单个事务内把 source 的配置批量同步到所有目标显示器。
+///
+/// 架构重整 Phase 3：display_mode 切换原本逐条 await `sync_config_from`，
+/// 每条各自提交，既无原子性又会让 watcher/reconcile 看到「部分屏已同步」的中间态。
+/// 改为一次事务写全组，commit 成功后才由调用方触发一次 reconcile。
+/// `encourage` 语义：任何一条失败则整批回滚，DB 保持切换前的状态。
+pub async fn update_monitors_batch(
+    db: &DatabaseConnection,
+    source: &monitor_config::Model,
+    target_monitor_ids: &[String],
+) -> Result<Vec<monitor_config::Model>> {
+    let txn = db.begin().await.context("Failed to begin batch update")?;
+    let mut updated = Vec::with_capacity(target_monitor_ids.len());
+    for monitor_id in target_monitor_ids {
+        updated.push(sync_config_from(&txn, monitor_id, source).await?);
+    }
+    txn.commit()
+        .await
+        .context("Failed to commit batch update")?;
+    Ok(updated)
 }
 
 /// 判断是否满足轮播启动条件（纯逻辑判断，不涉及 DB）

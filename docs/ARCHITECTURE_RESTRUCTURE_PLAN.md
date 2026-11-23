@@ -431,7 +431,7 @@ Native renderer 走的是另一条链：Win32 物理 rect → `union_rect` / `gr
 
 验证：cargo fmt/check(0 warning)/test(68 passed)、tsc/lint 全绿；`m20-hotplug-probe` 与 `um-win-probe` Windows target 均 0 error。整项目 Windows check 仍被 `ring` 的 C 编译挡住（缺 `assert.h` / Windows SDK），用 probe 覆盖变更模块。
 
-### 实机错误修复（2026-11-23 20:52，commit 待填）
+### 实机错误修复（2026-11-23 20:52，commit `9f27800`）
 
 实机场景：一屏 Native + 一屏 WebView 混合，发现两个问题，均已修复：
 

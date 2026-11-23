@@ -1133,9 +1133,9 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 | ~~P2~~ | ~~设备丢失恢复（M13）~~ | **已完成（仅清理，不自动恢复）**：`surface.rs::is_device_lost` 识别 `DEVICE_REMOVED` / `DEVICE_RESET` / `DRIVER_INTERNAL_ERROR`；renderer 上报 DeviceLost 事件、drain 全部 surface、drop SharedDevice（连带 video worker join）、清空 FrameCache；保留 renderer 线程，下次命令由 `ensure_shared` 惰性重建。**WebView 窗口清理另立 M19**（renderer 与窗口管理器尚无对接通道） |
 | ~~最末级~~ | ~~显示器热插拔事件化（M14 → 实施为 M20）~~ | **已完成**：主窗口 WndProc 子类化监听 `WM_DISPLAYCHANGE` / `WM_DPICHANGED` → unbounded channel + 300ms debounce → `sync_monitors_from_system()` 按三条规则（init 必 active=true / 断开 active=false+remove slot / 插入 active=true+insert slot）做 DB→slot→reconcile 闭环；前端 `useMonitorHotPlug` / `monitorSync.ts` 全删，显示器参数只读 |
 | ~~P2~~ | ~~帧率自适应（M15）~~ | **已完成**：`surface.rs::needs_continuous_frames` 区分视频 / fade / 动图，renderer 主循环按 `has_motion` 选 16ms 或 100ms（`STALE_TICK_MS`）唤醒；静态壁纸 CPU 下降 |
-| P3 | 契约生成（M17） | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
+| ~~P3~~ | ~~契约生成（M17）~~ | **用户决策不做（2026-11-23）**：有 agent 核对前后端类型一致性，自动生成的必要性不大 |
 | ~~最末级~~ | ~~设备丢失时清理 WebView 窗口（M19）~~ | **已完成**：`WallpaperWindowManager::destroy_all()`；renderer 的 DeviceLost 分支 spawn 到 async runtime 清理全部 WebView 壁纸窗口（DB 无变化、不经 reconcile） |
-| P3 | 单元测试覆盖（M16） | **部分完成**：Phase 1 diff 引擎新增 9 组单测、M20 前 probe 验证，当前共 **68 passed**；renderer 编排与桌面嵌入仍零覆盖（Windows-only，本地 probe 只能验类型） |
+| ~~P3~~ | ~~单元测试覆盖（M16）~~ | **用户决策不做（2026-11-23）**：用户有 Windows 环境、`cargo test --lib` 全通过（68 passed）；renderer 编排 / 桌面嵌入靠实机验证即可，无需补单测 |
 
 **P0 收尾结论**：截至 2026-11-22，上表 P0 项（含 M6~M8 新增项及控制链路 / 音频项）全部实机验收通过，Native 方案进入交付状态；剩余均为 P1 / P2 / P3 优化 backlog，不阻塞交付。
 
@@ -1143,11 +1143,12 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 
 **已全部完成**：M10 / M11 / M12（随 M10 闭环）/ M13 / M15 / M14（实施为 M20 热插拔事件化）/ M18（随 M20 完成）/ M19。
 
-**仍未做（均已实机确认无阻塞）**：
-- **M16（P3）**：renderer 编排 / 桌面嵌入单测覆盖，当前 68 passed 集中在纯逻辑层；Windows-only 零覆盖，probe 只能验类型。
-- **M17（P3）**：前后端镜像类型（`RenderDescriptor` / `ExtendViewportPayload` 等）考虑 ts-rs / specta 生成，消除手写同步。
+**全部关闭，无剩余待办**：
+- **M16（P3）** —— 用户决策不做：有 Windows 环境、`cargo test --lib` 全通过（68 passed），renderer 编排 / 桌面嵌入靠实机验证。
+- **M17（P3）** —— 用户决策不做：有 agent 核对前后端类型一致性，ts-rs / specta 自动生成必要性不大。
+- P2「selection 运行时切换」—— 用户早先明确不做（开发者开关，收益风险不对称）。
 
-**本轮架构重整（Phase 0~5 + M18/M19/M20）已实机验收通过**，含混合 backend、热插拔恢复、多 DPI viewport。
+**本轮架构重整（Phase 0~5 + M18/M19/M20）已实机验收通过**，含混合 backend、热插拔恢复、多 DPI viewport。至此 M10~M20 全部闭环，无遗留任务。
 
 ### 拔显示器后 40MB 内存延迟回落（2026-11-23 实机分析，结论：不修）
 

@@ -37,7 +37,7 @@ use sea_orm::DatabaseConnection;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 
-use super::window_manager::WallpaperWindowManager;
+use super::webview::WallpaperWindowManager;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::wallpaper;
 use crate::events::{RendererErrorPayload, ThumbnailChangedPayload, TypedEmit};

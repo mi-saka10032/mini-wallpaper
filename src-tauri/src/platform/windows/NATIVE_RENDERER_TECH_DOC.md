@@ -1161,11 +1161,26 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 ① main 主进程内存账面隔离（记账更清晰）；② 与 main 主进程的正式故障/生命周期隔离。
 
 历史结论（`NATIVE_RENDERER_ARCHITECTURE_REVIEW.md` 第 8 节）：**不推荐作为降低总内存的首选**——
-它改善账面和隔离，不降低总内存，且引入 IPC、共享纹理句柄传递、句柄生命周期、崩溃恢复、
-额外进程基础开销，共享 DLL / driver pool 可能重复计入。现由用户重新提出，优先级为隔离与记账，
-不再是省内存。共享纹理跨进程需 `D3D11_RESOURCE_MISC_SHARED_NTHANDLE` +
-`IDXGIResource1::CreateSharedHandle` + `DuplicateHandle` + `ID3D11Device1::OpenSharedResource1`
-（旧的 `GetSharedHandle` 已不推荐）。
+它改善账面和隔离，不降低总内存，且引入 IPC、崩溃恢复、额外进程基础开销，
+共享 DLL / driver pool 可能重复计入。现由用户重新提出，优先级为隔离与记账，不再是省内存。
+
+**关键澄清（2026-11-23 22:27 用户质疑 + 取证确认）——帧数据不跨进程，无需 NT handle**：
+- Native 壁纸 HWND 由 renderer 自己 `CreateWindowExW` 创建并 `embed_in_desktop` 到 WorkerW
+  （`surface.rs:369-380`），从创建到嵌入全在渲染侧，不经 main/tao；
+- swapchain / DirectComposition / RTV 都挂在这个自有 HWND 上，Present 直接进 DWM；
+- 解码 → 纹理上传 → 绘制 → Present 全链路在 renderer 线程 + image/video worker 内闭环；
+  视频帧的 `OpenSharedResource`（`video.rs:506`）是**进程内**跨线程共享，不出进程；
+- main → renderer 的 `RendererCommand` 是纯控制面：`EnsureMonitor(rect)` / `DestroyMonitor` /
+  `SetWallpaper(path,kind,fit)` / `SetGroupGeometry` / `SetFitMode` / `ClearWallpaper` /
+  `SetVolume` / `SetPaused`——**没有任何一条传帧数据**。
+
+因此第 8 节提到的 NT handle 体系（`CreateSharedHandle` + `DuplicateHandle` +
+`OpenSharedResource1`）适用于「绘制与窗口分属不同进程」的场景，**本方案不适用**。
+M21 的 IPC 只需传 `RendererCommand` 的序列化 + 请求 id / 回执 id（替换进程内 oneshot ack），
+用命名管道或本地 socket 即可。audio / image / video worker 都作为子进程内的线程随之迁移。
+
+**实施位置**：不在 `main()`（main 只有 `mini_wallpaper_lib::run()`，renderer 依赖的 D3D11 device /
+显示器几何需 Tauri 初始化后才有），应在 `setup::init` 里 spawn，与 `spawn_manager_init` 同位置。
 
 ### M22：恢复单 GPU 串行渲染链路（双链路并存，env 切换）
 

@@ -19,6 +19,45 @@ use crate::events::{
     TypedEmit, TypedEmitTo, WallpaperChangedPayload, WallpaperClearedPayload,
 };
 
+/// 把物理像素矩形换算成 Tauri 建窗所需的逻辑像素。
+///
+/// `WebviewWindowBuilder::position` / `inner_size` 接收逻辑像素（Tauri 2.10 源码确认），
+/// 而 `MonitorRect` 与 Win32 桌面嵌入使用的都是物理像素。高 DPI 屏下若直接传物理值，
+/// WebView 的 CSS 视口会被放大 scale 倍，extend 裁剪随之错位。
+/// 桌面嵌入阶段仍用物理坐标 SetWindowPos，不受这里影响。
+///
+/// 注意：坐标为虚拟桌面绝对原点（可能为负），多屏不同 DPI 时严格换算需要按屏原点
+/// 分别处理；这里用目标屏自身 scale 做整体除法，覆盖单窗口只落在一块屏的常规场景。
+fn logical_rect(x: i32, y: i32, width: u32, height: u32, scale: f64) -> (f64, f64, f64, f64) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (
+        x as f64 / scale,
+        y as f64 / scale,
+        width as f64 / scale,
+        height as f64 / scale,
+    )
+}
+
+/// 查询目标屏的 DPI 缩放系数；枚举不到或非 Windows 平台回落 1.0。
+/// 每次建窗枚举一次显示器（通常 1~4 块），成本相对建窗可忽略。
+#[cfg(target_os = "windows")]
+fn monitor_scale_factor(monitor_id: &str) -> f64 {
+    crate::platform::windows::monitor_geometry::enumerate_monitors()
+        .iter()
+        .find(|info| info.rect.device_name == monitor_id)
+        .map(|info| info.scale_factor())
+        .unwrap_or(1.0)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn monitor_scale_factor(_monitor_id: &str) -> f64 {
+    1.0
+}
+
 /// 建窗结果，供调用方在锁外完成嵌入、再回锁显示窗口
 pub struct CreatedWindow {
     pub label: String,
@@ -92,6 +131,10 @@ impl WallpaperWindowManager {
             _ => format!("/wallpaper.html?monitorId={}", monitor_id),
         };
 
+        // builder 只收逻辑像素；用 Win32 查到的目标屏 scale 换算物理矩形。
+        // embed_target 仍保留物理值，桌面嵌入的 SetWindowPos 用的是物理坐标。
+        let scale = monitor_scale_factor(monitor_id);
+        let (logical_x, logical_y, logical_w, logical_h) = logical_rect(x, y, width, height, scale);
         let window =
             WebviewWindowBuilder::new(&self.app_handle, &label, WebviewUrl::App(url.into()))
                 .title("Wallpaper")
@@ -100,8 +143,8 @@ impl WallpaperWindowManager {
                 .transparent(true)
                 .resizable(false)
                 .visible(false)
-                .position(x as f64, y as f64)
-                .inner_size(width as f64, height as f64)
+                .position(logical_x, logical_y)
+                .inner_size(logical_w, logical_h)
                 .always_on_bottom(true)
                 .build()
                 .map_err(|e| format!("Failed to create wallpaper window: {}", e))?;
@@ -119,8 +162,18 @@ impl WallpaperWindowManager {
 
         self.windows.insert(monitor_id.to_string(), label.clone());
         info!(
-            "壁纸窗口已创建: label='{}', monitor='{}', pos=({}, {}), size={}x{}",
-            label, monitor_id, x, y, width, height
+            "壁纸窗口已创建: label='{}', monitor='{}', physical=({}, {}) {}x{}, logical=({:.1}, {:.1}) {:.1}x{:.1}, dpi_scale={:.2}",
+            label,
+            monitor_id,
+            x,
+            y,
+            width,
+            height,
+            logical_x,
+            logical_y,
+            logical_w,
+            logical_h,
+            scale
         );
 
         #[cfg(target_os = "windows")]
@@ -412,6 +465,43 @@ impl WallpaperWindowManager {
                 e
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::logical_rect;
+
+    #[test]
+    fn logical_rect_is_identity_at_100_percent() {
+        assert_eq!(
+            logical_rect(100, 50, 1920, 1080, 1.0),
+            (100.0, 50.0, 1920.0, 1080.0)
+        );
+    }
+
+    #[test]
+    fn logical_rect_divides_by_scale_for_high_dpi() {
+        assert_eq!(
+            logical_rect(0, 0, 3840, 2160, 2.0),
+            (0.0, 0.0, 1920.0, 1080.0)
+        );
+        assert_eq!(
+            logical_rect(-1920, 100, 1920, 1080, 1.5),
+            (-1280.0, 100.0 / 1.5, 1280.0, 720.0)
+        );
+    }
+
+    #[test]
+    fn logical_rect_falls_back_for_invalid_scale() {
+        assert_eq!(
+            logical_rect(10, 20, 800, 600, 0.0),
+            (10.0, 20.0, 800.0, 600.0)
+        );
+        assert_eq!(
+            logical_rect(10, 20, 800, 600, f64::NAN),
+            (10.0, 20.0, 800.0, 600.0)
+        );
     }
 }
 

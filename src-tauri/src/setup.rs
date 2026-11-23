@@ -35,6 +35,7 @@ pub fn init(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     hide_main_on_autostart(app)?;
     spawn_trash_purge(app);
     start_monitor_hotplug(app);
+    spawn_manager_init(app);
     Ok(())
 }
 
@@ -108,6 +109,17 @@ fn register_shortcuts(app: &tauri::App) {
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
         global_shortcut::register_default_shortcuts(&app_handle).await;
+    });
+}
+
+/// 在事件循环启动后异步初始化 Manager（显示器枚举 + 建窗 + 桌面嵌入）。
+///
+/// 必须在 `setup` 返回之后执行：嵌入用 SendMessageTimeoutW 与 Progman 通信，
+/// setup 阶段事件循环未启动会阻塞（实机错误1）。
+fn spawn_manager_init(app: &tauri::App) {
+    let app_handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        app_handle.state::<AppContext>().init_manager().await;
     });
 }
 

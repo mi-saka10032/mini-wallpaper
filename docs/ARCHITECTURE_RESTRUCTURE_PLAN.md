@@ -430,3 +430,14 @@ Native renderer 走的是另一条链：Win32 物理 rect → `union_rect` / `gr
 2. `SetWindowLongPtrW(..., hotplug_wndproc as isize)` 触发 `function_casts_as_integer` → 改为先转 `*const ()` 再转 `isize`。
 
 验证：cargo fmt/check(0 warning)/test(68 passed)、tsc/lint 全绿；`m20-hotplug-probe` 与 `um-win-probe` Windows target 均 0 error。整项目 Windows check 仍被 `ring` 的 C 编译挡住（缺 `assert.h` / Windows SDK），用 probe 覆盖变更模块。
+
+### 实机错误修复（2026-11-23 20:52，commit 待填）
+
+实机场景：一屏 Native + 一屏 WebView 混合，发现两个问题，均已修复：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | WebView 屏保存视频壁纸后启动，Native 正常但 WebView 无渲染，应用卡 loading，终端卡在"寻找嵌入策略" | `AppContext::new` 在 setup 的 `block_on` 里同步 await `manager.init()`，其中 WebView 建窗 → `embed_in_desktop` 用 `SendMessageTimeoutW` 与 Progman/WorkerW 通信；setup 阶段主窗口事件循环未启动、消息无人处理 → 阻塞 | `init()` 从 `new()` 拆出为 `AppContext::init_manager()`，由 `setup::spawn_manager_init()` 在事件循环运行时异步调用。Native 不走嵌入，故只有 WebView 屏受影响，与现象吻合 |
+| 2 | WebView 屏热插拔：拔掉→进程销毁，恢复→日志"已有 webview 窗口跳过创建"，该屏永不绘制 | `destroy_window` 的 `window.close()` 是异步的，Tauri 运行时同 label 实例尚未清理；`create_window` 检测到残留直接 `return Ok(None)` 跳过 | `create_window` 改 async：残留时主动再 close 一次，轮询等待运行时真正移除（最多 2s），超时返回 Err 让上层重试 |
+
+验证：cargo fmt/check(0 warning)/test(68 passed)；um-win-probe clean 后 Windows target 0 error 0 warning（已同步生产代码，模块可见性镜像一致）。

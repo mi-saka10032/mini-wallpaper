@@ -94,20 +94,19 @@ impl AppContext {
             coordinator.refresh_volume().await;
         }
 
-        // Phase 2：Rust 侧一次性初始化显示器与渲染目标。失败只记日志不阻断启动——
-        // 前端原有 syncWallpaperWindows 路径仍能兜底建窗，避免 DB/枚举异常直接让应用起不来。
+        // Phase 2：Rust 侧一次性初始化显示器与渲染目标。
+        //
+        // 关键：init() 会建壁纸窗口并做 SetParent 桌面嵌入，嵌入内部用
+        // SendMessageTimeoutW 与 Progman/WorkerW 通信。AppContext::new 在 setup 阶段
+        // 经 block_on 同步执行，此时主窗口事件循环尚未启动，消息无人处理 → 嵌入阻塞
+        // 启动（实机错误1：卡在"寻找嵌入策略"）。因此 init 移到 setup 之后由
+        // setup::spawn_manager_init 异步执行，这里只构造空壳。
         let unified_manager = Arc::new(Mutex::new(UnifiedWallpaperManager::new(
             db.clone(),
             app_handle.clone(),
             render_coordinator.clone(),
             window_manager.clone(),
         )));
-        {
-            let mut manager = unified_manager.lock().await;
-            if let Err(err) = manager.init().await {
-                log::error!("[UnifiedWallpaperManager] 初始化失败: {:#}", err);
-            }
-        }
 
         let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
 
@@ -120,5 +119,16 @@ impl AppContext {
             db,
             backup_lock: Mutex::new(()),
         })
+    }
+
+    /// 异步初始化显示器与渲染目标（setup 之后、事件循环运行时调用）。
+    ///
+    /// 与 `new()` 分离的原因见 `new()` 内注释：桌面嵌入依赖消息循环，
+    /// 在 setup 的 block_on 里同步做会卡死启动。
+    pub async fn init_manager(&self) {
+        let mut manager = self.unified_manager.lock().await;
+        if let Err(err) = manager.init().await {
+            log::error!("[UnifiedWallpaperManager] 初始化失败: {:#}", err);
+        }
     }
 }

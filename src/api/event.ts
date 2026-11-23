@@ -24,6 +24,8 @@ export const EVENTS = {
   /** 收藏归属变更事件（壁纸被加入/移出内置「我喜欢」收藏夹时发送） */
   FAVORITES_CHANGED: "favorites-changed",
   RENDERER_ERROR: "renderer-error",
+  /** extend 视口（M20：Rust 按目标屏 DPI 算好 CSS 像素后定向推送） */
+  EXTEND_VIEWPORT: "extend-viewport",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -114,6 +116,17 @@ export interface EventMap {
   [EVENTS.ACTION_TOAST]: ActionToastPayload;
   [EVENTS.FAVORITES_CHANGED]: FavoritesChangedPayload;
   [EVENTS.RENDERER_ERROR]: RendererErrorPayload;
+  [EVENTS.EXTEND_VIEWPORT]: ExtendViewportPayload;
+}
+
+/** extend 视口 payload（字段单位已是 CSS 像素，前端零计算） */
+export interface ExtendViewportPayload {
+  offsetX: number;
+  offsetY: number;
+  totalWidth: number;
+  totalHeight: number;
+  monitorWidth: number;
+  monitorHeight: number;
 }
 
 /**

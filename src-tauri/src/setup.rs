@@ -34,6 +34,7 @@ pub fn init(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     register_shortcuts(app);
     hide_main_on_autostart(app)?;
     spawn_trash_purge(app);
+    start_monitor_hotplug(app);
     Ok(())
 }
 
@@ -109,6 +110,53 @@ fn register_shortcuts(app: &tauri::App) {
         global_shortcut::register_default_shortcuts(&app_handle).await;
     });
 }
+
+/// 启动显示器热插拔监听（M20）。
+///
+/// WndProc 回调只向 unbounded channel 投信；异步侧做 300ms debounce 后调用
+/// `sync_monitors_from_system()` 完成 DB → slot → reconcile 闭环。
+/// 非 Windows 平台无 Win32 消息源，直接返回。
+#[cfg(target_os = "windows")]
+fn start_monitor_hotplug(app: &tauri::App) {
+    use std::time::Duration;
+
+    let app_handle = app.handle().clone();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    if !crate::platform::windows::monitor_hotplug::start(&app_handle, tx) {
+        return;
+    }
+
+    // 主窗口销毁前还原 WndProc：必须在 HWND 仍有效时调用，
+    // 否则 HWND 被系统回收复用后残留表项会引发野指针跳转。
+    if let Some(window) = app_handle.get_webview_window("main") {
+        window.on_window_event(|event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                crate::platform::windows::monitor_hotplug::stop();
+            }
+        });
+    }
+
+    tauri::async_runtime::spawn(async move {
+        // 首条消息立即消费；后续 300ms 内的连发合并为一次。
+        while rx.recv().await.is_some() {
+            loop {
+                match tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
+                    Ok(Some(_)) => continue, // 合并连发
+                    Ok(None) => return,      // channel 关闭
+                    Err(_) => break,         // 静默期到，执行同步
+                }
+            }
+            let app_ctx = app_handle.state::<AppContext>();
+            let mut manager = app_ctx.unified_manager.lock().await;
+            if let Err(e) = manager.sync_monitors_from_system().await {
+                log::warn!("[MonitorHotplug] 显示器同步失败: {:#}", e);
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_monitor_hotplug(_app: &tauri::App) {}
 
 /// 启动后扫一次过期回收站，不阻塞启动。失败只记日志。
 fn spawn_trash_purge(app: &tauri::App) {

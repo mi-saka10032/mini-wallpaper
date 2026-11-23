@@ -135,6 +135,45 @@ impl EventPayload for DisplayModeChangedPayload {
     const EVENT_NAME: &'static str = "display-mode-changed";
 }
 
+/// extend 视口事件（M20：Rust 单一事实源算裁剪参数，按 monitor_id 定向推送）
+///
+/// 字段单位已是 **CSS 像素**：Rust 用 `GetDpiForMonitor` 拿到的目标屏真实 DPI
+/// 把 `ExtendViewport` 的物理坐标换算好再推。前端直接用于 style，零计算。
+/// 这同时修掉 M18 根因：WebView 嵌入桌面后 `scaleFactor()` 拿到的往往是主屏
+/// DPI 而非目标屏 DPI，多屏异构时必然错位。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtendViewportPayload {
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub total_width: f64,
+    pub total_height: f64,
+    pub monitor_width: f64,
+    pub monitor_height: f64,
+}
+
+impl EventPayload for ExtendViewportPayload {
+    const EVENT_NAME: &'static str = "extend-viewport";
+}
+
+impl ExtendViewportPayload {
+    /// 从物理坐标的 `ExtendViewport` + 目标屏 DPI 构造 CSS 像素 payload。
+    pub fn from_physical(
+        viewport: crate::platform::wallpaper_renderer::ExtendViewport,
+        dpi: u32,
+    ) -> Self {
+        let scale = if dpi > 0 { dpi as f64 / 96.0 } else { 1.0 };
+        Self {
+            offset_x: viewport.offset_x as f64 / scale,
+            offset_y: viewport.offset_y as f64 / scale,
+            total_width: viewport.total_width as f64 / scale,
+            total_height: viewport.total_height as f64 / scale,
+            monitor_width: viewport.monitor_width as f64 / scale,
+            monitor_height: viewport.monitor_height as f64 / scale,
+        }
+    }
+}
+
 /// 壁纸清空事件（通知壁纸窗口清除当前壁纸，显示黑屏）
 ///
 /// 当壁纸被删除且无后续壁纸可切换时，通知壁纸窗口清空显示。

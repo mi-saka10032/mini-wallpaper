@@ -14,11 +14,15 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use anyhow::Result;
 use sea_orm::DatabaseConnection;
-use tokio::sync::Mutex;
+use tauri::AppHandle;
+
+use crate::platform::wallpaper_renderer::{
+    default_backend_selection, BackendSelection, DesktopRenderer, DisplayMode, MonitorRect,
+    RenderBackend,
+};
 
 use crate::ctx::reconcile::{
     diff_snapshots, patch_observed, plan_dispatch, ConfigSnapshot, DispatchAction, GlobalSnapshot,
@@ -27,12 +31,9 @@ use crate::ctx::reconcile::{
 pub mod native;
 pub mod webview;
 
-pub use native::RenderCoordinator;
-pub use webview::WallpaperWindowManager;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::events::{ExtendViewportPayload, TypedEmitTo, VolumeChangedPayload};
 use crate::platform::wallpaper_renderer::group_viewports;
-use crate::platform::wallpaper_renderer::{DisplayMode, MonitorRect as RenderRect};
 use crate::services::{app_setting_service, monitor_config_service};
 
 #[cfg(target_os = "windows")]
@@ -44,7 +45,7 @@ use crate::platform::windows::monitor_geometry::enumerate_monitors;
 /// 建窗时把物理像素换算成 Tauri builder 的逻辑像素（M18）。
 #[derive(Debug, Clone)]
 pub struct MonitorSlot {
-    pub rect: RenderRect,
+    pub rect: MonitorRect,
     pub dpi: u32,
     pub has_target: bool,
 }
@@ -54,10 +55,10 @@ pub struct MonitorSlot {
 #[cfg(target_os = "windows")]
 fn to_render_rect(
     info: &crate::platform::windows::monitor_geometry::MonitorInfo,
-) -> (String, RenderRect, u32) {
+) -> (String, MonitorRect, u32) {
     (
         info.rect.device_name.clone(),
-        RenderRect {
+        MonitorRect {
             x: info.rect.left,
             y: info.rect.top,
             width: info.rect.width(),
@@ -107,33 +108,64 @@ fn action_monitor_id(action: &DispatchAction) -> Option<&str> {
     }
 }
 
+/// 统一壁纸管理器：App 的唯一主体 manager。
+///
+/// 由原 RenderCoordinator / WallpaperWindowManager 拉平而来：字段全部并入本 struct，
+/// native（渲染链路）与 webview（窗口链路）的 impl 分置 `native.rs` / `webview.rs`。
+/// backend 路由决策与 reconcile 编排留在本文件（主体），两个 impl 只负责"怎么执行"。
 pub struct UnifiedWallpaperManager {
+    // ===== 基础设施（原三 struct 重复持有，合并为一份） =====
     db: DatabaseConnection,
-    /// 用于按 monitor_id 定向推送 viewport 等事件（M20）。
-    app_handle: tauri::AppHandle,
-    coordinator: Arc<Mutex<RenderCoordinator>>,
-    /// 供 Phase 3 统一派发 WebView 侧动作；当前 init 仍经 coordinator 间接使用。
-    window_manager: Arc<Mutex<WallpaperWindowManager>>,
+    /// 用于按 monitor_id 定向推送事件、广播到窗口（原 UM / RC / WM 三处持有）。
+    app_handle: AppHandle,
+
+    // ===== 主体状态（原 UM） =====
     slots: HashMap<String, MonitorSlot>,
     /// 已成功应用的窗口状态，init 完成后作为后续 reconcile 的起点。
     observed: ConfigSnapshot,
+
+    // ===== Native 渲染链路状态（原 RC，字段原样搬运） =====
+    renderer: DesktopRenderer,
+    /// backend 路由策略（Auto / NativeOnly）。
+    selection: BackendSelection,
+    /// monitor_id -> 当前 active backend；apply_backend 会就地改写，
+    /// 跨 backend 判断必须提前快照。
+    backends: HashMap<String, RenderBackend>,
+    /// monitor_id -> 当前壁纸 id；判定换图是否触发 crossfade。
+    wallpaper_ids: HashMap<String, i32>,
+    /// monitor_id -> 显示器几何（含无壁纸屏，保证 extend union 不缺块）。
+    rects: HashMap<String, MonitorRect>,
+    display_mode: DisplayMode,
+    /// 降级提示只发一次，恢复为全 Native 时重置。
+    degraded_logged: bool,
+
+    // ===== WebView 链路状态（原 WM） =====
+    /// monitor_id -> window_label 映射。
+    windows: HashMap<String, String>,
 }
 
+/// extend 组降级时使用的 code；前端据此改用 warning 级 toast。
+const CODE_EXTEND_DEGRADED: &str = "ExtendDegraded";
+
 impl UnifiedWallpaperManager {
-    pub fn new(
-        db: DatabaseConnection,
-        app_handle: tauri::AppHandle,
-        coordinator: Arc<Mutex<RenderCoordinator>>,
-        window_manager: Arc<Mutex<WallpaperWindowManager>>,
-    ) -> Self {
-        Self {
+    pub fn new(db: DatabaseConnection, app_handle: AppHandle) -> Result<Self> {
+        // 原 RC::new：renderer 线程持有 app_handle 用于设备丢失时上报事件，
+        // 故先 clone 再存入自身字段。
+        let renderer = DesktopRenderer::start(app_handle.clone())?;
+        Ok(Self {
             db,
             app_handle,
-            coordinator,
-            window_manager,
             slots: HashMap::new(),
             observed: ConfigSnapshot::default(),
-        }
+            renderer,
+            selection: default_backend_selection(),
+            backends: HashMap::new(),
+            wallpaper_ids: HashMap::new(),
+            rects: HashMap::new(),
+            display_mode: DisplayMode::Independent,
+            degraded_logged: false,
+            windows: HashMap::new(),
+        })
     }
 
     /// 一次性初始化：建立初始快照 + 按系统物理屏同步 config / slot / 渲染目标。
@@ -230,11 +262,7 @@ impl UnifiedWallpaperManager {
                 .cloned()
                 .collect();
             for monitor_id in removed {
-                self.coordinator
-                    .lock()
-                    .await
-                    .destroy_target(&monitor_id)
-                    .await;
+                self.destroy_target(&monitor_id).await;
                 self.slots.remove(&monitor_id);
             }
 
@@ -246,10 +274,9 @@ impl UnifiedWallpaperManager {
             for (monitor_id, info) in &physical_by_id {
                 let (_, rect, dpi) = to_render_rect(info);
                 let has_target = if let Some(config) = by_id.get(monitor_id.as_str()) {
-                    let mut coordinator = self.coordinator.lock().await;
-                    coordinator.register_monitor(monitor_id, rect);
+                    self.register_monitor(monitor_id, rect);
                     match config.wallpaper_id {
-                        Some(wallpaper_id) => coordinator
+                        Some(wallpaper_id) => self
                             .ensure_target(monitor_id, rect, wallpaper_id)
                             .await
                             .is_ok(),
@@ -332,12 +359,9 @@ impl UnifiedWallpaperManager {
             )
         }) {
             if let Some(mode) = DisplayMode::parse(&desired.global.display_mode) {
-                self.coordinator.lock().await.set_display_mode(mode);
+                self.set_display_mode(mode);
             }
-            self.window_manager
-                .lock()
-                .await
-                .broadcast_display_mode_changed(&desired.global.display_mode);
+            self.broadcast_display_mode_changed(&desired.global.display_mode);
             // 切到 extend 时前端需要 viewport；切走时推一次也不会被消费（前端按
             // displayMode 过滤）。几何未变，但 target 状态可能刚变化，故重推一次。
             self.push_extend_viewports().await;
@@ -356,54 +380,37 @@ impl UnifiedWallpaperManager {
                 monitor_id,
                 fit_mode,
             } => {
-                self.coordinator
-                    .lock()
-                    .await
-                    .set_fit_mode(&monitor_id, Some(&fit_mode), is_sync)
+                self.set_fit_mode(&monitor_id, Some(&fit_mode), is_sync)
                     .await;
             }
             DispatchAction::UpdateWallpaper {
                 monitor_id,
                 wallpaper_id,
             } => {
-                self.coordinator
-                    .lock()
-                    .await
-                    .update_wallpaper(&monitor_id, wallpaper_id, is_sync)
+                self.update_wallpaper(&monitor_id, wallpaper_id, is_sync)
                     .await;
             }
             DispatchAction::ClearWallpaper { monitor_id } => {
-                self.coordinator
-                    .lock()
-                    .await
-                    .clear_wallpaper(&monitor_id, is_sync)
-                    .await;
+                self.clear_wallpaper(&monitor_id, is_sync).await;
             }
             DispatchAction::EnsureTarget {
                 monitor_id,
                 wallpaper_id,
                 fit_mode: _,
             } => {
-                let Some(slot) = self.slots.get(&monitor_id) else {
+                let Some(rect) = self.slots.get(&monitor_id).map(|slot| slot.rect) else {
                     anyhow::bail!("显示器 {} 未登记几何，无法创建渲染目标", monitor_id);
                 };
-                let mut coordinator = self.coordinator.lock().await;
-                coordinator.register_monitor(&monitor_id, slot.rect);
+                self.register_monitor(&monitor_id, rect);
                 if let Some(wallpaper_id) = wallpaper_id {
-                    coordinator
-                        .ensure_target(&monitor_id, slot.rect, wallpaper_id)
-                        .await?;
+                    self.ensure_target(&monitor_id, rect, wallpaper_id).await?;
                 }
                 self.slots
                     .entry(monitor_id)
                     .and_modify(|slot| slot.has_target = true);
             }
             DispatchAction::DestroyTarget { monitor_id } => {
-                self.coordinator
-                    .lock()
-                    .await
-                    .destroy_target(&monitor_id)
-                    .await;
+                self.destroy_target(&monitor_id).await;
                 if let Some(slot) = self.slots.get_mut(&monitor_id) {
                     slot.has_target = false;
                 }
@@ -412,12 +419,11 @@ impl UnifiedWallpaperManager {
                 // 在 reconcile 里统一处理（需要在所有 set_fit_mode 之前执行）
             }
             DispatchAction::SetVolume { volume } => {
-                self.coordinator.lock().await.set_volume(volume);
-                let manager = self.window_manager.lock().await;
+                self.set_volume(volume);
                 let payload = VolumeChangedPayload {
                     volume: volume as f64,
                 };
-                let _ = manager.broadcast(&payload);
+                let _ = self.broadcast(&payload);
             }
         }
         Ok(())
@@ -429,7 +435,7 @@ impl UnifiedWallpaperManager {
     /// 前端直接用于 style、零计算——这是 M18 的最终修复。
     /// 只在 slot 几何变化（init / 热插拔）与 display_mode 切换时调用，不进每帧热路径。
     pub async fn push_extend_viewports(&self) {
-        let monitors: Vec<(String, RenderRect)> = self
+        let monitors: Vec<(String, MonitorRect)> = self
             .slots
             .iter()
             .map(|(id, slot)| (id.clone(), slot.rect))
@@ -459,7 +465,7 @@ impl UnifiedWallpaperManager {
     /// 供壁纸页挂载时主动拉取一次当前 viewport（事件可能在 React 订阅前发出）。
     pub fn current_extend_viewport(&self, monitor_id: &str) -> Option<ExtendViewportPayload> {
         let slot = self.slots.get(monitor_id)?;
-        let monitors: Vec<(String, RenderRect)> = self
+        let monitors: Vec<(String, MonitorRect)> = self
             .slots
             .iter()
             .map(|(id, slot)| (id.clone(), slot.rect))
@@ -475,10 +481,6 @@ impl UnifiedWallpaperManager {
 
     pub fn slots(&self) -> &HashMap<String, MonitorSlot> {
         &self.slots
-    }
-
-    pub fn window_manager(&self) -> &Arc<Mutex<WallpaperWindowManager>> {
-        &self.window_manager
     }
 }
 

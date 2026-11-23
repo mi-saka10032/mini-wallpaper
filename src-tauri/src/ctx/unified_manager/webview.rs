@@ -1,15 +1,13 @@
-//! 壁纸窗口管理器
+//! WebView 窗口链路 impl
 //!
-//! 负责创建、销毁、显示/隐藏壁纸 WebviewWindow。
-//! 每个物理显示器对应一个壁纸窗口，通过 URL 参数传递 monitorId。
-//! Windows 上创建后会调用 desktop_embedder 嵌入桌面层级。
-//!
-//! 构造时注入 `AppHandle`，所有方法不再需要外部传递 app 参数。
+//! 原 `WallpaperWindowManager` 的全部字段与方法原样搬入 `UnifiedWallpaperManager`，
+//! 本文件只承载"WebView 窗口怎么创建/销毁/发事件"的 impl 块。
 
 use log::info;
 use log::warn;
-use std::collections::HashMap;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+use super::UnifiedWallpaperManager;
 
 #[cfg(target_os = "windows")]
 use crate::platform::windows::desktop_embedder::{self, EmbedPolicy};
@@ -75,25 +73,7 @@ pub struct EmbedTarget {
     pub height: i32,
 }
 
-/// 壁纸窗口管理器
-pub struct WallpaperWindowManager {
-    /// Tauri 应用句柄（构造时注入）
-    app_handle: AppHandle,
-    /// monitor_id -> window_label 映射
-    windows: HashMap<String, String>,
-}
-
-impl WallpaperWindowManager {
-    /// 构造 WallpaperWindowManager
-    ///
-    /// 注入 `AppHandle`，后续所有窗口操作均通过内部持有的句柄完成。
-    pub fn new(app_handle: AppHandle) -> Self {
-        Self {
-            app_handle,
-            windows: HashMap::new(),
-        }
-    }
-
+impl UnifiedWallpaperManager {
     /// 建窗阶段（持锁）：创建窗口并返回稍后需要嵌入的目标。
     ///
     /// 桌面嵌入含最长 1 秒的 Win32 同步调用，不能在本方法内执行，否则会

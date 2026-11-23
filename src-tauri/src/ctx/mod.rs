@@ -28,7 +28,7 @@ use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 
 use toast_manager::ToastManager;
-use unified_manager::{RenderCoordinator, UnifiedWallpaperManager, WallpaperWindowManager};
+use unified_manager::UnifiedWallpaperManager;
 
 /// 应用全局上下文
 ///
@@ -43,22 +43,11 @@ pub struct AppContext {
     /// SeaORM 数据库连接
     pub db: DatabaseConnection,
 
-    /// 壁纸窗口管理器（物理显示器 ↔ 壁纸窗口的映射管理）
+    /// 统一壁纸管理器：App 的唯一主体 manager（原 RenderCoordinator /
+    /// WallpaperWindowManager 已拉平并入）。
     ///
-    /// 用 `Arc` 是因为它不仅被 AppContext 持有，还要交给协调器与 Scheduler 共享；
-    /// `Mutex` 保证窗口的创建/销毁与通知不会并发交错。
-    pub window_manager: Arc<Mutex<WallpaperWindowManager>>,
-
-    /// 渲染协调器（壁纸渲染链路唯一入口，决定 Native / WebView backend）
-    ///
-    /// 内部持有 per-monitor 的可变状态（backends / wallpaper_ids / 几何），
-    /// 因此必须整体加锁：调用方只锁这一个 Mutex，避免与 window_manager 形成双锁持锁。
-    pub render_coordinator: Arc<Mutex<RenderCoordinator>>,
-
-    /// 统一壁纸管理器（架构重整 Phase 2）：monitor_id 维度的统一入口，
-    /// 启动时完成显示器枚举与几何登记，后续 action 的 reconcile 派发点。
-    // Phase 2 只在 new() 里构造并 init；Phase 3 的写入源收口才会从 command 读取它派发 diff。
-    #[allow(dead_code)]
+    /// 用 `Arc<Mutex<..>>`：reconcile 串行入口、Scheduler 与各 command 共享同一实例；
+    /// 所有壁纸状态（Native backends / WebView 窗口 / 显示器 slot / 快照）收在这一把锁下。
     pub unified_manager: Arc<Mutex<UnifiedWallpaperManager>>,
 
     /// Toast 通知窗口管理器（右下角独立通知窗口）
@@ -76,39 +65,26 @@ impl AppContext {
     /// 实现子组件自持句柄、方法签名零句柄传递。
     pub async fn new(app_handle: tauri::AppHandle) -> Result<Self> {
         let db = db::init_db(&app_handle).await?;
-        let window_manager = Arc::new(Mutex::new(WallpaperWindowManager::new(app_handle.clone())));
-        let render_coordinator = Arc::new(Mutex::new(RenderCoordinator::new(
-            db.clone(),
-            app_handle.clone(),
-            window_manager.clone(),
-        )?));
-        // 启动时同步一次全局 display_mode，避免 extend 组首屏仍按 independent 渲染。
-        // 用独立作用域刻意把锁收窄到这两次同步：后续创建 toast_manager 不需要持协调器锁。
-        {
-            let mut coordinator = render_coordinator.lock().await;
-            coordinator.refresh_display_mode().await;
-            coordinator.refresh_volume().await;
-        }
-
-        // Phase 2：Rust 侧一次性初始化显示器与渲染目标。
-        //
-        // 关键：init() 会建壁纸窗口并做 SetParent 桌面嵌入，嵌入内部用
-        // SendMessageTimeoutW 与 Progman/WorkerW 通信。AppContext::new 在 setup 阶段
-        // 经 block_on 同步执行，此时主窗口事件循环尚未启动，消息无人处理 → 嵌入阻塞
-        // 启动（实机错误1：卡在"寻找嵌入策略"）。因此 init 移到 setup 之后由
-        // setup::spawn_manager_init 异步执行，这里只构造空壳。
         let unified_manager = Arc::new(Mutex::new(UnifiedWallpaperManager::new(
             db.clone(),
             app_handle.clone(),
-            render_coordinator.clone(),
-            window_manager.clone(),
-        )));
+        )?));
+        // 启动时同步一次全局 display_mode / volume，避免 extend 组首屏仍按
+        // independent 渲染、持久化音量在重启后失效。用独立作用域收窄锁。
+        {
+            let mut manager = unified_manager.lock().await;
+            manager.refresh_display_mode().await;
+            manager.refresh_volume().await;
+        }
+
+        // 关键：init() 会建壁纸窗口并做 SetParent 桌面嵌入，嵌入内部用
+        // SendMessageTimeoutW 与 Progman/WorkerW 通信。AppContext::new 在 setup 阶段
+        // 经 block_on 同步执行，此时主窗口事件循环尚未启动 → 嵌入阻塞启动。
+        // 因此 init 移到 setup 之后由 setup::spawn_manager_init 异步执行，这里只构造空壳。
 
         let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
 
         Ok(Self {
-            window_manager,
-            render_coordinator,
             unified_manager,
             toast_manager,
             app_handle,

@@ -717,13 +717,13 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                 }
                 // M19：WebView2 同样走 GPU 合成，设备丢失时一并释放其壁纸窗口。
                 // 这里在渲染线程内，取 AppContext 只能经 AppHandle 的 state，
-                // 且 window_manager 是 tokio Mutex，故 spawn 到 async runtime 清理。
+                // 且 unified_manager 是 tokio Mutex，故 spawn 到 async runtime 清理。
                 // 不通知前端：前端显示器参数已降级为只读，窗口销毁后由下一次
                 // ensure_target 命令重建（M20 热插拔事件化后统一处理）。
                 let cleanup_handle = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
                     let app_ctx = cleanup_handle.state::<crate::ctx::AppContext>();
-                    app_ctx.window_manager.lock().await.destroy_all();
+                    app_ctx.unified_manager.lock().await.destroy_all();
                     log::info!("[Renderer] DeviceLost 已清理全部 WebView 壁纸窗口");
                 });
             }

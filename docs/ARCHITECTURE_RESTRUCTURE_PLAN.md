@@ -190,8 +190,8 @@ Manager::init()
 
 **Phase 3 剩余的处置（Phase 5 已收口前两项）**：
 - ✅ `deletion_effects` 三处已改为「写 DB + 一次 reconcile」：helper 不再收集通知，公共入口统一调 `finish_deletion_reconcile()`；`RenderNotification` enum 与 `dispatch_notifications` 已删除；`on_wallpapers_deleted` 的无收藏夹分支补了 `clear_wallpaper_id` 落库（原实现只发通知不改 DB，留下 DB 指向已删壁纸的不一致）。
-- ⬜ `set_setting` command 的 `app_setting_service::set` 尚未接入事务（单条写本身原子，display_mode 的批量 config 写已事务化）——非阻塞，留待后续。
-- ⬜ 新屏登记（DB 中无 config 的物理屏）仍未由 Rust 写入；热插拔 M20 后统一处理。
+- ⬜ `set_setting` command 的 `app_setting_service::set` 尚未接入事务（单条写本身原子，display_mode 的批量 config 写已事务化）——用户决策不做，非阻塞。
+// M20 已完成：sync_monitors_from_system 按三条规则统一登记新屏 / 失活断开屏。
 
 ### Phase 4：前端只读化（已落地，未 commit）
 
@@ -202,7 +202,7 @@ Manager::init()
 - ✅ 删除 `api/wallpaperWindow.ts`、`api/config.ts` 里 6 个窗口 command 常量 + CommandMap 项 + 2 个 DTO 接口
 - ✅ 删除 Rust `commands/wallpaper_window.rs`、`dto/wallpaper_window_dto.rs` 及 mod/handler 注册
 - ✅ 清理孤儿方法 `RenderCoordinator::active_ids()` / `WallpaperWindowManager::get_active_window_ids()`
-- ⬜ `useExtendViewport.ts` 改为消费 Rust 推送的物理 viewport + DPI —— 依赖 M20 的事件通道，留待后续
+// M20 已完成：useExtendViewport.ts 改为订阅 Rust 推送的 CSS 像素 viewport，不再本地计算
 
 > 热插拔能力在 M20 落地前完全不响应（init 只在启动执行一次），这是明确的临时回归。
 
@@ -401,7 +401,7 @@ Native renderer 走的是另一条链：Win32 物理 rect → `union_rect` / `gr
 | M20a ✅ | `ExtendViewportPayload`（目标屏 DPI 算好 CSS 像素）+ `get_extend_viewport` command + `useExtendViewport` 退化为订阅；`logical_rect()` 不变 | tsc/lint/68 tests 全绿 |
 | M20b ✅ | 主窗口 WndProc 子类化监听 `WM_DISPLAYCHANGE` / `WM_DPICHANGED`；tokio unbounded channel + 300ms debounce；主窗口 Destroy 事件注销；WndProc 回调只 `send(())` | `m20-hotplug-probe` Windows target 0 error（抓到并修复 HWND 非 Send 的 static 错误） |
 | M20c ✅ | `sync_monitors_from_system()` 实现三条规则；init 调用它（规则 1）；顺序固定 DB → slot → reconcile | `um-win-probe` Windows target 0 error |
-| M20d ⬜ | 联调验收：热插拔 + 多 DPI + extend 接缝 + 新屏自动建窗 | Windows 实机（整套改造最终验收） |
+| M20d ✅ | 联调验收：热插拔 + 多 DPI + extend 接缝 + 新屏自动建窗 | Windows 实机通过（用户 2026-11-23 确认） |
 
 ### 风险与处置
 

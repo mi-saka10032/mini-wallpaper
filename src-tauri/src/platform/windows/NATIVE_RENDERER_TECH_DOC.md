@@ -1128,15 +1128,47 @@ M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报
 | ~~P1~~ | ~~渲染命令 ack~~ | **已完成（3.13 / 2.4）**：`ensure_monitor` / `set_wallpaper` 带 oneshot 回执，失败回传 `renderer-error` |
 | ~~P1~~ | ~~视频音频~~ | **已完成（3.17）**：audio `SourceReader` + WASAPI shared-mode 输出；Independent 每屏一份，Mirror/Extend 全组一份 |
 | ~~P1~~ | ~~NV12 硬解~~ | **已完成（3.19 / 3.21）**：DXVA SourceReader → D3D11 VideoProcessor → NV12 shared/local texture → shader YUV 转换；`OUTPUTHAZARD` 通过 staging 隔离解决 |
-| P1 | WebView 侧 DPI 偏差（M18） | `WebviewWindowBuilder.position()/inner_size()` 只收**逻辑像素**（Tauri 2.10 源码注释确认），而 `create_wallpaper_window` 传的是物理像素 `MonitorRect`；scaleFactor=1 时数值相同故未暴露，高 DPI 屏上 WebView 壁纸窗口尺寸/位置偏差 scaleFactor 倍。**已下调至 M14 之后**：M14 将整条热插拔链路迁到 Rust 并用 Win32 API（`GetMonitorInfoW` + `GetDpiForMonitor`）取得每屏物理矩形与准确 DPI，M18 的换算复用这套数据；若现在靠前端从 `availableMonitors()` 取 scaleFactor 传回建窗，M14 落地后该传参链路即作废。仍是唯一剩余的 P1 项 |
+| ~~P1~~ | ~~WebView 侧 DPI 偏差（M18）~~ | **已完成（随 M20）**：根因不是建窗换算——tao 的 `scale_factor()` 来自 `GetDpiForWindow`，建窗发生在嵌入前、`logical_rect()` 用目标屏 DPI 本就正确；真正的 bug 是 WebView 嵌入桌面后 `getCurrentWindow().scaleFactor()` 拿到主屏 DPI。M20 改为 Rust 用 `GetDpiForMonitor` 算好 CSS 像素，经 `extend-viewport` 事件定向推送，`useExtendViewport` 退化为纯订阅 |
 | P2 | `selection` 运行时切换 | 按壁纸 capability 的自动切换已在 M8 生效；`selection` 仍固定在启动阶段（默认 `Auto`，仅 `MINI_WALLPAPER_RENDERER=native` 切 `NativeOnly`，debug / release 一致，无 debug 强制分支），运行时切换需新设置项，**用户确认不做**：该开关面向开发者验证原生链路，对普通用户无价值，且切换涉及持久化与已切 WebView 壁纸的状态一致性，收益风险不对称 |
 | ~~P2~~ | ~~设备丢失恢复（M13）~~ | **已完成（仅清理，不自动恢复）**：`surface.rs::is_device_lost` 识别 `DEVICE_REMOVED` / `DEVICE_RESET` / `DRIVER_INTERNAL_ERROR`；renderer 上报 DeviceLost 事件、drain 全部 surface、drop SharedDevice（连带 video worker join）、清空 FrameCache；保留 renderer 线程，下次命令由 `ensure_shared` 惰性重建。**WebView 窗口清理另立 M19**（renderer 与窗口管理器尚无对接通道） |
-| **最末级** | 显示器热插拔事件化（M14） | 取消前端 5s 轮询，整条监听链路迁到 Rust：用 Win32 API 检测显示器（`EnumDisplayMonitors` / `GetMonitorInfoW` / `GetDpiForMonitor`）与事件（`WM_DISPLAYCHANGE` / `WM_DPICHANGED`），壁纸窗口创建/销毁与几何刷新的**同步编排常驻 Rust，前端仅展示**。是架构重构，待单独评估。M18（WebView DPI 换算）已并入本任务：复用 Rust 侧同一份 DPI 数据，避免前端再搭一套传参链路 |
+| ~~最末级~~ | ~~显示器热插拔事件化（M14 → 实施为 M20）~~ | **已完成**：主窗口 WndProc 子类化监听 `WM_DISPLAYCHANGE` / `WM_DPICHANGED` → unbounded channel + 300ms debounce → `sync_monitors_from_system()` 按三条规则（init 必 active=true / 断开 active=false+remove slot / 插入 active=true+insert slot）做 DB→slot→reconcile 闭环；前端 `useMonitorHotPlug` / `monitorSync.ts` 全删，显示器参数只读 |
 | ~~P2~~ | ~~帧率自适应（M15）~~ | **已完成**：`surface.rs::needs_continuous_frames` 区分视频 / fade / 动图，renderer 主循环按 `has_motion` 选 16ms 或 100ms（`STALE_TICK_MS`）唤醒；静态壁纸 CPU 下降 |
 | P3 | 契约生成（M17） | `RenderDescriptor` 等前后端镜像类型考虑 ts-rs / specta 生成 |
-| **最末级** | 设备丢失时清理 WebView 窗口（M19） | 用户新增：WebView2 也走 GPU 合成，DeviceLost 时其渲染进程同样可能受影响，从内存管理角度应清理；当前 renderer 与 WallpaperWindowManager 无对接通道，待 M14 架构重构后一并处理 |
-| P3 | 单元测试覆盖（M16） | `fit.rs` / `decoder.rs` / `selection.rs` / `contracts.rs`（含 M7 `crossfade_progress`）/ `geometry.rs` / `frame_cache.rs` 有测试（当前共 51 passed，M13 新增 `frame_cache.clear` 单测），renderer 编排与桌面嵌入仍零覆盖 |
+| ~~最末级~~ | ~~设备丢失时清理 WebView 窗口（M19）~~ | **已完成**：`WallpaperWindowManager::destroy_all()`；renderer 的 DeviceLost 分支 spawn 到 async runtime 清理全部 WebView 壁纸窗口（DB 无变化、不经 reconcile） |
+| P3 | 单元测试覆盖（M16） | **部分完成**：Phase 1 diff 引擎新增 9 组单测、M20 前 probe 验证，当前共 **68 passed**；renderer 编排与桌面嵌入仍零覆盖（Windows-only，本地 probe 只能验类型） |
 
 **P0 收尾结论**：截至 2026-11-22，上表 P0 项（含 M6~M8 新增项及控制链路 / 音频项）全部实机验收通过，Native 方案进入交付状态；剩余均为 P1 / P2 / P3 优化 backlog，不阻塞交付。
 
-**M 编号与优先级合并说明**：本表为唯一事实源，M10~M19 是原 P1/P2/P3 backlog 的里程碑编号，2026-11-23 合并进本表以免维护两份清单。已完成：M10 / M11 / M12（随 M10 闭环）/ M13 / M15；未做：M14（架构重构，最末级）/ M18（唯一剩余 P1，已并入 M14）/ M16 / M17（P3 非阻塞）/ M19（最末级，依赖 M14 的窗口管理对接）。M14 目标：取消轮询、整条链路迁 Rust、Win32 API 检测显示器与 DPI、同步编排常驻 Rust、前端仅展示；M18 的 DPI 换算复用 M14 的 Rust 侧数据，不单独在前端搭传参链路。
+**M 编号与优先级合并说明（2026-11-23 22:00 更新）**：本表为唯一事实源，M10~M20 是原 P1/P2/P3 backlog 的里程碑编号，2026-11-23 合并进本表以免维护两份清单。
+
+**已全部完成**：M10 / M11 / M12（随 M10 闭环）/ M13 / M15 / M14（实施为 M20 热插拔事件化）/ M18（随 M20 完成）/ M19。
+
+**仍未做（均已实机确认无阻塞）**：
+- **M16（P3）**：renderer 编排 / 桌面嵌入单测覆盖，当前 68 passed 集中在纯逻辑层；Windows-only 零覆盖，probe 只能验类型。
+- **M17（P3）**：前后端镜像类型（`RenderDescriptor` / `ExtendViewportPayload` 等）考虑 ts-rs / specta 生成，消除手写同步。
+
+**本轮架构重整（Phase 0~5 + M18/M19/M20）已实机验收通过**，含混合 backend、热插拔恢复、多 DPI viewport。
+
+### 拔显示器后 40MB 内存延迟回落（2026-11-23 实机分析，结论：不修）
+
+**现象**（用户实机，纯 Native 双视频 independent 模式）：
+- 视频+图片基线 ≈140MB；双视频 ≈360MB
+- 拔掉副屏 → 200MB（副屏 session 已关，主屏视频正常播）
+- 主屏 A→B→A 换图 → 稳定 160MB，此后不再增长
+
+**根因判定：Windows DWM 合成缓存延迟回收，非代码泄漏。**
+
+证据链：
+1. Rust 侧释放链路完整：`surfaces.remove()` → `surface.destroy()` 清 wallpaper/transition/pending 三层 Arc → 最后一个 Arc drop → `VideoPlayback::Drop` 发 `CloseSession` → worker `sessions.remove()` → `VideoSession` drop → `WorkerGpu` drop → `CloseDeviceHandle`。全程即时，无残留引用。
+2. Native swapchain 走 `CreateSwapChainForComposition`，资源由 **DWM** 持有（不是绑 DXGI Output）。拔屏时我们这侧 COM 引用归零，但 DWM 为该显示器维护的合成表面/呈现历史异步回收。
+3. 下一次换图触发全组 `Present`，DWM 重编排合成树，缓存才回落。
+4. 稳定在 160MB 不持续增长——真泄漏会随拔插次数线性上涨。
+
+**为何不修**：唯一能"提前"回收的手段是拔屏后强制重建全部 surface，代价是一次明显卡顿且只是把异步回收提前几十毫秒；且内存从未突破稳定上限，无用户可感知影响。
+
+**需警惕的信号**：若未来出现"每次拔插 +40MB 不回落"，才是真泄漏（DWM 持有我们资源不放），届时再查 `CompositionSwapChain` 的 COM 生命周期。
+
+**曾考虑并否决的方案**（记录以免重复）：
+- 回退单 GPU 共享 device —— 本文第九节两轮 A/B 已否决（旧 cache 跨视频长期留存）；
+- `ID3D11Device3::Trim` —— windows 0.61 binding 无此方法，且 device 已随 session drop；
+- 中途 `MFShutdown` —— 渲染线程与进程同生命周期，shutdown 后无重新 startup 路径，视频会全部失效。

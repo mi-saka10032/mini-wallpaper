@@ -42,8 +42,8 @@ impl Scheduler {
             setting_keys::GLOBAL_VOLUME => {
                 // 音量是全局字段，Manager 的 reconcile 会 diff 出 VolumeChanged，
                 // 一次派发同时更新 Native renderer 与广播到所有 WebView 窗口。
-                let manager = self.unified_manager();
-                let mut guard = manager.lock().await;
+                let ctx = self.app_context();
+                let mut guard = ctx.unified_manager.lock().await;
                 if let Err(e) = guard
                     .reconcile(crate::ctx::reconcile::ReconcileScope::All)
                     .await
@@ -127,8 +127,8 @@ impl Scheduler {
         }
 
         {
-            let manager = self.unified_manager();
-            let mut guard = manager.lock().await;
+            let ctx = self.app_context();
+            let mut guard = ctx.unified_manager.lock().await;
             if let Err(e) = guard
                 .reconcile(crate::ctx::reconcile::ReconcileScope::All)
                 .await

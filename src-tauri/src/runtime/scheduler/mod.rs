@@ -23,11 +23,9 @@ mod setting_effects;
 mod task_lifecycle;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 use tauri::Manager;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::ctx::AppContext;
@@ -67,11 +65,11 @@ impl Scheduler {
         app_ctx.db.clone()
     }
 
-    /// 从 AppHandle 获取 unified_manager：所有渲染副作用的唯一派发入口。
-    pub(super) fn unified_manager(
-        &self,
-    ) -> Arc<Mutex<crate::ctx::unified_manager::UnifiedWallpaperManager>> {
-        let app_ctx: &AppContext = self.app.state::<AppContext>().inner();
-        app_ctx.unified_manager.clone()
+    /// 取回全局 AppContext（Tauri manage 注册的唯一实例）。
+    ///
+    /// 简化后 AppContext 内不再套 Arc，各处按需经 AppHandle 取同一实例即可，
+    /// 无需 clone 字段所有权来脱离 self 生命周期。
+    pub(super) fn app_context(&self) -> tauri::State<'_, AppContext> {
+        self.app.state::<AppContext>()
     }
 }

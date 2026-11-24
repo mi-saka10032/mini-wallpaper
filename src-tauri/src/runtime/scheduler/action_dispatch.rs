@@ -319,7 +319,7 @@ impl Scheduler {
         let app_ctx: &AppContext = ctx.inner();
 
         let mut toast_mgr = app_ctx.toast_manager.lock().await;
-        toast_mgr.show_toast(&app_ctx.toast_manager, action_name, message);
+        toast_mgr.show_toast(action_name, message);
     }
 
     // ==================== 目标显示器解析 ====================

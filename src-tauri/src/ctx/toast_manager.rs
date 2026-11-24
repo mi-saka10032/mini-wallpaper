@@ -87,16 +87,10 @@ impl ToastManager {
     /// 4. 重新计算所有存活窗口的位置
     /// 5. spawn 定时器，duration 后自动销毁
     ///
-    /// `self_arc` 为管理器自身的 `Arc` 句柄，供超时定时器回调时重新加锁使用。
-    /// 不可改用 `app_handle.try_state::<Arc<Mutex<ToastManager>>>()`：
-    /// `ToastManager` 仅作为 `AppContext` 的字段存在，从未单独 `manage()` 注册，
-    /// 那样取到的永远是 `None`，会导致定时器空转、Toast 永不自动关闭。
-    pub fn show_toast(
-        &mut self,
-        self_arc: &std::sync::Arc<tokio::sync::Mutex<ToastManager>>,
-        action: &str,
-        message: &str,
-    ) {
+    /// 超时定时器经 `AppHandle::state::<AppContext>()` 取回同一个 ToastManager：
+    /// Tauri 的 manage() 已用 Arc 持有整个 AppContext，无需再由调用方传入自身句柄。
+    /// 不能用 `try_state::<Arc<Mutex<ToastManager>>>()`（ToastManager 从未单独注册）。
+    pub fn show_toast(&mut self, action: &str, message: &str) {
         // 超出最大数量时，移除最早的
         while self.toasts.len() >= MAX_TOASTS {
             let oldest = self.toasts.remove(0);
@@ -167,17 +161,19 @@ impl ToastManager {
         // 重排所有窗口位置
         self.recalculate_positions();
 
-        // spawn 定时器：duration 后自动关闭
+        // spawn 定时器：duration 后自动关闭。
+        // 闭包只持有 AppHandle（'static），到点再经 state 取回 AppContext 里的
+        // toast_manager 加锁；不预先 clone 字段，避免 AppContext 内多一层 Arc。
         let app_handle = self.app_handle.clone();
         let toast_label = label.clone();
-        let manager = self_arc.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(TOAST_DURATION_MS)).await;
 
             // 检查窗口是否仍然存在（可能已被用户手动关闭）
             if app_handle.get_webview_window(&toast_label).is_some() {
-                // 通过自身 Arc 加锁关闭，确保 Vec 状态与窗口销毁同步、剩余 Toast 正确重排
-                let mut mgr = manager.lock().await;
+                // 确保 Vec 状态与窗口销毁同步、剩余 Toast 正确重排
+                let ctx = app_handle.state::<crate::ctx::AppContext>();
+                let mut mgr = ctx.toast_manager.lock().await;
                 mgr.close_toast(&toast_label);
             }
         });

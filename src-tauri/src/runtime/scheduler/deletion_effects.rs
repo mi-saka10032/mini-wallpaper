@@ -29,8 +29,8 @@ impl Scheduler {
     /// 一批删除联动写库完成后的统一收尾：一次 reconcile 覆盖全部受影响屏，
     /// 再通知主窗口刷新 config。scope 取 All，因为删除联动可能影响多屏。
     async fn finish_deletion_reconcile(&self) {
-        let manager = self.unified_manager();
-        let mut guard = manager.lock().await;
+        let ctx = self.app_context();
+        let mut guard = ctx.unified_manager.lock().await;
         if let Err(e) = guard
             .reconcile(crate::ctx::reconcile::ReconcileScope::All)
             .await
@@ -268,15 +268,19 @@ impl Scheduler {
             return false;
         }
 
-        let manager = self.unified_manager();
-        let mut guard = manager.lock().await;
-        if let Err(e) = guard
-            .reconcile(crate::ctx::reconcile::ReconcileScope::One(
-                config.monitor_id.clone(),
-            ))
-            .await
+        // 收窄作用域：reconcile 结束后立即释放对 self 的借用，
+        // 后面 restart / is_running 需要 &mut self。
         {
-            warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
+            let ctx = self.app_context();
+            let mut guard = ctx.unified_manager.lock().await;
+            if let Err(e) = guard
+                .reconcile(crate::ctx::reconcile::ReconcileScope::One(
+                    config.monitor_id.clone(),
+                ))
+                .await
+            {
+                warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
+            }
         }
 
         // 如果有运行中的定时器，重置计时

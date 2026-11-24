@@ -21,8 +21,6 @@ pub mod toast_manager;
 /// 统一壁纸管理器：主体 + native（渲染链路）/ webview（窗口链路）两个 impl 文件
 pub mod unified_manager;
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
@@ -32,8 +30,10 @@ use unified_manager::UnifiedWallpaperManager;
 
 /// 应用全局上下文
 ///
-/// 聚合所有需要跨模块共享的全局状态，通过 `Arc` 实现零成本克隆。
-/// command 层通过 `State<'_, AppContext>` 注入。
+/// 聚合所有需要跨模块共享的全局状态。Tauri 的 `manage()` 已经用 `Arc` 持有
+/// 整个 `AppContext`，因此字段内不再套一层 `Arc<Mutex<T>>`：所有需要跨
+/// `'static` 边界的地方都持有 `AppHandle`，经 `app.state::<AppContext>()` 即可
+/// 访问同一实例。command 层通过 `State<'_, AppContext>` 注入。
 ///
 /// 所有子组件在构造时注入 `AppHandle`，方法调用不再需要外部传递句柄。
 pub struct AppContext {
@@ -46,12 +46,12 @@ pub struct AppContext {
     /// 统一壁纸管理器：App 的唯一主体 manager（原 RenderCoordinator /
     /// WallpaperWindowManager 已拉平并入）。
     ///
-    /// 用 `Arc<Mutex<..>>`：reconcile 串行入口、Scheduler 与各 command 共享同一实例；
-    /// 所有壁纸状态（Native backends / WebView 窗口 / 显示器 slot / 快照）收在这一把锁下。
-    pub unified_manager: Arc<Mutex<UnifiedWallpaperManager>>,
+    /// reconcile 串行入口、Scheduler 与各 command 共享同一实例；所有壁纸状态
+    /// （Native backends / WebView 窗口 / 显示器 slot / 快照）收在这一把锁下。
+    pub unified_manager: Mutex<UnifiedWallpaperManager>,
 
     /// Toast 通知窗口管理器（右下角独立通知窗口）
-    pub toast_manager: Arc<Mutex<ToastManager>>,
+    pub toast_manager: Mutex<ToastManager>,
 
     /// 备份操作互斥锁（防止导入/导出并发执行导致数据损坏）
     pub backup_lock: Mutex<()>,
@@ -65,10 +65,10 @@ impl AppContext {
     /// 实现子组件自持句柄、方法签名零句柄传递。
     pub async fn new(app_handle: tauri::AppHandle) -> Result<Self> {
         let db = db::init_db(&app_handle).await?;
-        let unified_manager = Arc::new(Mutex::new(UnifiedWallpaperManager::new(
+        let unified_manager = Mutex::new(UnifiedWallpaperManager::new(
             db.clone(),
             app_handle.clone(),
-        )?));
+        )?);
         // 启动时同步一次全局 display_mode / volume，避免 extend 组首屏仍按
         // independent 渲染、持久化音量在重启后失效。用独立作用域收窄锁。
         {
@@ -82,7 +82,7 @@ impl AppContext {
         // 经 block_on 同步执行，此时主窗口事件循环尚未启动 → 嵌入阻塞启动。
         // 因此 init 移到 setup 之后由 setup::spawn_manager_init 异步执行，这里只构造空壳。
 
-        let toast_manager = Arc::new(Mutex::new(ToastManager::new(app_handle.clone())));
+        let toast_manager = Mutex::new(ToastManager::new(app_handle.clone()));
 
         Ok(Self {
             unified_manager,

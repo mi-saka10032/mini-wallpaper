@@ -49,7 +49,6 @@ impl TaskSpawner for CarouselTask {
             let ctx = app.state::<AppContext>();
             let app_ctx: &AppContext = ctx.inner();
             let db = app_ctx.db.clone();
-            let unified_manager = app_ctx.unified_manager.clone();
 
             // 查询 config 获取轮播参数
             let config = match monitor_config_service::get_by_monitor_id(&db, &mid).await {
@@ -172,7 +171,7 @@ impl TaskSpawner for CarouselTask {
                         } else {
                             ReconcileScope::One(mid.clone())
                         };
-                        let mut manager = unified_manager.lock().await;
+                        let mut manager = app_ctx.unified_manager.lock().await;
                         if let Err(e) = manager.reconcile(scope).await {
                             error!("[Carousel] Reconcile failed for {}: {}", mid, e);
                         }

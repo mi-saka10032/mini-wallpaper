@@ -14,7 +14,7 @@ use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 /// COM 初始化守卫；`should_uninitialize` 记录本次调用是否真的取得了 COM 所有权。
-pub(super) struct ComScope {
+pub(crate) struct ComScope {
     should_uninitialize: bool,
 }
 
@@ -25,7 +25,7 @@ impl ComScope {
     /// 只有「本次调用成功」才置 `should_uninitialize = true`：`RPC_E_CHANGED_MODE`
     /// 表示线程已被别处以不同并发模型初始化、其它 HRESULT 失败表示初始化未成功，
     /// 这两种情况都不能反初始化，否则会误释放别人的 COM 状态。
-    pub(super) fn init() -> Self {
+    pub(crate) fn init() -> Self {
         unsafe {
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             if hr == RPC_E_CHANGED_MODE {

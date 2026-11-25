@@ -5,20 +5,20 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::com_scope::ComScope;
-use super::image_worker::ImageDecodeQueue;
+use super::decode::ImageDecodeQueue;
+use super::device::ComScope;
 use super::{send_ack, send_acks, Ack};
 
 use anyhow::{anyhow, Context, Result};
+use tokio::sync::oneshot;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
 
-use super::surface::{RenderSurface, SharedDevice, WallpaperMedia};
-use super::video::{
-    shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback, PAUSE_FADE,
-    PAUSE_FULLSCREEN,
+use super::decode::{
+    mf_shutdown, mf_startup, VideoIdentity, VideoPlayback, PAUSE_FADE, PAUSE_FULLSCREEN,
 };
+use super::render::{RenderSurface, SharedDevice, WallpaperMedia};
 use crate::platform::wallpaper_renderer::{
     DeviceLostHandler, ExtendViewport, FitMode, MonitorRect, WallpaperKind,
 };

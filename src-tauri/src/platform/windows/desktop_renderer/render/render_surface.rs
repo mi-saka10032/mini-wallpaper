@@ -23,16 +23,15 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Dxgi::{IDXGISwapChain1, DXGI_PRESENT, DXGI_SWAP_CHAIN_FLAG};
 
 use super::composition::create_composition_swap_chain;
-use super::device::SharedDevice;
-use super::device_lost::is_device_lost;
-use super::frames::SharedFrames;
 use super::pipeline::{FadeConstants, QuadPipeline, Vertex};
+use super::shared_device::SharedDevice;
 use crate::platform::wallpaper_renderer::{
     crossfade_progress, fit_rect, ExtendViewport, FitMode, FitRect, MonitorRect, CROSSFADE_DURATION,
 };
 use crate::platform::windows::desktop_embedder::EmbedPolicy;
-use crate::platform::windows::desktop_renderer::video::{VideoFrameSnapshot, VideoPlayback};
-use crate::platform::windows::desktop_renderer::window::NativeWindow;
+use crate::platform::windows::desktop_renderer::decode::SharedFrames;
+use crate::platform::windows::desktop_renderer::decode::{VideoFrameSnapshot, VideoPlayback};
+use crate::platform::windows::desktop_renderer::device::{is_device_lost, NativeWindow};
 
 #[derive(Clone)]
 pub enum WallpaperMedia {

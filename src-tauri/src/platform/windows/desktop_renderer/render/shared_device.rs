@@ -17,7 +17,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 
 use super::pipeline::{create_pipeline, QuadPipeline};
-use crate::platform::windows::desktop_renderer::video::{VideoPlayback, VideoWorkerHost};
+use crate::platform::windows::desktop_renderer::decode::{VideoPlayback, VideoWorkerHost};
 
 use super::composition::create_composition_swap_chain;
 

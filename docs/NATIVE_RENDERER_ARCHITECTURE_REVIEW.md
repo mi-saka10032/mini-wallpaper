@@ -756,7 +756,7 @@ main 进程账面降低 → 子进程隔离仍不推荐
 
 ### 背景
 
-`ps_nv12`（`desktop_renderer/surface/pipeline.rs` 的 `SHADER_SOURCE`）写死了 **BT.601 + limited range** 的 YUV→RGB 转换：
+`ps_nv12`（`desktop_renderer/render/pipeline.rs` 的 `SHADER_SOURCE`）写死了 **BT.601 + limited range** 的 YUV→RGB 转换：
 
 - 系数 `1.164383 / 1.596027 / 0.391762 / 0.812968 / 2.017232` 已逐位验证为 BT.601 权重（`Kr=0.299, Kg=0.587, Kb=0.114`）经 limited-range 缩放（`255/219`、`255/224`）的精确推导值
 - `y - 16/255` 与 `uv - 0.5` 处理的是 limited range（Y 16~235、UV 16~240）的零点偏移
@@ -765,12 +765,14 @@ main 进程账面降低 → 子进程隔离仍不推荐
 
 ### 已具备的基础设施
 
-`video.rs` 的 `media_type_diag()` 已在读取但**仅用于日志**、不驱动行为：
+`decode/video/worker.rs` 的 `media_type_diag()` 已在读取但**仅用于日志**、不驱动行为：
 
-- `MF_MT_YUV_MATRIX`（`video.rs:1103`）
-- `MF_MT_VIDEO_NOMINAL_RANGE`（同处）
+- `MF_MT_YUV_MATRIX`（`decode/video/worker.rs:1103`）
+- `MF_MT_VIDEO_NOMINAL_RANGE`（`:1105`）
 
-D3D11 `VideoProcessorBlt` 的输入/输出均为 NV12（`video.rs:516/719`），同格式缩放、不做 YUV→RGB，因此矩阵转换 100% 发生在 `ps_nv12` —— 这正是需要修的位置。
+D3D11 `VideoProcessorBlt` 的输入/输出均为 NV12，同格式缩放、不做 YUV→RGB，因此矩阵转换 100% 发生在 `ps_nv12` —— 这正是需要修的位置。
+
+> 三层目录重组后，按当前结构描述的落点见 `src-tauri/src/platform/windows/desktop_renderer/README.md` 的「优化待办」章节（decode 读元数据 → render 加 shader 变体 → draw_media 选择）。
 
 ### 影响评估（量化）
 

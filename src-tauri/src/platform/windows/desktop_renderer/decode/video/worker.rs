@@ -55,7 +55,7 @@ use windows::Win32::Media::MediaFoundation::{
 };
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToUInt64};
 
-use super::audio::AudioPlayback;
+use super::super::audio::AudioPlayback;
 
 pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("Media Foundation 初始化失败")

@@ -32,7 +32,7 @@ impl DeviceLostHResult for windows::core::Error {
 
 /// 判断 D3D11 / DXGI 错误是否属于设备丢失。设备丢失时整块 device 上的所有资源
 /// 同时失效，必须整组清理 surface 与 SharedDevice，不能只重试单屏。
-pub(super) fn is_device_lost<E: DeviceLostHResult>(err: &E) -> bool {
+pub(crate) fn is_device_lost<E: DeviceLostHResult>(err: &E) -> bool {
     err.lost_hresult().is_some_and(|code| {
         code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED
             || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_RESET

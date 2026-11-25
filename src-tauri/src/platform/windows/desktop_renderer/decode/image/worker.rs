@@ -21,10 +21,10 @@ use std::time::Instant;
 use anyhow::Result;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
-use super::image;
-use super::surface::SharedFrames;
-use super::{send_acks, Ack};
+use super::super::frames::SharedFrames;
+use super::decode;
 use crate::platform::wallpaper_renderer::FitMode;
+use crate::platform::windows::desktop_renderer::{send_acks, Ack};
 
 /// 标识"同一张图 + 同一解码目标尺寸"，仅用于合并**在途**的重复解码请求。
 ///
@@ -58,7 +58,7 @@ struct DecodeResult {
 ///
 /// renderer 拿到后自行 `attach_media`；`primary_ack` 随挂载结果回，
 /// 其余等待方由 renderer 统一回 Ok（保持原有的回执语义）。
-pub(super) struct Ready {
+pub(crate) struct Ready {
     pub frames: Arc<SharedFrames>,
     pub monitor_ids: Vec<String>,
     pub fit_mode: FitMode,
@@ -69,7 +69,7 @@ pub(super) struct Ready {
 }
 
 /// 图片解码队列：聚合在途状态，供渲染线程串行调用。
-pub(super) struct ImageDecodeQueue {
+pub(crate) struct ImageDecodeQueue {
     decode_tx: Sender<DecodeResult>,
     decode_rx: Receiver<DecodeResult>,
     pending: HashMap<u64, PendingDecode>,
@@ -147,7 +147,7 @@ impl ImageDecodeQueue {
         let handle = thread::Builder::new()
             .name("wallpaper-image-decode".to_string())
             .spawn(move || {
-                let result = image::decode_and_upload(&worker_device, &path, worker_target)
+                let result = decode::decode_and_upload(&worker_device, &path, worker_target)
                     .map_err(|err| format!("{:#}", err));
                 let _ = tx.send(DecodeResult { generation, result });
             })?;

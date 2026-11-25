@@ -5,11 +5,6 @@
 //! 派发成功的部分才推进 observed，失败项保持旧值，下一次 reconcile 自动重放——
 //! 这是取消常驻轮询后唯一的重试来源，因此 patch 必须按差异项局部推进。
 
-// Phase 1 只交付纯逻辑引擎，尚未接入 UnifiedWallpaperManager（Phase 2）。
-// 此时整模块没有内部调用方，先统一抑制 dead_code；接线完成后移除本行，
-// 让 lint 重新承担「发现真正未使用代码」的职责。
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 与 `DisplayMode::Independent.as_str()` 一致；放在这里是为了让快照层

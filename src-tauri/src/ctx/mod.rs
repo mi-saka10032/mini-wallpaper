@@ -15,8 +15,6 @@
 //! - **职责分离**：`ctx` 管"是什么"（状态），`runtime` 管"做什么"（调度）
 
 mod db;
-/// 配置快照与 diff 引擎（架构重整 Phase 1，纯逻辑无 IO，供后续 UnifiedWallpaperManager 消费）
-pub mod reconcile;
 pub mod toast_manager;
 /// 统一壁纸管理器：主体 + native（渲染链路）/ webview（窗口链路）两个 impl 文件
 pub mod unified_manager;

@@ -43,9 +43,6 @@ use crate::events::{ExtendViewportPayload, TypedEmitTo};
 use crate::platform::wallpaper_renderer::group_viewports;
 use crate::services::{app_setting_service, monitor_config_service};
 
-#[cfg(target_os = "windows")]
-use crate::platform::windows::monitor_geometry::enumerate_monitors;
-
 /// 单个物理显示器在 Manager 内的登记项。
 ///
 /// `rect` 恒为物理像素虚拟桌面坐标；`dpi` 来自目标屏自身，用于 WebView

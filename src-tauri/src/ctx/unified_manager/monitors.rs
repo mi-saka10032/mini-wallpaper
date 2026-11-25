@@ -6,7 +6,16 @@
 use anyhow::Result;
 
 #[cfg(target_os = "windows")]
+use std::collections::HashMap;
+
+#[cfg(target_os = "windows")]
+use crate::ctx::unified_manager::{to_render_rect, MonitorSlot};
+#[cfg(target_os = "windows")]
+use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
+#[cfg(target_os = "windows")]
 use crate::platform::windows::monitor_geometry::enumerate_monitors;
+#[cfg(target_os = "windows")]
+use crate::services::monitor_config_service;
 
 impl super::UnifiedWallpaperManager {
     /// 以系统当前物理显示器列表为准，同步 DB config + Manager slot + 渲染目标。

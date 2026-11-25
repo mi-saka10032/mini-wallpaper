@@ -28,6 +28,7 @@ use crate::ctx::reconcile::{
     diff_snapshots, patch_observed, plan_dispatch, ConfigSnapshot, DispatchAction, GlobalSnapshot,
     MonitorSnapshot, ReconcileScope, DEFAULT_DISPLAY_MODE,
 };
+pub mod errors;
 pub mod native;
 pub mod webview;
 
@@ -148,11 +149,11 @@ pub struct UnifiedWallpaperManager {
 const CODE_EXTEND_DEGRADED: &str = "ExtendDegraded";
 
 impl UnifiedWallpaperManager {
-    pub fn new(db: DatabaseConnection, app_handle: AppHandle) -> Result<Self> {
-        // 原 RC::new：renderer 线程持有 app_handle 用于设备丢失时上报事件，
-        // 故先 clone 再存入自身字段。
-        let renderer = DesktopRenderer::start(app_handle.clone())?;
-        Ok(Self {
+    pub async fn new(db: DatabaseConnection, app_handle: AppHandle) -> Result<Self> {
+        // 失败上报与设备丢失收尾统一在 errors 模块；渲染层只持有回调，
+        // 不感知 AppHandle / AppContext（见 errors.rs 模块说明）。
+        let renderer = DesktopRenderer::start(errors::device_lost_handler(&app_handle))?;
+        let mut manager = Self {
             db,
             app_handle,
             slots: HashMap::new(),
@@ -165,7 +166,14 @@ impl UnifiedWallpaperManager {
             display_mode: DisplayMode::Independent,
             degraded_logged: false,
             windows: HashMap::new(),
-        })
+        };
+        // 启动时同步一次全局 display_mode / volume，避免 extend 组首屏仍按
+        // independent 渲染，以及持久化音量在重启后失效。此时对象尚未进入 Mutex，
+        // 无并发访问，直接初始化即可。
+        manager.refresh_display_mode().await;
+        manager.refresh_volume().await;
+
+        Ok(manager)
     }
 
     /// 一次性初始化：建立初始快照 + 按系统物理屏同步 config / slot / 渲染目标。

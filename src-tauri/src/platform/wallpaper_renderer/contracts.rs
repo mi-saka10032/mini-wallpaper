@@ -186,7 +186,7 @@ pub struct RenderDescriptor {
     pub monitor_id: String,
     /// 数据库主键，可为 `None`（例如仅预览、尚未落库的素材）。
     pub wallpaper_id: Option<i32>,
-    /// 素材路径；同时作为帧缓存 key 的组成部分（见 `frame_cache::cache_key`）。
+    /// 素材路径；渲染线程据此解码并上传纹理。
     pub file_path: PathBuf,
     /// 素材类型，决定解码路径。
     pub kind: WallpaperKind,

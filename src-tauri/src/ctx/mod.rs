@@ -65,17 +65,8 @@ impl AppContext {
     /// 实现子组件自持句柄、方法签名零句柄传递。
     pub async fn new(app_handle: tauri::AppHandle) -> Result<Self> {
         let db = db::init_db(&app_handle).await?;
-        let unified_manager = Mutex::new(UnifiedWallpaperManager::new(
-            db.clone(),
-            app_handle.clone(),
-        )?);
-        // 启动时同步一次全局 display_mode / volume，避免 extend 组首屏仍按
-        // independent 渲染、持久化音量在重启后失效。用独立作用域收窄锁。
-        {
-            let mut manager = unified_manager.lock().await;
-            manager.refresh_display_mode().await;
-            manager.refresh_volume().await;
-        }
+        let unified_manager =
+            Mutex::new(UnifiedWallpaperManager::new(db.clone(), app_handle.clone()).await?);
 
         // 关键：init() 会建壁纸窗口并做 SetParent 桌面嵌入，嵌入内部用
         // SendMessageTimeoutW 与 Progman/WorkerW 通信。AppContext::new 在 setup 阶段

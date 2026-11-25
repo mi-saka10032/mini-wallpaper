@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 
@@ -10,8 +11,6 @@ mod contracts;
 pub mod decoder;
 // fit 模式到目标矩形的几何映射
 pub mod fit;
-// 与 GPU 无关的 key / LRU / 字节预算缓存逻辑
-pub mod frame_cache;
 // 跨屏并集与 extend 裁剪视口计算
 pub mod geometry;
 // 后端选择策略（Native / WebView 回退）
@@ -27,6 +26,13 @@ pub use contracts::{
 pub use geometry::{extend_viewport, group_viewports, union_rect};
 pub use selection::{default_backend_selection, resolve_backend};
 
+/// 设备丢失回调：由上层在启动 renderer 时注入。
+///
+/// 渲染线程只负责"本机清理失效 GPU 资源 + 通知发生了 DeviceLost"；
+/// emit 前端事件与清理 WebView 窗口都由上层（持有 AppContext 的一方）完成。
+/// renderer 层因此不再反向依赖 Tauri state，依赖方向保持单向。
+pub type DeviceLostHandler = Arc<dyn Fn() + Send + Sync + 'static>;
+
 /// 跨平台渲染器门面：Windows 下是真实的 D3D11 渲染线程，其它平台为空实现。
 ///
 /// 让上层 RenderCoordinator 无需 cfg 分支即可统一调用，macOS 开发/CI 下也能编译通过。
@@ -39,7 +45,7 @@ pub struct DesktopRenderer;
 #[cfg(not(target_os = "windows"))]
 impl DesktopRenderer {
     /// 占位：非 Windows 平台不启动渲染线程，仅返回空实例以保证跨平台编译通过。
-    pub fn start(_app_handle: tauri::AppHandle) -> Result<Self> {
+    pub fn start(_on_device_lost: DeviceLostHandler) -> Result<Self> {
         Ok(Self)
     }
 

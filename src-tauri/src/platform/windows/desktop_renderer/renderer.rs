@@ -5,54 +5,23 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::image;
+use super::com_scope::ComScope;
+use super::image_worker::ImageDecodeQueue;
+use super::{send_ack, send_acks, Ack};
 
 use anyhow::{anyhow, Context, Result};
-use tokio::sync::oneshot;
-use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
 
-use super::surface::{RenderSurface, SharedDevice, SharedFrames, WallpaperMedia};
+use super::surface::{RenderSurface, SharedDevice, WallpaperMedia};
 use super::video::{
     shutdown as mf_shutdown, startup as mf_startup, VideoIdentity, VideoPlayback, PAUSE_FADE,
     PAUSE_FULLSCREEN,
 };
-use crate::events::{RendererErrorPayload, TypedEmit};
-use crate::platform::wallpaper_renderer::frame_cache::{
-    cache_key_with_target, CacheKey, FrameCache,
-};
 use crate::platform::wallpaper_renderer::{
-    ExtendViewport, FitMode, MonitorRect, RendererErrorCode, WallpaperKind,
+    DeviceLostHandler, ExtendViewport, FitMode, MonitorRect, WallpaperKind,
 };
-use tauri::Manager;
-
-/// 在途的一次性图片解码：worker 线程完成后，结果经 `decode_tx` 回到渲染线程 attach。
-/// 只活到结果回收；过期 generation 的结果被丢弃，ack 仍回 Ok 避免误报 error。
-struct PendingDecode {
-    key: Option<CacheKey>,
-    monitor_ids: Vec<String>,
-    fit_mode: FitMode,
-    crossfade: bool,
-    // 同 key 的重复命令会合并到同一次解码，所有等待方都要收到回执。
-    acks: Vec<Ack>,
-    handle: JoinHandle<()>,
-}
-
-/// 给所有等待方回同一个结果（Ack 是 oneshot，逐个 send）。
-fn send_acks(acks: Vec<Ack>, result: Result<(), String>) {
-    for ack in acks {
-        send_ack(Some(ack), result.clone());
-    }
-}
-
-/// worker → 渲染线程的解码结果。`generation` 用于在连点时丢弃过期结果。
-struct DecodeResult {
-    generation: u64,
-    result: Result<SharedFrames, String>,
-}
 
 /// 确保共享 device 存在：设备丢失时被 take() 后，下一次正常命令在此惰性重建。
 /// 重建会连带新建 video worker（它持有 device clone，旧的那份已随设备失效）。
@@ -64,8 +33,8 @@ fn ensure_shared(shared: &mut Option<SharedDevice>) -> Result<&SharedDevice> {
     Ok(shared.as_ref().expect("ensure_shared 刚初始化过"))
 }
 
-/// 把媒体挂到组内每个 surface，并回 ack。命中缓存的同步路径与 worker 回来的
-/// 异步路径共用这一份逻辑，保证「组级共用同一个 now」的行为不变。
+/// 把媒体挂到组内每个 surface，并回 ack。
+/// 视频同步路径与图片 `Ready` 异步路径共用这一份逻辑，保证「组级共用同一个 now」。
 fn attach_media(
     surfaces: &mut HashMap<String, RenderSurface>,
     monitor_ids: &[String],
@@ -90,54 +59,6 @@ fn attach_media(
         let message = format!("组换图时所有原生表面都不存在: {:?}", monitor_ids);
         log::warn!("[Renderer] {}", message);
         send_ack(ack, Err(message));
-    }
-}
-
-/// 关键命令的异步回执：把 renderer 线程内的解码 / surface 失败回传给协调器。
-/// 只用于 EnsureMonitor / SetWallpaper——这两条会真正做 D3D11 资源创建与解码。
-type Ack = oneshot::Sender<Result<(), String>>;
-
-/// 把关键命令的执行结果回传给协调器；ack 为 None（无需回执的命令）时是空操作。
-/// 回执发送失败（接收端已退出）直接忽略：此时渲染线程本就要退出，不应因此 panic。
-fn send_ack(ack: Option<Ack>, result: Result<(), String>) {
-    if let Some(tx) = ack {
-        let _ = tx.send(result);
-    }
-}
-
-/// DirectComposition 是 COM API，renderer thread 必须自己初始化/反初始化 COM。
-struct ComScope {
-    should_uninitialize: bool,
-}
-
-impl ComScope {
-    fn init() -> Self {
-        unsafe {
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            if hr == RPC_E_CHANGED_MODE {
-                log::warn!("[Renderer] COM 已由其它并发模型初始化，跳过 CoUninitialize");
-                return Self {
-                    should_uninitialize: false,
-                };
-            }
-            if hr.0 < 0 {
-                log::error!("[Renderer] CoInitializeEx 失败: 0x{:08X}", hr.0 as u32);
-                return Self {
-                    should_uninitialize: false,
-                };
-            }
-            Self {
-                should_uninitialize: true,
-            }
-        }
-    }
-}
-
-impl Drop for ComScope {
-    fn drop(&mut self) {
-        if self.should_uninitialize {
-            unsafe { CoUninitialize() };
-        }
     }
 }
 
@@ -198,12 +119,13 @@ pub struct DesktopRenderer {
 
 impl DesktopRenderer {
     /// 启动名为 wallpaper-renderer 的单一渲染线程；COM / MF / D3D11 都在该线程内初始化。
-    /// `app_handle` 仅用于设备丢失时直接上报 renderer-error 给前端（无需反向通道）。
-    pub fn start(app_handle: tauri::AppHandle) -> Result<Self> {
+    /// `on_device_lost` 由上层注入：线程只做本机 GPU 资源清理，前端事件与
+    /// WebView 窗口清理交给上层，避免本层反向依赖 Tauri / AppContext。
+    pub fn start(on_device_lost: DeviceLostHandler) -> Result<Self> {
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("wallpaper-renderer".to_string())
-            .spawn(move || run(receiver, app_handle))?;
+            .spawn(move || run(receiver, on_device_lost))?;
 
         Ok(Self {
             sender,
@@ -322,7 +244,7 @@ impl Drop for DesktopRenderer {
 /// 单次 tick：排空 command → 泵 WM_QUIT → 裁决视频暂停 / 音频资格 →
 /// 推进组级视频时钟与共享帧 → 逐 surface 绘制并结束 fade → 睡眠一帧。
 /// 暂停时跳过绘制但保留 surface 与内容，恢复后无需重新解码。
-fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
+fn run(receiver: Receiver<RendererCommand>, on_device_lost: DeviceLostHandler) {
     let _com = ComScope::init();
 
     // Media Foundation 的 SourceReader 依赖 MF 平台已启动；失败时图片链路照常工作，
@@ -349,17 +271,9 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
     });
 
     let mut surfaces: HashMap<String, RenderSurface> = HashMap::new();
-    // 同一张图会因「首次双下发 / 同步模式逐屏下发 / A→B→A 回切」多次到达，
-    // 缓存整条解码 + 纹理上传链。命中时连 started_at 一起复用：动图回切会接着播，
-    // 组内所有 surface 也因此始终持有同一个帧时钟，不会出现跨屏错帧。
-    let mut frame_cache = FrameCache::<SharedFrames>::with_default_budget();
-    // 一次性图片解码 worker 的结果回收通道；worker 只借用 device clone，完成后即退出。
-    let (decode_tx, decode_rx) = mpsc::channel::<DecodeResult>();
-    let mut pending_decodes: HashMap<u64, PendingDecode> = HashMap::new();
-    // cache key → 在途 generation：同 key 的重复命令合并到同一次解码，
-    // 避免「首次双下发」时把同一张图解两遍。
-    let mut inflight_by_key: HashMap<CacheKey, u64> = HashMap::new();
-    let mut next_generation = 0u64;
+    // 图片解码的调度 / 去重 / 过期 / 回收统一由 ImageDecodeQueue 管理；
+    // renderer 只负责请求解码、把 Ready 挂屏、以及在状态变化时让它作废旧结果。
+    let mut image_decodes = ImageDecodeQueue::new();
     let mut running = true;
     // 全屏暂停标志：只冻结时钟 / 音频，不销毁内容；与 fade 暂停按 reason 各自独立。
     let mut paused = false;
@@ -397,8 +311,8 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                     }
                 }
                 RendererCommand::DestroyMonitor { monitor_id } => {
-                    // 该屏已销毁，任何在途解码结果挂上去都没有意义；generation 递增让它过期。
-                    next_generation += 1;
+                    // 该屏已销毁，任何在途解码结果挂上去都没有意义。
+                    image_decodes.invalidate();
                     if let Some(mut surface) = surfaces.remove(&monitor_id) {
                         surface.destroy();
                     }
@@ -413,12 +327,9 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                     crossfade,
                     ack,
                 } => {
-                    // 每条换图命令递增 generation：连点 / 清屏 / 销毁显示器时，
-                    // 让所有更早发出的在途解码结果自动过期（见结果回收处）。
-                    next_generation += 1;
-                    let generation = next_generation;
-
                     if kind == WallpaperKind::Video {
+                        // 切到视频时让所有在途图片解码过期，避免迟到的帧盖回视频。
+                        image_decodes.invalidate();
                         // 视频仍走同步流式打开：首帧等待是有意设计，保证 attach 时已可绘制。
                         let identity = VideoIdentity::from_path(&path);
                         let result =
@@ -453,44 +364,8 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                         continue;
                     }
 
-                    // 图片：缓存命中直接 attach（复用同一份 Arc 与帧时钟）；
-                    // miss 才 spawn 一次性 worker，渲染线程立即继续下一帧，不冻结旧画面。
-                    let target = Some((target_width, target_height));
-                    let key = cache_key_with_target(&path, target);
-                    if let Some(frames) = key.as_ref().and_then(|key| frame_cache.get(key)) {
-                        attach_media(
-                            &mut surfaces,
-                            &monitor_ids,
-                            WallpaperMedia::Frames(frames),
-                            fit_mode,
-                            crossfade,
-                            Instant::now(),
-                            ack,
-                        );
-                        continue;
-                    }
-
-                    // 同一张图可能连续下发两次（update_wallpaper 与同步窗口各一次），
-                    // 或首屏还没解码完就再次下发：合并到同一次在途解码，避免重复 spawn。
-                    // 多屏 monitor_ids 取并集，所有等待方共享同一份结果。
-                    if let Some(inflight_gen) = key
-                        .as_ref()
-                        .and_then(|key| inflight_by_key.get(key).copied())
-                        .filter(|gen| *gen == next_generation)
-                    {
-                        if let Some(pending) = pending_decodes.get_mut(&inflight_gen) {
-                            for monitor_id in monitor_ids {
-                                if !pending.monitor_ids.contains(&monitor_id) {
-                                    pending.monitor_ids.push(monitor_id);
-                                }
-                            }
-                            if let Some(ack) = ack {
-                                pending.acks.push(ack);
-                            }
-                            continue;
-                        }
-                    }
-
+                    // 图片一律走一次性异步解码；去重 / generation / worker 生命周期
+                    // 全部由 ImageDecodeQueue 管理，这里只取 device 后发起请求。
                     let device = match ensure_shared(&mut shared) {
                         Ok(s) => s.device().clone(),
                         Err(err) => {
@@ -500,28 +375,19 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                             continue;
                         }
                     };
-                    let worker_path = path.clone();
-                    let worker_target = target;
-                    let tx = decode_tx.clone();
-                    let handle = thread::spawn(move || {
-                        let result = image::decode_and_upload(&device, &worker_path, worker_target)
-                            .map_err(|err| format!("{:#}", err));
-                        let _ = tx.send(DecodeResult { generation, result });
-                    });
-                    if let Some(key) = key.clone() {
-                        inflight_by_key.insert(key, generation);
+                    if let Err(err) = image_decodes.request(
+                        &device,
+                        path,
+                        target_width,
+                        target_height,
+                        monitor_ids,
+                        fit_mode,
+                        crossfade,
+                        ack,
+                    ) {
+                        let message = format!("图片解码 worker 启动失败: {:#}", err);
+                        log::error!("[Renderer] {}", message);
                     }
-                    pending_decodes.insert(
-                        generation,
-                        PendingDecode {
-                            key,
-                            monitor_ids,
-                            fit_mode,
-                            crossfade,
-                            acks: ack.into_iter().collect(),
-                            handle,
-                        },
-                    );
                 }
                 RendererCommand::SetGroupGeometry { viewports } => {
                     for (monitor_id, viewport) in viewports {
@@ -540,7 +406,7 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                 }
                 RendererCommand::ClearWallpaper { monitor_id } => {
                     // 清屏后迟到的解码结果不应把壁纸盖回来。
-                    next_generation += 1;
+                    image_decodes.invalidate();
                     if let Some(surface) = surfaces.get_mut(&monitor_id) {
                         surface.clear_wallpaper();
                     }
@@ -580,60 +446,19 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
             }
         }
 
-        // 回收一次性解码结果。只有 generation 仍等于最新值的那份才算数：连点、
-        // 清屏、销毁显示器都会递增 generation 让旧结果过期。过期结果静默丢弃，
-        // ack 回 Ok——它不是解码失败，不该让协调器误报 renderer-error。
-        while let Ok(DecodeResult { generation, result }) = decode_rx.try_recv() {
-            let Some(pending) = pending_decodes.remove(&generation) else {
-                continue;
-            };
-            // worker 已经发回结果，join 只做线程资源回收，不会阻塞。
-            let _ = pending.handle.join();
-            if let Some(key) = pending.key.as_ref() {
-                inflight_by_key.remove(key);
-            }
-
-            if generation != next_generation {
-                log::info!(
-                    "[Renderer] 图片解码结果过期丢弃 generation={} latest={}",
-                    generation,
-                    next_generation
-                );
-                send_acks(pending.acks, Ok(()));
-                continue;
-            }
-
-            match result {
-                Ok(frames) => {
-                    // 帧时钟起点对齐到真正 attach 的时刻，保证 GIF 从第一帧开始、
-                    // 组内所有屏共享同一条时间线；缓存命中路径复用旧 Arc 不进这里。
-                    let now = Instant::now();
-                    let mut frames = frames;
-                    frames.reset_clock(now);
-                    let frames = Arc::new(frames);
-                    if let Some(key) = pending.key {
-                        frame_cache.insert(key, frames.clone());
-                    }
-                    // attach 只回一个 ack：它是「内容已挂载」的语义代表，
-                    // 其余等待方由 send_acks 统一回 Ok。
-                    let mut acks = pending.acks;
-                    let primary = acks.pop();
-                    attach_media(
-                        &mut surfaces,
-                        &pending.monitor_ids,
-                        WallpaperMedia::Frames(frames),
-                        pending.fit_mode,
-                        pending.crossfade,
-                        now,
-                        primary,
-                    );
-                    send_acks(acks, Ok(()));
-                }
-                Err(message) => {
-                    log::error!("[Renderer] {}", message);
-                    send_acks(pending.acks, Err(message));
-                }
-            }
+        // 回收已完成解码并挂屏。队列内部处理过期丢弃与失败回执，
+        // 这里只消费仍有效的 Ready，保持模块不碰 surfaces。
+        for ready in image_decodes.poll() {
+            attach_media(
+                &mut surfaces,
+                &ready.monitor_ids,
+                WallpaperMedia::Frames(ready.frames),
+                ready.fit_mode,
+                ready.crossfade,
+                ready.now,
+                ready.primary_ack,
+            );
+            send_acks(ready.other_acks, Ok(()));
         }
 
         if !pump_messages() {
@@ -700,32 +525,13 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
                 // drop SharedDevice 会连带 drop VideoWorkerHost：其内部 Drop 发
                 // Shutdown 并 join worker，避免失效 device 上的线程残留。
                 shared = None;
-                // 缓存里的 SRV 全部指向失效 device，必须一并丢弃。
-                frame_cache.clear();
                 // 在途解码结果持有的 device clone 也随设备失效，但 worker 是一次性的，
                 // 结果回来后 attach 时 surface 已不存在，会被 attach_media 判为无目标；
-                // 这里主动递增 generation 让它们过期，避免在新 device 上挂旧纹理。
-                next_generation += 1;
-                let payload = RendererErrorPayload {
-                    monitor_id: None,
-                    wallpaper_id: None,
-                    code: RendererErrorCode::DeviceLost.as_str().to_string(),
-                    message: "显卡设备丢失，原生壁纸已清理；下次换图将自动恢复".to_string(),
-                };
-                if let Err(err) = app_handle.typed_emit(&payload) {
-                    log::warn!("[Renderer] DeviceLost 事件发送失败: {}", err);
-                }
-                // M19：WebView2 同样走 GPU 合成，设备丢失时一并释放其壁纸窗口。
-                // 这里在渲染线程内，取 AppContext 只能经 AppHandle 的 state，
-                // 且 unified_manager 是 tokio Mutex，故 spawn 到 async runtime 清理。
-                // 不通知前端：前端显示器参数已降级为只读，窗口销毁后由下一次
-                // ensure_target 命令重建（M20 热插拔事件化后统一处理）。
-                let cleanup_handle = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    let app_ctx = cleanup_handle.state::<crate::ctx::AppContext>();
-                    app_ctx.unified_manager.lock().await.destroy_all();
-                    log::info!("[Renderer] DeviceLost 已清理全部 WebView 壁纸窗口");
-                });
+                // 这里主动作废旧解码结果，避免在新 device 上挂旧纹理。
+                image_decodes.invalidate();
+                // 本机 GPU 资源已清理完毕；前端告警与 WebView 窗口（M19）清理
+                // 由上层回调完成——本层不持有 AppHandle，也不反查 AppContext。
+                on_device_lost();
             }
         }
 
@@ -747,20 +553,10 @@ fn run(receiver: Receiver<RendererCommand>, app_handle: tauri::AppHandle) {
     for (_, mut surface) in surfaces {
         surface.destroy();
     }
-    // 退出时可能还有在途图片解码：先 join 让它们释放 device clone，
-    // 且对等待中的 ack 回 Err，避免协调器永久挂住。
-    for (_, pending) in pending_decodes {
-        let _ = pending.handle.join();
-        send_acks(
-            pending.acks,
-            Err("渲染线程退出，图片解码未完成".to_string()),
-        );
-    }
-    // 所有 SourceReader / worker 已随 surface 释放；先释放 D3D11，再关闭 MF 平台，
-    // 保证 MFStartup / MFShutdown 成对，且不会从工作队列线程调用 shutdown。
-    drop(frame_cache);
-    drop(decode_tx);
-    drop(decode_rx);
+    // 先回收在途图片解码（join + 回 Err），释放其持有的 device clone，
+    // 再释放 D3D11 与 MF 平台，保证顺序正确。
+    image_decodes.shutdown();
+    drop(image_decodes);
     drop(shared);
     if mf_started {
         if let Err(err) = mf_shutdown() {

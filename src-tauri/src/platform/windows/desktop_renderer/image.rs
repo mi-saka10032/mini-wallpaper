@@ -2,8 +2,8 @@
 //!
 //! 与 video.rs 的常驻 worker 不同：图片解码是一次性 CPU 密集工作（`image::open`
 //! 4K 约 75ms），放在渲染线程会冻结整组 surface。这里把它拆成一个纯函数，由
-//! renderer 在 cache miss 时 spawn 一次性线程调用，完成后线程即退出、device clone
-//! 随之释放；FrameCache 仍独占在渲染线程，命中时根本不进这里。
+//! renderer 在每张图片换图时 spawn 一次性线程调用，完成后线程即退出、device clone
+//! 随之释放；渲染线程只做结果回收与 attach。
 //!
 //! 不做 COM 初始化：本函数只用 D3D11 device 的 CreateTexture2D / CreateShaderResourceView
 //! 与纯 CPU 解码，二者都不依赖 COM apartment（video worker 同样未初始化）。

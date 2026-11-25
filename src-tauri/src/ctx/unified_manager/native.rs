@@ -51,7 +51,8 @@ use crate::services::{app_setting_service, monitor_config_service, wallpaper_ser
 impl UnifiedWallpaperManager {
     // ==================== 公共入口 ====================
 
-    /// 从 app_setting 读取 display_mode；启动时与设置变更后各调用一次。
+    /// 从 app_setting 读取 display_mode；仅启动时由 `UnifiedWallpaperManager::new` 调用一次。
+    /// 设置变更后的模式切换走 reconcile → `set_display_mode`，不经过这里。
     pub async fn refresh_display_mode(&mut self) {
         let mode = match app_setting_service::get(&self.db, setting_keys::DISPLAY_MODE).await {
             Ok(Some(value)) => DisplayMode::parse(&value).unwrap_or(DisplayMode::Independent),
@@ -641,21 +642,22 @@ impl UnifiedWallpaperManager {
     ///
     /// Native 命令的 oneshot 回执把渲染线程失败回传为 `Err`，在这里转成前端事件；
     /// 事件发送本身失败只记日志——渲染链路已失败，不应因通知失败再改变控制流。
+    /// 实际 emit 委托给 `errors::emit_renderer_error`，与设备丢失回调共用一条出口。
     fn report_error(
         &self,
         monitor_id: Option<&str>,
         wallpaper_id: Option<i32>,
         error: &RendererError,
     ) {
-        let payload = RendererErrorPayload {
-            monitor_id: monitor_id.map(str::to_string),
-            wallpaper_id,
-            code: error.code.as_str().to_string(),
-            message: error.message.clone(),
-        };
-        if let Err(e) = self.app_handle.typed_emit(&payload) {
-            log::warn!("[RenderCoordinator] renderer-error 事件发送失败: {}", e);
-        }
+        super::errors::emit_renderer_error(
+            &self.app_handle,
+            RendererErrorPayload {
+                monitor_id: monitor_id.map(str::to_string),
+                wallpaper_id,
+                code: error.code.as_str().to_string(),
+                message: error.message.clone(),
+            },
+        );
     }
 }
 

@@ -907,6 +907,41 @@ impl VideoSession {
             return Err(anyhow::anyhow!("视频尺寸无效 {}x{}", width, height));
         }
 
+        // 颜色标准诊断：当前 shader 固定用 BT.601 + limited range，这里主动输出
+        // 视频流声明的 matrix / range，便于确认实机素材是否真的存在标准差异，
+        // 以及如果启用动态切换会选哪套系数。日志不影响任何渲染行为。
+        let matrix = unsafe { media_type.GetUINT32(&MF_MT_YUV_MATRIX) }
+            .map(|v| v as i32)
+            .unwrap_or(i32::MAX);
+        let nominal = unsafe { media_type.GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE) }
+            .map(|v| v as i32)
+            .unwrap_or(i32::MAX);
+        let matrix_name = match matrix {
+            1 => "BT.709",
+            2 => "BT.601",
+            3 => "SMPTE240M",
+            4 | 5 => "BT.2020",
+            i32::MAX => "缺失",
+            _ => "未知",
+        };
+        let range_name = match nominal {
+            1 => "full",
+            2 => "limited",
+            _ => "未声明",
+        };
+        // 若启用动态切换：有明确元数据用它，否则按分辨率启发式（>=720 行默认 709）。
+        let would_pick = if matrix == 1 || matrix == 2 {
+            matrix_name
+        } else if height >= 720 {
+            "BT.709(按分辨率猜)"
+        } else {
+            "BT.601(按分辨率猜)"
+        };
+        log::info!(
+            "[VideoHw] session={} 颜色标准诊断 {}x{} matrix={}({}) range={}({}) | 当前shader=BT.601/limited(固定) 若启用切换={}",
+            id, width, height, matrix, matrix_name, nominal, range_name, would_pick
+        );
+
         let presentation_duration = read_presentation_duration(&reader).unwrap_or(Duration::ZERO);
         if presentation_duration.is_zero() {
             log::warn!(

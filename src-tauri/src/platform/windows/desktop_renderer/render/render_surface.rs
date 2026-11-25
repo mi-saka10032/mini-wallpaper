@@ -25,8 +25,9 @@ use windows::Win32::Graphics::Dxgi::{IDXGISwapChain1, DXGI_PRESENT, DXGI_SWAP_CH
 use super::composition::create_composition_swap_chain;
 use super::pipeline::{FadeConstants, QuadPipeline, Vertex};
 use super::shared_device::SharedDevice;
+use crate::platform::wallpaper_renderer::fit::{fit_rect, FitRect};
 use crate::platform::wallpaper_renderer::{
-    crossfade_progress, fit_rect, ExtendViewport, FitMode, FitRect, MonitorRect, CROSSFADE_DURATION,
+    crossfade_progress, ExtendViewport, FitMode, MonitorRect, CROSSFADE_DURATION,
 };
 use crate::platform::windows::desktop_embedder::EmbedPolicy;
 use crate::platform::windows::desktop_renderer::decode::SharedFrames;

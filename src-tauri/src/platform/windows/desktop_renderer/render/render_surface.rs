@@ -481,6 +481,7 @@ impl RenderSurface {
         let uv_view = current.uv_view.clone();
         let frame_width = current.width;
         let frame_height = current.height;
+        let yuv = current.yuv;
 
         let pipeline = &self.pipeline;
         let vertex_buffers = [Some(pipeline.vertex_buffer.clone())];
@@ -529,7 +530,9 @@ impl RenderSurface {
         };
         let fade = FadeConstants {
             alpha,
-            pad: [0.0; 3],
+            _pad0: [0.0; 3],
+            yuv0: [yuv.y_offset, yuv.y_scale, yuv.r_v, yuv.g_u],
+            yuv1: [yuv.g_v, yuv.b_u, 0.0, 0.0],
         };
 
         unsafe {

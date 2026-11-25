@@ -9,7 +9,7 @@ mod image;
 mod video;
 
 pub(crate) use audio::AudioPlayback;
-pub(crate) use frames::{GpuFrame, SharedFrames};
+pub(crate) use frames::{GpuFrame, SharedFrames, YuvCoeffs};
 pub(crate) use image::{decode_and_upload, ImageDecodeQueue, Ready};
 pub(crate) use video::{
     mf_shutdown, mf_startup, VideoFrameSnapshot, VideoIdentity, VideoPlayback, VideoWorkerHost,

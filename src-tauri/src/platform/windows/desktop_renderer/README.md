@@ -165,37 +165,44 @@ composition 的 `SetRoot` / `Commit` 只是这三者的胶水，跟着它们走�
 
 ---
 
-## 优化待办：按视频编码标准切换 YUV→RGB 矩阵
+## 已实施：按视频编码标准切换 YUV→RGB 矩阵
 
-**状态**：待办，架构重组完成后单独处理。本轮（三层目录拆分）不实施。
+**状态**：已实施（2026-11-26），未提交。
 
-### 问题
+### 问题与实测
 
-`render/pipeline.rs:64` 的 `ps_nv12` 写死 **BT.601 + limited range** 系数（BT.601 权重 `0.299/0.587/0.114` 经 `255/219`、`255/224` 缩放）。但矩阵由**视频文件**决定，不是显示器：720p/1080p 多标 BT.709，4K/8K 可能是 BT.2020，录屏可能是 full range。用错矩阵产生色度偏移（灰度不变、肤色差 6~9/255、高饱和色差 15~39/255），非几何失真，壁纸场景影响有限但真实存在。
+`ps_nv12` 原先写死 BT.601 + limited range。但矩阵由**视频文件**决定：720p/1080p 多标 BT.709，4K 可能 BT.2020，录屏可能 full range。用错产生色度偏移（灰度不变、肤色差 6~9/255、高饱和色差 15~39/255）。
 
-D3D11 `VideoProcessorBlt` 输入输出均为 NV12（同格式缩放，不做 YUV→RGB），因此矩阵转换 100% 发生在 `ps_nv12`——这正是需要修的位置。
+实机验证（诊断日志）：用户保存的 2K 壁纸 `MF_MT_YUV_MATRIX` / `MF_MT_VIDEO_NOMINAL_RANGE` **全是 `0x7FFFFFFF`（读取失败）**——素材不带这两个属性。所以判定策略必须是"元数据优先 + 分辨率兜底"，不能只依赖元数据。
 
-### 已有基础设施
+### 策略（元数据优先，分辨率兜底）
 
-`decode/video/worker.rs:1103-1105` 的 `media_type_diag()` 已在读取但**仅用于日志**：
+| 输入 | 判定 |
+|---|---|
+| `MF_MT_YUV_MATRIX == 1` (BT.709) | bt709 = true（元数据） |
+| `MF_MT_YUV_MATRIX == 2` (BT.601) | bt709 = false（元数据） |
+| 缺失 / Unknown / SMPTE240M / BT.2020 | `height >= 720` → 709，否则 601（分辨率兜底） |
+| `MF_MT_VIDEO_NOMINAL_RANGE == 1` (full) | limited = false |
+| 其它（含缺失） | limited = true |
 
-- `MF_MT_YUV_MATRIX`（`:1103`）
-- `MF_MT_VIDEO_NOMINAL_RANGE`（`:1105`）
+**2K 起步的素材必定走 709**：要么元数据明确给 709，要么缺失时按 height 兜底到 709。BT.2020 暂归到 709 系数（色域不同但比 601 更近），将来可加专用变体。
 
-### 落点（按当前三层结构）
+### 方案：单一 shader + cbuffer 传系数
 
-| 层 | 文件 / 位置 | 改动 |
+4 组合（601/709 × limited/full）若做 shader 变体需 4 个 ps + 4 个字段；cbuffer 方案只扩一个已有 buffer：
+
+| 层 | 位置 | 改动 |
 |---|---|---|
-| decode | `video/worker.rs` 的 `media_type_diag` / `SharedFrameInfo` | 读 matrix + range（从仅日志改为驱动行为），经 `SharedFrameInfo` 传给 renderer |
-| render | `pipeline.rs` 的 `SHADER_SOURCE` | 新增 `ps_nv12_709`（BT.709 权重 `0.2126/0.7152/0.0722`）；range 用 cbuffer 参数或再拆变体 |
-| render | `render_surface.rs::draw_media` | 按帧携带的 matrix 选 pixel shader（当前判据是 `views[1].is_some()`，需扩展） |
+| decode | `frames.rs::YuvCoeffs` | 从 Kr/Kb 权重推导系数（601/709 × limited/full），`new(bt709, limited)` |
+| decode | `video/worker.rs::VideoSession::new` | 读元数据 + 分辨率兜底判定，系数经 `SharedFrameInfo` → `VideoFrameSource` → `VideoFrameSnapshot` 传到 renderer，无新增通道 |
+| render | `pipeline.rs::SHADER_SOURCE` | `cbuffer Fade` 从 16 扩到 48 字节（3 个 float4）；`ps_nv12` 用 cbuffer 系数替代硬编码 601 |
+| render | `render_surface.rs::draw_media` | 从帧快照取系数写 `yuv0` / `yuv1` |
 
-缺失元数据时按分辨率猜：`< 720` 行默认 601，`≥ 720` 行默认 709（ffmpeg/mpv/浏览器通行启发式）；无法判断维持 601。
+图片帧的 `VideoFrameSnapshot.yuv` 填 Default（BT.601 limited），但 `ps_main` 只读 `fade_alpha`，不受影响。
 
-### 不推荐的方案
+### 内存影响
 
-- 只改 shader 常量 → 把偏色换到另一边
-- 让 `VideoProcessorBlt` 输出 RGBA → staging 从 NV12 变 BGRA8，显存涨约 60%
+零。601/709 只是 6 个 float 系数的差异，不改纹理格式/尺寸/数量；cbuffer 从 16→48 字节多 32 字节，shader 仍是同一套。
 
 量化数据与历史背景见 `docs/NATIVE_RENDERER_ARCHITECTURE_REVIEW.md` §12。
 

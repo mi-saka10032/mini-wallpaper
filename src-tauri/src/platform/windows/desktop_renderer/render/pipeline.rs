@@ -44,17 +44,21 @@ VS_OUT vs_main(VS_IN input) {
 Texture2D wallpaper : register(t0);
 SamplerState linear_sampler : register(s0);
 
+// 一次绑定服务两个像素着色器：fade_alpha 供 ps_main / ps_nv12 混合，
+// 其余 5 个 float 供 ps_nv12 做 YUV→RGB（系数由视频元数据推导）。
+// 三个 float4 槽位共 48 字节，与 Rust 侧 FadeConstants 对齐。
 cbuffer Fade : register(b0) {
-    float fade_alpha;
-    float3 _pad;
+    float4 fade_params;   // x = fade_alpha，yzw 保留
+    float4 yuv_params;    // x = y_offset, y = y_scale, z = r_v, w = g_u
+    float4 yuv_params2;   // x = g_v, y = b_u, zw 保留
 };
 
 float4 ps_main(VS_OUT input) : SV_TARGET {
     float4 color = wallpaper.Sample(linear_sampler, input.uv);
     // swapchain 声明为 premultiplied alpha，输出必须预乘；否则两 pass 混合会
     // 把 RT 的 alpha 拉到 <1，桌面合成阶段整屏变暗。
-    color.rgb *= fade_alpha;
-    color.a = fade_alpha;
+    color.rgb *= fade_params.x;
+    color.a = fade_params.x;
     return color;
 }
 
@@ -62,13 +66,14 @@ Texture2D y_plane : register(t0);
 Texture2D uv_plane : register(t1);
 
 float4 ps_nv12(VS_OUT input) : SV_TARGET {
-    // BT.601 limited-range NV12 → RGB，全部在 GPU 侧完成，避免 CPU 逐像素转换。
-    float y = saturate((y_plane.Sample(linear_sampler, input.uv).r - 16.0 / 255.0) * 1.164383);
+    // NV12 → RGB，系数由视频流的颜色矩阵 / range 经 cbuffer 传入，
+    // 全部在 GPU 侧完成，避免 CPU 逐像素转换。
+    float y = saturate((y_plane.Sample(linear_sampler, input.uv).r - yuv_params.x) * yuv_params.y);
     float2 uv = uv_plane.Sample(linear_sampler, input.uv).rg - 0.5;
-    float r = saturate(y + 1.596027 * uv.y);
-    float g = saturate(y - 0.391762 * uv.x - 0.812968 * uv.y);
-    float b = saturate(y + 2.017232 * uv.x);
-    return float4(float3(r, g, b) * fade_alpha, fade_alpha);
+    float r = saturate(y + yuv_params.z * uv.y);
+    float g = saturate(y - yuv_params.w * uv.x - yuv_params2.x * uv.y);
+    float b = saturate(y + yuv_params2.y * uv.x);
+    return float4(float3(r, g, b) * fade_params.x, fade_params.x);
 }
 "#;
 
@@ -83,15 +88,18 @@ pub(super) struct Vertex {
     texcoord: [f32; 2],
 }
 
-/// cbuffer 最小分配粒度是 16 bytes，单 float 必须补齐。
+/// 与 HLSL `cbuffer Fade` 逐字节对齐（3 个 float4 = 48 字节）。
 ///
-/// `pad` 不是为了内存对齐（f32 自身 4 字节对齐已足够），而是为了匹配 GPU 侧
-/// cbuffer 的 16 字节槽位规则；HLSL 里对应的 `float3 _pad` 使两边布局显式一致。
-/// 写入时只更新 `alpha`，三个 pad 保持 0。
+/// 原来只有 fade_alpha + 3 个 pad；现在复用空闲槽位承载 YUV→RGB 系数，
+/// 避免为颜色标准再开一个 cbuffer 或编译 4 个 shader 变体。
 #[repr(C)]
 pub(super) struct FadeConstants {
     pub(super) alpha: f32,
-    pub(super) pad: [f32; 3],
+    pub(super) _pad0: [f32; 3],
+    /// y_offset, y_scale, r_v, g_u
+    pub(super) yuv0: [f32; 4],
+    /// g_v, b_u, 0, 0
+    pub(super) yuv1: [f32; 4],
 }
 
 /// 铺满 NDC 视口（x/y ∈ [-1,1]）的四个顶点；纹理坐标上下翻转，
@@ -123,7 +131,7 @@ pub(super) struct QuadPipeline {
     pub(super) vertex_shader: ID3D11VertexShader,
     /// 图片像素着色器 `ps_main`：单张 BGRA 纹理采样 × fade_alpha。
     pub(super) pixel_shader: ID3D11PixelShader,
-    /// 视频像素着色器 `ps_nv12`：Y/UV 双平面采样 + BT.601 转 RGB × fade_alpha。
+    /// 视频像素着色器 `ps_nv12`：Y/UV 双平面采样 + cbuffer 系数转 RGB × fade_alpha。
     pub(super) nv12_pixel_shader: ID3D11PixelShader,
     /// 光栅化状态：关背面剔除（TRIANGLESTRIP 绕序与默认正面相反）、实心填充。
     pub(super) rasterizer_state: ID3D11RasterizerState,
@@ -135,7 +143,7 @@ pub(super) struct QuadPipeline {
     pub(super) sampler: ID3D11SamplerState,
     /// 混合状态：ONE / INV_SRC_ALPHA，实现预乘 alpha 的两 pass crossfade。
     pub(super) blend_state: ID3D11BlendState,
-    /// 常量缓冲：只放 fade_alpha（补齐到 16 字节），绑定在 b0 驱动两个像素着色器。
+    /// 常量缓冲：fade_alpha + YUV→RGB 系数（3 个 float4），绑定在 b0 驱动两个像素着色器。
     pub(super) fade_buffer: ID3D11Buffer,
 }
 

@@ -626,7 +626,7 @@ independent 多视频串行解码
 | Worker 线程真正退出 / 按需重启 | 暂缓；session 关闭释放 GPU 已覆盖主要收益 |
 | 音频链路加载失败修复 | 已完成：`bec0b9e`，有音轨视频实机有声 |
 | 合并前 squash 测试分支 | 已完成：2026-11-22 在本分支 squash 试错提交并 force push，未单独切干净分支 |
-| `ps_nv12` 动态颜色矩阵 / range | 待办：架构优化后处理，详见 §12 |
+| `ps_nv12` 动态颜色矩阵 / range | 已实施（2026-11-26，未提交）：元数据优先 + 分辨率兜底 + cbuffer 传系数，详见 §12 |
 
 ---
 
@@ -752,7 +752,7 @@ main 进程账面降低 → 子进程隔离仍不推荐
 
 ---
 
-## 12. 架构优化后待办：`ps_nv12` 动态颜色矩阵与 range
+## 12. `ps_nv12` 动态颜色矩阵与 range（2026-11-26 已实施）
 
 ### 背景
 
@@ -772,7 +772,7 @@ main 进程账面降低 → 子进程隔离仍不推荐
 
 D3D11 `VideoProcessorBlt` 的输入/输出均为 NV12，同格式缩放、不做 YUV→RGB，因此矩阵转换 100% 发生在 `ps_nv12` —— 这正是需要修的位置。
 
-> 三层目录重组后，按当前结构描述的落点见 `src-tauri/src/platform/windows/desktop_renderer/README.md` 的「优化待办」章节（decode 读元数据 → render 加 shader 变体 → draw_media 选择）。
+> 实施细节见 `src-tauri/src/platform/windows/desktop_renderer/README.md` 的「已实施」章节。
 
 ### 影响评估（量化）
 
@@ -787,16 +787,19 @@ D3D11 `VideoProcessorBlt` 的输入/输出均为 NV12，同格式缩放、不做
 
 规律：灰度不受影响、肤色偏差小、高饱和色偏差约 10~15%。属**色度偏移，非几何失真**，壁纸场景（人物/风景为主）影响有限。
 
-### 建议方案（不在本轮实施）
+### 实施方案（2026-11-26）
 
-按优先级：
+实机诊断发现用户 2K 壁纸的 `MF_MT_YUV_MATRIX` / `MF_MT_VIDEO_NOMINAL_RANGE` 全为读取失败（`0x7FFFFFFF`），所以采用**元数据优先 + 分辨率兜底**：
 
-1. **贯通元数据**：把 `{ matrix, range }` 从 worker 的 media type 经 `SharedFrameInfo` 传到 renderer，替换当前仅日志的用途
-2. **shader 变体**：新增 `ps_nv12_709`（BT.709 权重 `Kr=0.2126, Kg=0.7152, Kb=0.0722`），按 matrix 选；range 用 cbuffer 参数或再拆变体
-3. **缺失元数据时按分辨率猜**：< 720 行默认 601，≥ 720 行默认 709（ffmpeg/mpv/浏览器通行启发式）；无法判断时维持 601
+1. matrix=1/2 用元数据；缺失/Unknown/2020 按 `height >= 720` → 709，否则 601（2K 素材必定 709）
+2. range=1 用 full；其余（含缺失）按 limited
+3. 单一 shader + cbuffer 传系数（非 shader 变体）：`YuvCoeffs` 从 Kr/Kb 推导，`cbuffer Fade` 从 16 扩到 48 字节，`ps_nv12` 用参数化系数
+4. 系数经 `SharedFrameInfo` → `VideoFrameSource` → `VideoFrameSnapshot` 传到 renderer，无新增通道
+
+详见 `src-tauri/src/platform/windows/desktop_renderer/README.md`「已实施」章节。
 
 不建议只改 shader 常量（会把偏色换到另一边），也不建议让 `VideoProcessorBlt` 输出 RGBA（staging 纹理从 NV12 变 BGRA8，显存涨约 60%）。
 
-### 范围声明
+### 实施记录
 
-本轮（2026-11-25）**不实施**该项。本轮范围仅限：文件模块拆分（如 `surface.rs` → `surface/` 六模块）、逻辑解耦（AppContext 去双重 Arc、renderer 解耦 Tauri、图片解码调度抽 `ImageDecodeQueue`）、注释补充与既有去重 bug 修复。颜色矩阵属于画质优化，与结构解耦无关，留待架构稳定后单独处理。
+2026-11-25 评审时列为待办（当时只做结构解耦）。2026-11-26 完成三层重组、诊断日志实机验证后实施。

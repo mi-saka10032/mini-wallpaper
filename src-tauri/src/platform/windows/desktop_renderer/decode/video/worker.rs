@@ -56,6 +56,7 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToUInt64};
 
 use super::super::audio::AudioPlayback;
+use super::super::frames::YuvCoeffs;
 
 pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("Media Foundation 初始化失败")
@@ -98,6 +99,8 @@ pub struct VideoFrameSnapshot {
     pub uv_view: Option<ID3D11ShaderResourceView>,
     pub width: u32,
     pub height: u32,
+    /// NV12 → RGB 系数；图片帧不用，填 default 不影响 ps_main。
+    pub yuv: YuvCoeffs,
 }
 
 impl VideoFrameSnapshot {
@@ -107,6 +110,7 @@ impl VideoFrameSnapshot {
             uv_view: None,
             width,
             height,
+            yuv: YuvCoeffs::default(),
         }
     }
 }
@@ -123,6 +127,8 @@ struct VideoFrameSource {
     local_uv_view: ID3D11ShaderResourceView,
     width: u32,
     height: u32,
+    /// 颜色矩阵 / range 推导的系数，来自视频流元数据或分辨率兜底。
+    yuv: YuvCoeffs,
 }
 
 /// worker 写、renderer 克隆读的跨线程快照。用 Mutex 只为安全传递，帧同步不靠它，
@@ -149,6 +155,8 @@ struct SharedFrameInfo {
     handle: isize,
     width: u32,
     height: u32,
+    /// 从颜色标准推导的 NV12 → RGB 系数。
+    yuv: YuvCoeffs,
 }
 
 /// renderer → 全局 worker 的控制命令。所有命令都在 worker 线程串行消费，
@@ -480,6 +488,7 @@ impl VideoPlayback {
             uv_view: Some(frame.local_uv_view.clone()),
             width: frame.width,
             height: frame.height,
+            yuv: frame.yuv,
         })
     }
 }
@@ -556,6 +565,7 @@ fn open_shared_frame(device: &ID3D11Device, info: &SharedFrameInfo) -> Result<Vi
     let local_uv_view = plane_view(DXGI_FORMAT_R8G8_UNORM)?;
 
     Ok(VideoFrameSource {
+        yuv: info.yuv,
         shared_texture,
         keyed_mutex,
         local_texture,
@@ -826,6 +836,8 @@ struct VideoSession {
     processor: Option<ID3D11VideoProcessor>,
     shared_texture: Option<ID3D11Texture2D>,
     shared_info: Option<SharedFrameInfo>,
+    /// 颜色标准推导系数，经 SharedFrameInfo 传给 renderer。
+    yuv: YuvCoeffs,
     output_view: Option<ID3D11VideoProcessorOutputView>,
     width: u32,
     height: u32,
@@ -907,9 +919,8 @@ impl VideoSession {
             return Err(anyhow::anyhow!("视频尺寸无效 {}x{}", width, height));
         }
 
-        // 颜色标准诊断：当前 shader 固定用 BT.601 + limited range，这里主动输出
-        // 视频流声明的 matrix / range，便于确认实机素材是否真的存在标准差异，
-        // 以及如果启用动态切换会选哪套系数。日志不影响任何渲染行为。
+        // 颜色标准判定：元数据优先，缺失时按分辨率兜底（>=720 行按 BT.709）。
+        // 用户素材（2K 起步）普遍缺失元数据，兜底路径让它们正确按 BT.709 解码。
         let matrix = unsafe { media_type.GetUINT32(&MF_MT_YUV_MATRIX) }
             .map(|v| v as i32)
             .unwrap_or(i32::MAX);
@@ -924,22 +935,22 @@ impl VideoSession {
             i32::MAX => "缺失",
             _ => "未知",
         };
-        let range_name = match nominal {
-            1 => "full",
-            2 => "limited",
-            _ => "未声明",
+        // 元数据明确给 601/709 就尊重它；其余（缺失/Unknown/240M/2020）按分辨率猜。
+        // 2020 暂归到 709 系数（色域不同但不比 601 更近），将来可加专用变体。
+        let bt709 = match matrix {
+            1 => true,
+            2 => false,
+            _ => height >= 720,
         };
-        // 若启用动态切换：有明确元数据用它，否则按分辨率启发式（>=720 行默认 709）。
-        let would_pick = if matrix == 1 || matrix == 2 {
-            matrix_name
-        } else if height >= 720 {
-            "BT.709(按分辨率猜)"
-        } else {
-            "BT.601(按分辨率猜)"
-        };
+        // MFVideoNominalRange: 1=Full, 2=Limited；其余（含缺失）按 limited。
+        let limited = nominal != 1;
+        let yuv = YuvCoeffs::new(bt709, limited);
         log::info!(
-            "[VideoHw] session={} 颜色标准诊断 {}x{} matrix={}({}) range={}({}) | 当前shader=BT.601/limited(固定) 若启用切换={}",
-            id, width, height, matrix, matrix_name, nominal, range_name, would_pick
+            "[VideoHw] session={} 颜色标准 {}x{} matrix={}({}) range={}({}) -> bt709={} limited={} ({}来源)",
+            id, width, height, matrix, matrix_name, nominal,
+            if nominal == 1 { "full" } else if nominal == 2 { "limited" } else { "未声明→limited" },
+            bt709, limited,
+            if matrix == 1 || matrix == 2 { "元数据" } else { "分辨率兜底" }
         );
 
         let presentation_duration = read_presentation_duration(&reader).unwrap_or(Duration::ZERO);
@@ -979,6 +990,7 @@ impl VideoSession {
             stage_logged: false,
             blt_error_logged: false,
             decoder_desc_logged: false,
+            yuv,
         };
         session.ensure_output(width, height)?;
         Ok(session)
@@ -1088,6 +1100,7 @@ impl VideoSession {
             handle,
             width,
             height,
+            yuv: self.yuv,
         });
         self.enumerator = Some(enumerator);
         self.processor = Some(processor);

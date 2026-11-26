@@ -420,7 +420,7 @@ VideoPlayback::open
 renderer loop 每帧
   → advance_videos：按 Arc 指针去重，同一播放状态只 advance 一次
   → 按 started_at / paused_total 算视频时间，逐帧 ReadSample + UpdateSubresource
-  → EOF：Flush + SetCurrentPosition(0) 循环，cycle_base 保持时间戳单调
+  → EOF：Flush + SetCurrentPosition(0) 回绕，墙钟与帧时间戳同时归零（每圈独立计时）
   → surface.render：读当前 SRV，与图片共用同一套 quad / fit / viewport
 ```
 
@@ -688,10 +688,11 @@ N 个 video session
   - 再 `ReleaseSync(1)` 给 renderer；
   - staging texture 先按 session 私有、后按 WorkerGpu 内 `(width, height)` 复用，最终随 session 独立 GPU 生命周期释放。
 - 循环 pacing：
-  - 读取 `MF_PD_DURATION` 作为真实 `loop_duration`；
-  - 读不到时用首轮最大 `frame_time + duration` 推断；
-  - `reset()` 和 EOF 同步 `SharedState.loop_duration`；
-  - EOF 推进完整 `cycle_base`，消除高倍速。
+  - `MF_PD_DURATION` 只作容器时长兜底，一圈长度由本圈真实帧结束时间校准；
+  - 每圈 EOF 同时重置 `started` / `paused_total` / `frame_time`，墙钟与帧时间戳同相，
+    D 的估计误差与 EOF/seek 延迟无法跨圈累积（2026-11-26 收敛，替代旧的 `cycle_base` 累加）；
+  - 门控与一圈长度是 `wallpaper_renderer::timing` 的跨平台纯函数，带回归单测；
+  - 只归零 `frame_time` 而 `target` 继续单调会全速追赶，单测里的反例固定住该约束。
 - session 级 GPU 生命周期：
   - 保留一个全局 video worker thread，保证所有 session 串行处理、切换稳定；
   - 删除 worker 级全局 `WorkerGpu`；

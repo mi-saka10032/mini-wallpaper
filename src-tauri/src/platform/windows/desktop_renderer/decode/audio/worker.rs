@@ -158,6 +158,8 @@ impl AudioPlayback {
         }
         self.last_drift_check = now;
 
+        // video_time 已是圈内媒体位置（每圈 EOF 归零）；取模是防御性冗余，
+        // 仅在 container 时长偏小导致位置越界时把它拉回本圈，避免 seek 到无效时间。
         let target = Duration::from_nanos(
             (video_time.as_nanos() % loop_duration.as_nanos()).min(u64::MAX as u128) as u64,
         );

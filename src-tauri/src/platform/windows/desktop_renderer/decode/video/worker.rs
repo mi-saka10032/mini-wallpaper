@@ -57,6 +57,7 @@ use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVaria
 
 use super::super::audio::AudioPlayback;
 use super::super::frames::YuvCoeffs;
+use crate::platform::wallpaper_renderer::timing::{resolve_loop_duration, should_read_next_frame};
 
 pub fn startup() -> Result<()> {
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("Media Foundation 初始化失败")
@@ -135,11 +136,11 @@ struct VideoFrameSource {
 /// 真正的 mutex 在共享纹理的 keyed mutex 上（renderer 不持任何 worker 设备）。
 #[derive(Clone, Default)]
 struct SharedState {
-    /// 当前帧在循环内的时间点，供 renderer 校准音频时钟。
+    /// 当前帧在本圈内的媒体时间点；每圈 EOF 归零，与墙钟 target 同相。
     frame_time: Duration,
     /// 当前帧的真实媒体时长，决定该帧展示多久（pacing 用真实时长而非固定值）。
     frame_duration: Duration,
-    /// 整段视频的循环时长；首圈会被最大帧结束时间修正，避免下圈全速追赶。
+    /// 一圈长度；每圈由真实帧结束时间校准，供音频位置换算。
     loop_duration: Duration,
     /// 每次 reset 自增，renderer 可据此识别时间线已被重置。
     generation: u64,
@@ -841,7 +842,7 @@ struct VideoSession {
     output_view: Option<ID3D11VideoProcessorOutputView>,
     width: u32,
     height: u32,
-    /// 实际用于回绕的循环时长；首圈会被最大帧结束时间修正。
+    /// 一圈长度；每圈 EOF 用真实帧结束时间校准，不再按估计值累加。
     loop_duration: Duration,
     /// 从 MF_PD_DURATION 读到的容器时长，作为 loop_duration 的初始 / reset 基准。
     presentation_duration: Duration,
@@ -850,8 +851,9 @@ struct VideoSession {
     paused_total: Duration,
     /// worker 侧暂停起点；Some 表示暂停中，恢复时累加到 paused_total。
     paused_at: Option<Instant>,
-    /// 已播放循环的时间基准；每圈 EOF 后累加 loop_duration，避免时间戳回绕。
-    cycle_base: Duration,
+    /// 本圈已成功出帧的最大结束时间（timestamp + duration），
+    /// EOF 时作为真实一圈长度，避免容器元数据 / 首帧推断的误差。
+    cycle_last_end: Duration,
     /// Blt 失败时暂存当前 sample，下一 tick 优先重试而不是丢帧。
     pending: Option<DecodedSample>,
     /// 以下四个是“只记一次”的诊断开关，避免高频日志刷屏。
@@ -984,7 +986,7 @@ impl VideoSession {
             started: Instant::now(),
             paused_total: Duration::ZERO,
             paused_at: None,
-            cycle_base: Duration::ZERO,
+            cycle_last_end: Duration::ZERO,
             pending: None,
             first_frame_logged: false,
             stage_logged: false,
@@ -1322,16 +1324,6 @@ impl VideoSession {
         }
     }
 
-    /// 首圈用“当前帧结束时间”修正 loop_duration。若按首帧 ~33ms 推断循环长度，
-    /// 下次 EOF 只推进几十毫秒，墙钟 target 会远超 frame_time，导致全速追赶。
-    fn note_frame(&mut self, frame_time: Duration, duration: Duration, first_cycle: bool) {
-        if first_cycle {
-            // 第一圈持续用最大帧结束时间修正 loop_duration；不能用第一帧的 33ms，
-            // 否则下一次 EOF 只推进几十毫秒，墙钟 target 远大于 frame_time，全速追赶。
-            self.loop_duration = self.loop_duration.max(frame_time.saturating_add(duration));
-        }
-    }
-
     /// Flush 解码器并返回起点，实现循环回退；PROPVARIANT 为 VT_I8 的 0。
     fn seek_zero(&mut self) -> Result<()> {
         let position = seek_zero_position();
@@ -1352,7 +1344,7 @@ impl VideoSession {
         self.started = now;
         self.paused_total = Duration::ZERO;
         self.paused_at = None;
-        self.cycle_base = Duration::ZERO;
+        self.cycle_last_end = Duration::ZERO;
         self.pending = None;
         let mut shared = self.state.lock().unwrap();
         shared.frame_time = Duration::ZERO;
@@ -1389,7 +1381,12 @@ impl VideoSession {
         let target = self.started.elapsed().saturating_sub(self.paused_total);
         {
             let shared = self.state.lock().unwrap();
-            if shared.ready && target < shared.frame_time.saturating_add(shared.frame_duration) {
+            if !should_read_next_frame(
+                target,
+                shared.frame_time,
+                shared.frame_duration,
+                shared.ready,
+            ) {
                 return Ok(false);
             }
         }
@@ -1400,22 +1397,30 @@ impl VideoSession {
             None => match self.read_sample()? {
                 Some(sample) => sample,
                 None => {
-                    // EOF：用真实媒体时长作为一圈长度（首圈未知则暂用 target），
-                    // 累加到 cycle_base 后回绕，避免循环播放时时间戳归零引发跳变。
-                    let completed = if self.loop_duration.is_zero() {
-                        target
-                    } else {
-                        self.loop_duration
-                    };
+                    // 一圈长度优先用本圈真实帧结束时间，容器元数据兜底，最后才是墙钟。
+                    // 不用估计值累加：D 的偏差会随圈数线性放大，让 pacing 门控长期偏斜。
+                    let completed = resolve_loop_duration(
+                        self.cycle_last_end,
+                        self.presentation_duration,
+                        target,
+                    );
                     self.loop_duration = completed;
-                    self.cycle_base = self.cycle_base.saturating_add(completed);
+                    self.cycle_last_end = Duration::ZERO;
+                    self.pending = None;
                     {
                         let mut shared = self.state.lock().unwrap();
-                        shared.frame_time = self.cycle_base;
+                        shared.frame_time = Duration::ZERO;
                         shared.frame_duration = Duration::from_millis(40);
-                        shared.loop_duration = self.loop_duration;
+                        shared.loop_duration = completed;
+                        // ready / generation 不变：无缝续播，renderer 不丢弃当前帧。
                     }
+
                     self.seek_zero()?;
+                    // 墙钟起点与帧时间戳同时归零，误差无法跨圈累积。
+                    // 关键：必须一并重置 started —— 只把 frame_time 归零而 target
+                    // 继续单调，会让所有帧被判 overdue，正是历史「循环后高倍速」的根因。
+                    self.started = Instant::now();
+                    self.paused_total = Duration::ZERO;
                     return Ok(true);
                 }
             },
@@ -1423,8 +1428,11 @@ impl VideoSession {
 
         match self.process_sample(&sample) {
             Ok(true) => {
-                let frame_time = self.cycle_base.saturating_add(sample.timestamp);
-                self.note_frame(frame_time, sample.duration, self.cycle_base.is_zero());
+                // 每圈独立计时：frame_time 就是圈内媒体时间戳，从 0 起。
+                let frame_time = sample.timestamp;
+                self.cycle_last_end = self
+                    .cycle_last_end
+                    .max(frame_time.saturating_add(sample.duration));
                 let mut shared = self.state.lock().unwrap();
                 shared.frame_time = frame_time;
                 shared.frame_duration = sample.duration;

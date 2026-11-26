@@ -65,7 +65,7 @@ WorkerW / Progman / SHELLDLL_DefView 的桌面嵌入层**继续复用** `desktop
 
 | 层 | 位置 | 负责 | 不负责 |
 |----|------|------|--------|
-| **控制面** | `runtime/scheduler`、`services`、`commands`、`RenderCoordinator` | 决定「显示什么」：查库、选壁纸、轮播、fitMode、全屏暂停、backend 决策 | 不碰 HWND / D3D11 / COM |
+| **控制面** | `application`（用例与副作用编排）、`services`、`commands`、`tasks` | 决定「显示什么」：查库、选壁纸、轮播、fitMode、全屏暂停、backend 决策 | 不碰 HWND / D3D11 / COM |
 | **渲染面** | `platform/wallpaper_renderer`、`platform/windows/desktop_renderer` | 决定「怎么画」：解码、纹理上传、swapchain、Present、窗口几何 | **不查 DB、不认识实体、不做业务判断** |
 
 ```mermaid
@@ -962,8 +962,8 @@ src-tauri/src/
 │   └── mod.rs                              AppContext 持有 Arc<Mutex<RenderCoordinator>>
 ├── commands/wallpaper_window.rs            create / destroy / hide / show / active_ids 全改走协调器
 ├── commands/monitor_config.rs              fitMode / 壁纸变更走协调器
-├── runtime/scheduler/deletion_effects.rs   WmNotification → RenderNotification 批量派发
-├── runtime/scheduler/setting_effects.rs    display_mode 变更同步给 coordinator（M5）
+├── application/effects/deletion.rs         删除联动批量派发
+├── application/effects/setting.rs          display_mode 变更同步给 coordinator（M5）
 ├── runtime/tasks/carousel.rs               换图走 coordinator.update_wallpaper
 ├── runtime/tasks/fullscreen_detector.rs    暂停走 coordinator.set_paused
 ├── events.rs                               RendererErrorPayload

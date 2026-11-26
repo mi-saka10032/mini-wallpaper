@@ -10,7 +10,7 @@
 //! ## 设计原则
 //!
 //! - **纯数据**：本文件只定义 Action 枚举本身，不含任何执行逻辑，
-//!   执行交由 `runtime/scheduler/action_dispatch.rs`
+//!   执行交由 `application/effects/action_dispatch.rs`
 //! - **序列化兼容**：使用 `#[serde(tag = "type", rename_all = "camelCase")]`，
 //!   前端约定的载荷形如 `{ "type": "next" }` / `{ "type": "togglePause" }`，
 //!   未来含载荷的动作可平滑扩展为 `{ "type": "setWallpaper", "wallpaperId": 42 }`

@@ -42,6 +42,7 @@ pub fn init(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 /// `tauri dev` 是 debug 构建，日志走控制台，默认 info，可用 `RUST_LOG` 覆盖。
 /// `tauri build` 是 release，启动时创建 `logs/error.log`，只追加 error。
 /// 目录或文件创建失败时退回控制台，不阻止应用启动。
+/// 编译期剔除见 Cargo.toml，这里只负责运行时写入 error.log。
 fn register_logger(app: &tauri::App) -> tauri::Result<()> {
     let is_dev = cfg!(debug_assertions);
 

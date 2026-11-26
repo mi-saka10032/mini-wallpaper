@@ -8,72 +8,17 @@
 //! 天然拥有 `self.app`、`self.tasks` 等内部状态，零参数透传。
 
 use log::{info, warn};
-use tokio::task::JoinHandle;
 
 use super::Scheduler;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::monitor_config;
-use crate::runtime::tasks::carousel::{carousel_key, CarouselTask};
-use crate::runtime::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
-use crate::runtime::tasks::TaskSpawner;
+use crate::tasks::carousel::{carousel_key, CarouselTask};
+use crate::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 // ==================== JoinHandle 生命周期管理 ====================
 
 impl Scheduler {
-    /// 通过 TaskSpawner trait 创建并注册任务
-    ///
-    /// 如果同 key 已存在运行中的任务，会先 abort 旧任务再注册新任务。
-    pub fn spawn(&mut self, key: String, task: impl TaskSpawner) {
-        let handle = task.spawn(&self.app);
-        self.register(key, handle);
-    }
-
-    /// 注册一个已有的 JoinHandle（低层 API，优先使用 `spawn`）
-    ///
-    /// 如果同 key 已存在运行中的任务，会先 abort 旧任务再注册新任务。
-    pub fn register(&mut self, key: String, handle: JoinHandle<()>) {
-        if let Some(old) = self.tasks.remove(&key) {
-            old.abort();
-            info!("[Scheduler] 已停止旧任务: {}", key);
-        }
-        self.tasks.insert(key.clone(), handle);
-        info!("[Scheduler] 已注册任务: {}", key);
-    }
-
-    /// 停止指定 key 的任务
-    pub fn stop(&mut self, key: &str) {
-        if let Some(handle) = self.tasks.remove(key) {
-            handle.abort();
-            info!("[Scheduler] 已停止任务: {}", key);
-        }
-    }
-
-    /// 停止所有任务
-    pub fn stop_all(&mut self) {
-        let count = self.tasks.len();
-        for (key, handle) in self.tasks.drain() {
-            handle.abort();
-            info!("[Scheduler] 已停止任务: {}", key);
-        }
-        info!("[Scheduler] 已停止全部 {} 个任务", count);
-    }
-
-    /// 检查指定 key 是否有运行中的任务
-    pub fn is_running(&self, key: &str) -> bool {
-        self.tasks
-            .get(key)
-            .map(|h| !h.is_finished())
-            .unwrap_or(false)
-    }
-
-    /// 通过 TaskSpawner 重启任务
-    ///
-    /// 语义上等同于 `spawn`（内部已处理旧任务），更明确地表达"重启"意图。
-    pub fn restart(&mut self, key: String, task: impl TaskSpawner) {
-        self.spawn(key, task);
-    }
-
     // ==================== 轮播 / 全屏检测编排 ====================
 
     /// 根据更新后的 config 状态管理轮播定时器

@@ -6,7 +6,7 @@ use super::AppServices;
 use crate::context::unified_manager::ReconcileScope;
 use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
 use crate::entities::monitor_config;
-use crate::runtime::tasks::carousel::carousel_key;
+use crate::tasks::carousel::carousel_key;
 use crate::services::monitor_config_service;
 
 /// 更新显示器配置（同步组由 service 裁决），并统一下发渲染副作用。

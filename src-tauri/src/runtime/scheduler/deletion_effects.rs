@@ -19,7 +19,7 @@ use super::Scheduler;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
-use crate::runtime::tasks::carousel::{carousel_key, CarouselTask};
+use crate::tasks::carousel::{carousel_key, CarouselTask};
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 impl Scheduler {

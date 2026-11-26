@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 
 use super::error::CommandResult;
 

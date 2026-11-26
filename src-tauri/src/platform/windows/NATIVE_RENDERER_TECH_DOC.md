@@ -1,6 +1,6 @@
 # Native Wallpaper Renderer 技术文档
 
-> **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/ctx/render_coordinator.rs`（协调器）
+> **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/context/render_coordinator.rs`（协调器）
 > **最后更新**: 2026-11-22（当前分支已重写为 16 个语义化提交，代码基线 `6f831d5`，文档为最终提交；Native renderer M0~M9 全链路完成；最终采用 session 级 GPU；`OUTPUTHAZARD` / 循环高倍速 / 首帧绿黑屏 / fade 视频与音频回放均已修复；纯图片壁纸 Native 有明确内存优势，视频壁纸 Native 优势在 CPU 与帧同步而非最低内存）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）

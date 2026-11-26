@@ -9,7 +9,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 #[cfg(target_os = "windows")]
-use crate::ctx::unified_manager::{to_render_rect, MonitorSlot};
+use crate::context::unified_manager::{to_render_rect, MonitorSlot};
 #[cfg(target_os = "windows")]
 use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
 #[cfg(target_os = "windows")]
@@ -123,7 +123,7 @@ impl super::UnifiedWallpaperManager {
             }
 
             // —— 阶段 3：一次 reconcile 覆盖本轮全部差异 ——
-            self.reconcile(crate::ctx::unified_manager::ReconcileScope::All)
+            self.reconcile(crate::context::unified_manager::ReconcileScope::All)
                 .await?;
             // viewport 需要在 target 变化后重推；reconcile 内部已按动作推过，
             // 这里补一次保证 slot 几何刚变化的新屏也拿到最新 union。

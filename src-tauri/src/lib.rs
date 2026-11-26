@@ -1,6 +1,6 @@
 mod application;
 mod commands;
-mod ctx;
+mod context;
 mod dto;
 mod entities;
 pub mod events;

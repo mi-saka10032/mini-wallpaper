@@ -10,7 +10,7 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::application::{self, AppServices};
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::dto::monitor_config_dto::{
     DeleteMonitorConfigRequest, GetMonitorConfigRequest, UpsertMonitorConfigRequest,
 };

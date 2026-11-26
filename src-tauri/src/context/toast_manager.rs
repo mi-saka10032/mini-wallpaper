@@ -172,7 +172,7 @@ impl ToastManager {
             // 检查窗口是否仍然存在（可能已被用户手动关闭）
             if app_handle.get_webview_window(&toast_label).is_some() {
                 // 确保 Vec 状态与窗口销毁同步、剩余 Toast 正确重排
-                let ctx = app_handle.state::<crate::ctx::AppContext>();
+                let ctx = app_handle.state::<crate::context::AppContext>();
                 let mut mgr = ctx.toast_manager.lock().await;
                 mgr.close_toast(&toast_label);
             }

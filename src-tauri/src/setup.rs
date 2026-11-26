@@ -4,7 +4,7 @@ use log::warn;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::platform::{global_shortcut, tray::register_tray};
 use crate::runtime::Scheduler;
 

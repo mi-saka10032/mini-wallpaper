@@ -17,7 +17,7 @@ use tauri::Manager;
 use tokio::task::JoinHandle;
 
 use super::TaskSpawner;
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::events::{FullscreenChangedPayload, TypedEmit};
 
 /// 全屏检测定时器在 Scheduler 中的 key

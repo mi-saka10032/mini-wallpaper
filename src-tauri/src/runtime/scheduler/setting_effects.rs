@@ -45,7 +45,7 @@ impl Scheduler {
                 let ctx = self.app_context();
                 let mut guard = ctx.unified_manager.lock().await;
                 if let Err(e) = guard
-                    .reconcile(crate::ctx::unified_manager::ReconcileScope::All)
+                    .reconcile(crate::context::unified_manager::ReconcileScope::All)
                     .await
                 {
                     warn!("[Scheduler] 音量 reconcile 失败: {}", e);
@@ -132,7 +132,7 @@ impl Scheduler {
             let ctx = self.app_context();
             let mut guard = ctx.unified_manager.lock().await;
             if let Err(e) = guard
-                .reconcile(crate::ctx::unified_manager::ReconcileScope::All)
+                .reconcile(crate::context::unified_manager::ReconcileScope::All)
                 .await
             {
                 warn!("[Scheduler] display_mode reconcile 失败: {}", e);

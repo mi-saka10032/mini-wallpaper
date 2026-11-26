@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 
-use crate::ctx::unified_manager::engine::{
+use crate::context::unified_manager::engine::{
     diff_snapshots, patch_observed, plan_dispatch, DispatchAction, ReconcileScope,
     DEFAULT_DISPLAY_MODE,
 };
@@ -67,7 +67,7 @@ impl super::UnifiedWallpaperManager {
         if diffs.iter().any(|d| {
             matches!(
                 d,
-                crate::ctx::unified_manager::engine::ConfigDiff::DisplayModeChanged { .. }
+                crate::context::unified_manager::engine::ConfigDiff::DisplayModeChanged { .. }
             )
         }) {
             if let Some(mode) = DisplayMode::parse(&desired.global.display_mode) {

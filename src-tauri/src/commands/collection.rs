@@ -1,9 +1,9 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use tauri::State;
 use tokio::sync::Mutex;
 
+use crate::application::{self, AppServices};
 use crate::ctx::AppContext;
 use crate::dto::collection_dto::{
     AddWallpapersRequest, CreateCollectionRequest, CreateSmartCollectionRequest,
@@ -14,7 +14,7 @@ use crate::dto::collection_dto::{
 use crate::dto::Validated;
 use crate::entities::{collection, wallpaper};
 use crate::runtime::Scheduler;
-use crate::services::{collection_service, monitor_config_service};
+use crate::services::collection_service;
 
 use super::error::CommandResult;
 
@@ -57,22 +57,8 @@ pub async fn delete_collection(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<DeleteCollectionRequest>,
 ) -> CommandResult<()> {
-    let req = req.into_inner();
-    let app_ctx: &AppContext = ctx.inner();
-
-    // 1. 预先查出引用该收藏夹的完整 config（内存快照，删除后 collection_id 会被置空）
-    let affected_configs =
-        monitor_config_service::get_configs_by_collection_id(&app_ctx.db, req.id).await?;
-
-    // 2. 执行数据层删除（清理关联记录 + 置空 monitor_config.collection_id + 删除收藏夹）
-    collection_service::delete(&app_ctx.db, req.id).await?;
-
-    // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched.on_collection_deleted(&affected_configs).await;
-
-    Ok(())
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    Ok(application::collection::delete_collection(&svc, req.into_inner().id).await?)
 }
 
 /// 获取收藏夹内的壁纸列表
@@ -111,31 +97,13 @@ pub async fn remove_wallpapers_from_collection(
     req: Validated<RemoveWallpapersRequest>,
 ) -> CommandResult<u64> {
     let req = req.into_inner();
-    let app_ctx: &AppContext = ctx.inner();
-    let collection_id = req.collection_id;
-    let removing_ids: HashSet<i32> = req.wallpaper_ids.iter().copied().collect();
-
-    // 1. 查出所有绑定该收藏夹的 active config（用于联动判断）
-    let bound_configs =
-        monitor_config_service::get_configs_by_collection_id(&app_ctx.db, collection_id).await?;
-
-    // 2. 执行数据层移除
-    let removed =
-        collection_service::remove_wallpapers(&app_ctx.db, collection_id, req.wallpaper_ids)
-            .await?;
-
-    if removed == 0 {
-        return Ok(removed);
-    }
-
-    // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched
-        .on_wallpapers_removed_from_collection(&bound_configs, collection_id, &removing_ids)
-        .await;
-
-    Ok(removed)
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    Ok(application::collection::remove_wallpapers_from_collection(
+        &svc,
+        req.collection_id,
+        req.wallpaper_ids,
+    )
+    .await?)
 }
 
 /// 重新排序收藏夹列表（内置收藏夹固定顶部，不参与）
@@ -172,13 +140,13 @@ pub async fn reorder_collection_wallpapers(
 /// 返回切换后的收藏状态：`true` = 已收藏，`false` = 已取消收藏。
 #[tauri::command]
 pub async fn toggle_favorite(
+    ctx: State<'_, AppContext>,
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<ToggleFavoriteRequest>,
 ) -> CommandResult<bool> {
     let req = req.into_inner();
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    Ok(sched.toggle_favorite(req.wallpaper_id).await?)
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    Ok(application::collection::toggle_favorite(&svc, req.wallpaper_id).await?)
 }
 
 /// 创建智能收藏夹（规则经白名单校验后落库，成员不物化）

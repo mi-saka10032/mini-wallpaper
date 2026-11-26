@@ -37,6 +37,7 @@ use tauri_plugin_global_shortcut::{
 };
 use tokio::sync::Mutex;
 
+use crate::application::{self, AppServices};
 use crate::ctx::AppContext;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::runtime::action::Action;
@@ -174,9 +175,19 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
                 return;
             }
         };
-        let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler_state.inner().clone();
-        let mut sched = scheduler_handle.lock().await;
-        sched.dispatch_action(action).await;
+        // 入口层取一次共享状态；业务侧编排收敛在 application 用例。
+        let ctx_state = match app_handle.try_state::<AppContext>() {
+            Some(s) => s,
+            None => {
+                warn!(
+                    "[GlobalShortcut] AppContext 尚未注册，丢弃动作 {:?}",
+                    action
+                );
+                return;
+            }
+        };
+        let svc = AppServices::new(ctx_state.inner(), scheduler_state.inner());
+        application::actions::dispatch_action(&svc, action).await;
     });
 }
 

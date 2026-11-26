@@ -28,6 +28,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Manager;
 use tokio::sync::Mutex;
 
+use crate::application::{self, AppServices};
+use crate::ctx::AppContext;
 use crate::runtime::action::Action;
 use crate::runtime::Scheduler;
 
@@ -134,8 +136,15 @@ fn dispatch_tray_action(app: &tauri::AppHandle, action: Action) {
                 return;
             }
         };
-        let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler_state.inner().clone();
-        let mut sched = scheduler_handle.lock().await;
-        sched.dispatch_action(action).await;
+        // 入口层取一次共享状态；业务侧的显示器解析与副作用由 application 用例负责。
+        let ctx_state = match app_handle.try_state::<AppContext>() {
+            Some(s) => s,
+            None => {
+                warn!("[Tray] AppContext 尚未注册，丢弃动作 {:?}", action);
+                return;
+            }
+        };
+        let svc = AppServices::new(ctx_state.inner(), scheduler_state.inner());
+        application::actions::dispatch_action(&svc, action).await;
     });
 }

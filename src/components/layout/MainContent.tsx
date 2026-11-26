@@ -13,6 +13,7 @@ import DropOverlay from "@/components/wallpaper/DropOverlay";
 import VirtualGrid from "@/components/wallpaper/VirtualGrid";
 import { WallpaperCard } from "@/components/wallpaper/WallpaperCard";
 import { WallpaperCardContextMenuProvider } from "@/components/wallpaper/WallpaperCardContextMenu";
+import { LIBRARY_VIEW_ID } from "@/constants/views";
 import { useDropImport } from "@/hooks/useDropImport";
 import { useImportFeedback } from "@/hooks/useImportFeedback";
 import { useManageMode } from "@/hooks/useManageMode";
@@ -158,8 +159,10 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
   );
 
   // ===== 拖拽导入（H5 drag）=====
-  // 仅本地壁纸普通模式生效：非收藏夹 + 非管理模式 + 非排序模式 + 非加载中
-  const dropEnabled = !isCollectionView && !manage.manageMode && !sort.sortMode && !search.loading;
+  // 白名单：只有「全部壁纸」栏允许导入。收藏夹 / 设置面板 / 回收站等视图一律禁用，
+  // 用 activeId === LIBRARY_VIEW_ID 而非「排除收藏夹」，新增特殊视图时默认不开放导入。
+  const dropEnabled =
+    activeId === LIBRARY_VIEW_ID && !manage.manageMode && !sort.sortMode && !search.loading;
 
   // 两条拖拽通道共用同一套反馈（批量导入时 success 里的数量是唯一的进度参照）
   const { notify: notifyImport, notifyError } = useImportFeedback();

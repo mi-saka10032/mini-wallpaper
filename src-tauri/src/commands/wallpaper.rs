@@ -1,15 +1,16 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
+use crate::application::wallpaper::DeletionMode;
+use crate::application::{wallpaper as wallpaper_use_cases, AppServices};
 use crate::ctx::AppContext;
 use crate::dto::wallpaper_dto::{DeleteWallpapersRequest, ImportWallpapersRequest};
 use crate::dto::Validated;
 use crate::entities::wallpaper;
 use crate::runtime::Scheduler;
-use crate::services::{monitor_config_service, wallpaper_service};
+use crate::services::wallpaper_service;
 
 use super::error::CommandResult;
 
@@ -145,25 +146,11 @@ pub async fn delete_wallpapers(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<DeleteWallpapersRequest>,
 ) -> CommandResult<u64> {
-    let req = req.into_inner();
-    let app_ctx: &AppContext = ctx.inner();
-    let deleted_ids: HashSet<i32> = req.ids.iter().copied().collect();
-
-    // 1. 预先查出引用这些壁纸的完整 config（内存快照，删除后 wallpaper_id 会被置空）
-    let affected_configs =
-        monitor_config_service::get_configs_by_wallpaper_ids(&app_ctx.db, &req.ids).await?;
-
-    // 2. 执行数据层软删除（打 deleted_at 标记 + sort_order 哨兵与连续化重排 + monitor_config.wallpaper_id 置空）
-    let deleted = wallpaper_service::trash_batch(&app_ctx.db, req.ids).await?;
-
-    // 3. 联动处理（定时器管理 + 壁纸窗口通知）— 一行搞定
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched
-        .on_wallpapers_deleted(&affected_configs, &deleted_ids)
-        .await;
-
-    Ok(deleted)
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    Ok(
+        wallpaper_use_cases::delete_wallpapers(&svc, req.into_inner().ids, DeletionMode::Trash)
+            .await?,
+    )
 }
 
 /// 获取回收站内的壁纸列表（按移入时间倒序）
@@ -199,22 +186,11 @@ pub async fn purge_wallpapers(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<DeleteWallpapersRequest>,
 ) -> CommandResult<u64> {
-    let req = req.into_inner();
-    let app_ctx: &AppContext = ctx.inner();
-    let deleted_ids: HashSet<i32> = req.ids.iter().copied().collect();
-
-    let affected_configs =
-        monitor_config_service::get_configs_by_wallpaper_ids(&app_ctx.db, &req.ids).await?;
-
-    let deleted = wallpaper_service::delete_batch(&app_ctx.db, req.ids).await?;
-
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched
-        .on_wallpapers_deleted(&affected_configs, &deleted_ids)
-        .await;
-
-    Ok(deleted)
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    Ok(
+        wallpaper_use_cases::delete_wallpapers(&svc, req.into_inner().ids, DeletionMode::Purge)
+            .await?,
+    )
 }
 
 /// 清空回收站（彻底删除其中全部壁纸，不可恢复）

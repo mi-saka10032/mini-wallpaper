@@ -5,8 +5,10 @@ use sea_orm::{
 };
 
 use crate::{
-    dto::monitor_config_dto::UpsertMonitorConfigRequest, entities::monitor_config,
-    services::wallpaper_service,
+    dto::app_setting_dto::keys as setting_keys,
+    dto::monitor_config_dto::UpsertMonitorConfigRequest,
+    entities::monitor_config,
+    services::{app_setting_service, wallpaper_service},
 };
 
 /// 校验壁纸可被设为桌面壁纸（存在且不在回收站）
@@ -229,6 +231,28 @@ pub async fn sync_config_from<C: ConnectionTrait>(
     Ok(model)
 }
 
+/// 组写入的唯一实现：在一个已开启的事务内，把基准配置全量复制到组内其它屏。
+///
+/// 三个公开批量函数（update_monitors_batch / upsert_group / apply_group_wallpaper）
+/// 只负责各自算出 source 与 targets，事务边界和对齐循环都收在这里，避免重复实现。
+/// 返回 [基准配置, 各从属屏配置]；active 是物理状态，sync_config_from 不覆盖。
+async fn write_group<C: ConnectionTrait>(
+    txn: &C,
+    source: monitor_config::Model,
+    source_monitor_id: &str,
+    targets: &[String],
+) -> Result<Vec<monitor_config::Model>> {
+    let mut updated = Vec::with_capacity(targets.len().max(1) + 1);
+    updated.push(source.clone());
+    for id in targets {
+        if id == source_monitor_id {
+            continue;
+        }
+        updated.push(sync_config_from(txn, id, &source).await?);
+    }
+    Ok(updated)
+}
+
 /// 在单个事务内把 source 的配置批量同步到所有目标显示器。
 ///
 /// 架构重整 Phase 3：display_mode 切换原本逐条 await `sync_config_from`，
@@ -241,14 +265,101 @@ pub async fn update_monitors_batch(
     target_monitor_ids: &[String],
 ) -> Result<Vec<monitor_config::Model>> {
     let txn = db.begin().await.context("Failed to begin batch update")?;
-    let mut updated = Vec::with_capacity(target_monitor_ids.len());
-    for monitor_id in target_monitor_ids {
-        updated.push(sync_config_from(&txn, monitor_id, source).await?);
-    }
+    // 本函数的 targets 是「除基准屏外的从属屏」，基准屏本身不参与写入。
+    let updated = write_group(&txn, source.clone(), &source.monitor_id, target_monitor_ids).await?;
     txn.commit()
         .await
         .context("Failed to commit batch update")?;
-    Ok(updated)
+    // 返回值不含基准屏（保持旧语义：调用方只关心被同步的从属屏结果）。
+    let mut result = updated;
+    result.remove(0);
+    Ok(result)
+}
+
+/// 同步模式判定：后端唯一口径，避免各入口各写一份字符串比较。
+pub fn is_sync_mode(display_mode: &str) -> bool {
+    matches!(display_mode, "mirror" | "extend")
+}
+
+/// 裁决一次「更新显示器配置」应写入哪些目标。
+///
+/// 后端单点读取 display_mode：mirror/extend 视为同步组，返回所有 active 显示器
+/// （按 monitor_id 排序保证顺序确定）；independent 只返回请求里的那一屏。
+/// 前端不再判断 isSyncMode —— 同步语义收归后端，新增入口不可能漏判。
+pub async fn active_targets(
+    db: &DatabaseConnection,
+    monitor_id: &str,
+) -> Result<(Vec<String>, bool)> {
+    let display_mode = app_setting_service::get(db, setting_keys::DISPLAY_MODE)
+        .await?
+        .unwrap_or_else(|| "independent".to_string());
+    let is_sync = is_sync_mode(&display_mode);
+    if !is_sync {
+        return Ok((vec![monitor_id.to_string()], false));
+    }
+    let mut ids: Vec<String> = get_all(db)
+        .await?
+        .into_iter()
+        .filter(|c| c.active)
+        .map(|c| c.monitor_id)
+        .collect();
+    ids.sort();
+    // 目标屏尚未登记时（热插拔窗口期）仍要写入，否则该次设置会丢失。
+    if !ids.contains(&monitor_id.to_string()) {
+        ids.push(monitor_id.to_string());
+        ids.sort();
+    }
+    Ok((ids, true))
+}
+
+/// 同步组的一次 upsert：单事务写全组 + 全量配置对齐。
+///
+/// 顺序固定：先对基准屏应用本次请求，再把更新后的基准配置完整复制到组内其它屏。
+/// 全量对齐（wallpaper_id / collection_id / fit_mode / play_mode / play_interval /
+/// is_enabled）是兜底：同步组内任一字段不对齐，后续轮播与切换都会分叉。
+/// 整个写操作在一个事务内，commit 成功后调用方才触发一次 reconcile，
+/// 避免 watcher 看到「部分屏已更新」的中间态。
+pub async fn upsert_group(
+    db: &DatabaseConnection,
+    req: &UpsertMonitorConfigRequest,
+) -> Result<(Vec<monitor_config::Model>, bool)> {
+    let (targets, is_sync) = active_targets(db, &req.monitor_id).await?;
+    let txn = db.begin().await.context("Failed to begin group upsert")?;
+
+    // 基准屏应用本次请求；复用 upsert 保证 settable 守卫与 insert/update 分支一致。
+    let source = upsert(&txn, req).await?;
+    let updated = write_group(&txn, source, &req.monitor_id, &targets).await?;
+    txn.commit()
+        .await
+        .context("Failed to commit group upsert")?;
+    Ok((updated, is_sync))
+}
+
+/// 把同一张壁纸（或清空）应用到同步组所有 active 屏，单事务 + 全量对齐。
+///
+/// `wallpaper_id = None` 表示整组清空显示（删除联动里收藏夹已空的场景）。
+/// 与 `upsert_group` 同构：先写基准屏，再把它的完整配置复制到组内其它屏，
+/// commit 后由调用方触发一次 reconcile(All)，避免逐屏派发错开帧时钟。
+pub async fn apply_group_wallpaper(
+    db: &DatabaseConnection,
+    source_monitor_id: &str,
+    wallpaper_id: Option<i32>,
+) -> Result<(Vec<monitor_config::Model>, bool)> {
+    let (targets, is_sync) = active_targets(db, source_monitor_id).await?;
+    let txn = db
+        .begin()
+        .await
+        .context("Failed to begin group wallpaper")?;
+
+    let source = match wallpaper_id {
+        Some(wid) => update_wallpaper_id(&txn, source_monitor_id, wid).await?,
+        None => clear_wallpaper_id(&txn, source_monitor_id).await?,
+    };
+    let updated = write_group(&txn, source, source_monitor_id, &targets).await?;
+    txn.commit()
+        .await
+        .context("Failed to commit group wallpaper")?;
+    Ok((updated, is_sync))
 }
 
 /// 判断是否满足轮播启动条件（纯逻辑判断，不涉及 DB）

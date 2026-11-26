@@ -14,7 +14,6 @@
 use std::collections::HashSet;
 
 use log::{error, warn};
-use sea_orm::TransactionTrait;
 
 use super::Scheduler;
 use crate::dto::app_setting_dto::keys as setting_keys;
@@ -50,7 +49,7 @@ impl Scheduler {
             .await
             .unwrap_or(Some("independent".to_string()))
             .unwrap_or_else(|| "independent".to_string());
-        dm == "mirror" || dm == "extend"
+        monitor_config_service::is_sync_mode(&dm)
     }
 
     /// 壁纸批量删除后的联动处理
@@ -75,35 +74,100 @@ impl Scheduler {
 
         // —— 阶段 1：DB 写入 + 定时器管理（无渲染锁） ——
         let db = self.db();
-        for config in affected_configs {
-            let mid = &config.monitor_id;
-            let key = carousel_key(mid);
+        // 同步组只决策一次：组内所有屏显示同一张壁纸，若逐条决策会让各组算出不同的
+        // 「下一张」（play_mode=random）或只清一部分屏。以第一个受影响 config 为基准。
+        let (targets, is_sync) = match monitor_config_service::active_targets(
+            &db,
+            &affected_configs[0].monitor_id,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("[Scheduler] 裁决同步组失败: {}", e);
+                (Vec::new(), false)
+            }
+        };
 
-            match config.collection_id {
+        if is_sync {
+            let base = &affected_configs[0];
+            // 有收藏夹就尝试找下一张（只算一次），没有则整组清空显示。
+            let next_wid = match base.collection_id {
                 Some(cid) => {
-                    Self::handle_current_wallpaper_removed_inner(
+                    match collection_service::next_wallpaper_id(
                         &db,
-                        self,
-                        config,
                         cid,
-                        deleted_ids,
+                        base.wallpaper_id,
+                        &base.play_mode,
                     )
-                    .await;
+                    .await
+                    {
+                        Ok(Some(wid)) if !deleted_ids.contains(&wid) => Some(wid),
+                        _ => None,
+                    }
                 }
-                None => {
-                    self.stop(&key);
-                    // 无收藏夹时把 wallpaper_id 写空，交给 reconcile 派发清屏。
-                    if let Err(e) = monitor_config_service::clear_wallpaper_id(&db, mid).await {
-                        warn!("[Scheduler] 清空 wallpaper_id 失败 {}: {}", mid, e);
+                None => None,
+            };
+            match monitor_config_service::apply_group_wallpaper(&db, &base.monitor_id, next_wid)
+                .await
+            {
+                Ok(_) => {
+                    // 定时器按整组裁决：有下一张则重启组基准定时器，否则全组停止。
+                    match (&base.collection_id, next_wid) {
+                        (Some(cid), Some(_)) => {
+                            Self::manage_timer_by_collection_inner(
+                                &db,
+                                self,
+                                &base.monitor_id,
+                                *cid,
+                                true,
+                            )
+                            .await;
+                        }
+                        _ => {
+                            for mid in &targets {
+                                self.stop(&carousel_key(mid));
+                            }
+                        }
+                    }
+                }
+                Err(e) => warn!("[Scheduler] 同步组删除联动写库失败: {}", e),
+            }
+        } else {
+            for config in affected_configs {
+                let mid = &config.monitor_id;
+                let key = carousel_key(mid);
+
+                match config.collection_id {
+                    Some(cid) => {
+                        Self::handle_current_wallpaper_removed_inner(
+                            &db,
+                            self,
+                            config,
+                            cid,
+                            deleted_ids,
+                        )
+                        .await;
+                    }
+                    None => {
+                        self.stop(&key);
+                        // 无收藏夹时把 wallpaper_id 写空，交给 reconcile 派发清屏。
+                        if let Err(e) = monitor_config_service::clear_wallpaper_id(&db, mid).await {
+                            warn!("[Scheduler] 清空 wallpaper_id 失败 {}: {}", mid, e);
+                        }
                     }
                 }
             }
         }
 
-        let affected_mids: HashSet<String> = affected_configs
-            .iter()
-            .map(|c| c.monitor_id.clone())
-            .collect();
+        let affected_mids: HashSet<String> = if is_sync {
+            targets.iter().cloned().collect()
+        } else {
+            affected_configs
+                .iter()
+                .map(|c| c.monitor_id.clone())
+                .collect()
+        };
         Self::check_orphaned_timers_inner(&db, self, &affected_mids).await;
 
         // —— 阶段 2：一次 reconcile 统一派发全部窗口副作用 ——
@@ -162,27 +226,91 @@ impl Scheduler {
         // 仅表示 DB 的 wallpaper_id 是否被改写，决定是否让主窗口刷新缩略图。
         let mut config_changed = false;
 
-        for config in bound_configs {
-            let mid = &config.monitor_id;
-            let key = carousel_key(mid);
+        // 同步组只决策一次：逐条处理会让组内各屏算出不同「下一张」或只清一部分屏。
+        let (targets, is_sync) =
+            match monitor_config_service::active_targets(&db, &bound_configs[0].monitor_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("[Scheduler] 裁决同步组失败: {}", e);
+                    (Vec::new(), false)
+                }
+            };
 
-            let current_wid_removed = config
+        if is_sync {
+            let base = &bound_configs[0];
+            let current_wid_removed = base
                 .wallpaper_id
                 .map(|wid| removing_ids.contains(&wid))
                 .unwrap_or(false);
-
             if current_wid_removed {
-                let changed = Self::handle_current_wallpaper_removed_inner(
+                // 收藏夹里还有可用下一张就整组切过去；没有则整组清空显示。
+                let next_wid = match collection_service::next_wallpaper_id(
+                    &db,
+                    collection_id,
+                    base.wallpaper_id,
+                    &base.play_mode,
+                )
+                .await
+                {
+                    Ok(Some(wid)) if !removing_ids.contains(&wid) => Some(wid),
+                    _ => None,
+                };
+                match monitor_config_service::apply_group_wallpaper(&db, &base.monitor_id, next_wid)
+                    .await
+                {
+                    Ok(_) => {
+                        config_changed = true;
+                        if next_wid.is_some() {
+                            Self::manage_timer_by_collection_inner(
+                                &db,
+                                self,
+                                &base.monitor_id,
+                                collection_id,
+                                true,
+                            )
+                            .await;
+                        } else {
+                            for mid in &targets {
+                                self.stop(&carousel_key(mid));
+                            }
+                        }
+                    }
+                    Err(e) => warn!("[Scheduler] 同步组移除联动写库失败: {}", e),
+                }
+            } else if self.is_running(&carousel_key(&base.monitor_id)) {
+                Self::manage_timer_by_collection_inner(
                     &db,
                     self,
-                    config,
+                    &base.monitor_id,
                     collection_id,
-                    removing_ids,
+                    false,
                 )
                 .await;
-                config_changed = config_changed || changed;
-            } else if self.is_running(&key) {
-                Self::manage_timer_by_collection_inner(&db, self, mid, collection_id, false).await;
+            }
+        } else {
+            for config in bound_configs {
+                let mid = &config.monitor_id;
+                let key = carousel_key(mid);
+
+                let current_wid_removed = config
+                    .wallpaper_id
+                    .map(|wid| removing_ids.contains(&wid))
+                    .unwrap_or(false);
+
+                if current_wid_removed {
+                    let changed = Self::handle_current_wallpaper_removed_inner(
+                        &db,
+                        self,
+                        config,
+                        collection_id,
+                        removing_ids,
+                    )
+                    .await;
+                    config_changed = config_changed || changed;
+                } else if self.is_running(&key) {
+                    Self::manage_timer_by_collection_inner(&db, self, mid, collection_id, false)
+                        .await;
+                }
             }
         }
 
@@ -196,10 +324,10 @@ impl Scheduler {
 
     /// 切换指定显示器到相邻壁纸（上一张/下一张）并管理定时器
     ///
-    /// 适用于 `switch_wallpaper` command，封装了：
-    /// 1. 根据方向获取下一张/上一张壁纸 ID
-    /// 2. 更新 DB 中的 wallpaper_id
-    /// 3. 通知壁纸窗口 + 主窗口缩略图
+    /// 适用于托盘菜单 / 全局快捷键，封装了：
+    /// 1. 根据方向获取下一张/上一张壁纸 ID（同步组只算一次）
+    /// 2. 单事务写全组 wallpaper_id 并全量对齐组内其它配置
+    /// 3. 一次 reconcile 统一通知壁纸窗口 + 主窗口缩略图
     /// 4. 如果有运行中的定时器，重置计时
     ///
     /// 返回 true 表示成功切换了壁纸。
@@ -245,40 +373,30 @@ impl Scheduler {
             }
         };
 
-        // 架构重整 Phase 3：单条 DB 写入 + 一次 reconcile 统一下发，
-        // 不再由本模块手动调 coordinator（is_sync 由 Manager 从 display_mode 推导）。
-        let txn = match db.begin().await {
-            Ok(t) => t,
-            Err(e) => {
-                error!("[Scheduler] 开启事务失败: {}", e);
-                return false;
-            }
-        };
-        if let Err(e) =
-            monitor_config_service::update_wallpaper_id(&txn, &config.monitor_id, wid).await
-        {
-            error!(
-                "[Scheduler] 更新 wallpaper_id 失败 {}: {}",
-                config.monitor_id, e
-            );
-            return false;
-        }
-        if let Err(e) = txn.commit().await {
-            error!("[Scheduler] 提交 wallpaper_id 失败: {}", e);
-            return false;
-        }
-
-        // 收窄作用域：reconcile 结束后立即释放对 self 的借用，
-        // 后面 restart / is_running 需要 &mut self。
-        {
-            let ctx = self.app_context();
-            let mut guard = ctx.unified_manager.lock().await;
-            if let Err(e) = guard
-                .reconcile(crate::ctx::unified_manager::ReconcileScope::One(
-                    config.monitor_id.clone(),
-                ))
+        // 组写入统一收在 service：只算一次 wid（play_mode=random 时整组必须拿到同一张），
+        // 由 apply_group_wallpaper 单事务写全组 + 全量对齐，并回传 is_sync 决定 reconcile 范围。
+        let (_, is_sync) =
+            match monitor_config_service::apply_group_wallpaper(&db, &config.monitor_id, Some(wid))
                 .await
             {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("[Scheduler] 组写入失败 {}: {}", config.monitor_id, e);
+                    return false;
+                }
+            };
+
+        // 单次 reconcile：同步组用 All，一次看到全量新状态，避免逐屏 attach 错开帧时钟。
+        // 收窄作用域：reconcile 结束后立即释放对 self 的借用，后面 restart 需要 &mut self。
+        {
+            let scope = if is_sync {
+                crate::ctx::unified_manager::ReconcileScope::All
+            } else {
+                crate::ctx::unified_manager::ReconcileScope::One(config.monitor_id.clone())
+            };
+            let ctx = self.app_context();
+            let mut guard = ctx.unified_manager.lock().await;
+            if let Err(e) = guard.reconcile(scope).await {
                 warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
             }
         }

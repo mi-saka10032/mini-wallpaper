@@ -5,28 +5,22 @@ import { getCollectionWallpapers } from "@/api/collection";
 
 export interface UseMonitorConfigOptions {
   selectedMonitorId: string | null;
-  isSyncMode: boolean;
 }
 
-export function useMonitorConfig({ selectedMonitorId, isSyncMode }: UseMonitorConfigOptions) {
+export function useMonitorConfig({ selectedMonitorId }: UseMonitorConfigOptions) {
   const { t } = useTranslation();
   const upsert = useMonitorConfigStore((s) => s.upsert);
-  const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
 
   const [collectionWarning, setCollectionWarning] = useState<string | null>(null);
   const [sourceType, setSourceType] = useState<"wallpaper" | "collection">("wallpaper");
 
-  // ===== 通用 upsert 封装：同步模式下自动广播到所有显示器 =====
+  // ===== 通用 upsert 封装：只描述单屏请求，同步组扩散由后端裁决 =====
   const upsertCurrent = useCallback(
     async (params: Omit<Parameters<typeof upsert>[0], "monitorId">) => {
       if (!selectedMonitorId) return;
-      if (isSyncMode) {
-        await upsertAll(params);
-      } else {
-        await upsert({ ...params, monitorId: selectedMonitorId });
-      }
+      await upsert({ ...params, monitorId: selectedMonitorId });
     },
-    [upsert, upsertAll, selectedMonitorId, isSyncMode],
+    [upsert, selectedMonitorId],
   );
 
   const handleSourceChange = useCallback(

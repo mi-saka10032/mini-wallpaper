@@ -5,7 +5,6 @@ pub mod collection;
 pub mod error;
 pub mod fullscreen;
 pub mod monitor_config;
-pub mod shortcut;
 pub mod tag;
 pub mod toast;
 pub mod wallpaper;
@@ -31,8 +30,6 @@ pub use monitor_config::{
     delete_monitor_config, get_monitor_config, get_monitor_configs, start_timers,
     upsert_monitor_config,
 };
-#[allow(unused_imports)]
-pub use shortcut::switch_wallpaper;
 #[allow(unused_imports)]
 pub use tag::{
     delete_tag, get_tags, get_wallpaper_tags, get_wallpapers_by_tags, rename_tag,
@@ -87,8 +84,6 @@ macro_rules! all_handlers {
             $crate::commands::app_setting::get_settings,
             $crate::commands::app_setting::get_setting,
             $crate::commands::app_setting::set_setting,
-            // shortcut
-            $crate::commands::shortcut::switch_wallpaper,
             // action
             $crate::commands::action::trigger_action,
             // backup

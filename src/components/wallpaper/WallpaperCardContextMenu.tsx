@@ -25,7 +25,6 @@ import type { Wallpaper } from "@/api/config";
 import { getCollectionWallpapers } from "@/api/collection";
 import { useCollectionStore } from "@/stores/collectionStore";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
-import { useSettingStore, SETTING_KEYS } from "@/stores/settingStore";
 import { useFavoritesStore } from "@/stores/favoritesStore";
 import { cn } from "@/lib/utils";
 
@@ -95,10 +94,6 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
   );
   const configs = useMonitorConfigStore((s) => s.configs);
   const upsert = useMonitorConfigStore((s) => s.upsert);
-  const upsertAll = useMonitorConfigStore((s) => s.upsertAll);
-  const displayMode = useSettingStore(
-    (s) => s.settings[SETTING_KEYS.DISPLAY_MODE] ?? "independent",
-  );
   const favoriteIds = useFavoritesStore((s) => s.favoriteIds);
   const toggleFavorite = useFavoritesStore((s) => s.toggle);
 
@@ -187,19 +182,18 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
     };
   }, [open, closeMenu]);
 
-  // 设置为壁纸的处理逻辑
+  // 设置为壁纸：前端只描述「给哪个显示器设什么」，同步组扩散由后端裁决。
+  // mirror/extend 下后端会单事务写全组并全量对齐配置，前端不再判断 isSyncMode。
   const handleSetAsWallpaper = useCallback(
     async (monitorId: string) => {
       if (!payload) return;
       const { wallpaper, activeId } = payload;
-      const isSyncMode = displayMode === "mirror" || displayMode === "extend";
       const targetConfig = configs.find((c) => c.monitor_id === monitorId);
       const collectionId = activeId > 0 ? activeId : null;
 
       if (activeId === 0) {
         if (!targetConfig?.collection_id) {
-          if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id });
-          else await upsert({ monitorId, wallpaperId: wallpaper.id });
+          await upsert({ monitorId, wallpaperId: wallpaper.id });
         } else {
           try {
             const wallpapersInCollection = await getCollectionWallpapers(
@@ -207,54 +201,34 @@ export const WallpaperCardContextMenuProvider: React.FC<{ children: React.ReactN
             );
             const isInCollection = wallpapersInCollection.some((w) => w.id === wallpaper.id);
             if (isInCollection) {
-              if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id });
-              else await upsert({ monitorId, wallpaperId: wallpaper.id });
+              await upsert({ monitorId, wallpaperId: wallpaper.id });
             } else {
-              if (isSyncMode)
-                await upsertAll({
-                  wallpaperId: wallpaper.id,
-                  clearCollection: true,
-                  isEnabled: false,
-                });
-              else
-                await upsert({
-                  monitorId,
-                  wallpaperId: wallpaper.id,
-                  clearCollection: true,
-                  isEnabled: false,
-                });
-            }
-          } catch {
-            if (isSyncMode)
-              await upsertAll({
-                wallpaperId: wallpaper.id,
-                clearCollection: true,
-                isEnabled: false,
-              });
-            else
               await upsert({
                 monitorId,
                 wallpaperId: wallpaper.id,
                 clearCollection: true,
                 isEnabled: false,
               });
+            }
+          } catch {
+            await upsert({
+              monitorId,
+              wallpaperId: wallpaper.id,
+              clearCollection: true,
+              isEnabled: false,
+            });
           }
         }
       } else {
-        if (!targetConfig?.collection_id) {
-          if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id, collectionId });
-          else await upsert({ monitorId, wallpaperId: wallpaper.id, collectionId });
-        } else if (targetConfig.collection_id === collectionId) {
-          if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id });
-          else await upsert({ monitorId, wallpaperId: wallpaper.id });
+        if (!targetConfig?.collection_id || targetConfig.collection_id !== collectionId) {
+          await upsert({ monitorId, wallpaperId: wallpaper.id, collectionId });
         } else {
-          if (isSyncMode) await upsertAll({ wallpaperId: wallpaper.id, collectionId });
-          else await upsert({ monitorId, wallpaperId: wallpaper.id, collectionId });
+          await upsert({ monitorId, wallpaperId: wallpaper.id });
         }
       }
       closeMenu();
     },
-    [payload, configs, displayMode, upsert, upsertAll, closeMenu],
+    [payload, configs, upsert, closeMenu],
   );
 
   // 切换收藏状态（红心 / 「我喜欢」）

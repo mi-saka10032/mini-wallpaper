@@ -10,13 +10,13 @@
 //!   `tauri_plugin_global_shortcut` 装上统一回调
 //! - **应用启动注册**：在 `setup` 阶段批量 register 默认 / 自定义键位
 //!
-//! ## 与 `commands::shortcut::switch_wallpaper` 的语义切割
+//! ## 切换壁纸的统一语义
 //!
-//! 主窗口 UI 中"上一张/下一张"按钮调用旧的 `switch_wallpaper` 命令
-//! （全屏遍历切换），符合"主动管理多屏"的语义；
-//! 而本模块对应 OS 全局键盘事件，走 dispatcher
-//! （精确切换 active 屏），符合"用户在桌面工作时只想动眼前那块屏"
-//! 的语义。两条路径并存且互不干扰。
+//! 全局快捷键与托盘菜单的"上一张/下一张"都走 [`Action::Next`] / [`Action::Prev`]
+//! → `Scheduler::dispatch_switch` → `switch_to_adjacent_wallpaper`，是同一套逻辑：
+//! independent 模式精确切换当前活跃显示器；mirror/extend 模式由后端裁决同步组，
+//! 一次算出下一张并单事务写全组 + reconcile(All)，保证组内壁纸与配置始终一致。
+//! 前端不再判断同步模式，旧的 `switch_wallpaper` command 已删除。
 //!
 //! ## P0 落地范围
 //!

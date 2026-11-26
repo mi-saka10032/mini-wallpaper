@@ -48,7 +48,6 @@ export const COMMANDS = {
   GET_SETTING: "get_setting",
   SET_SETTING: "set_setting",
   // shortcut
-  SWITCH_WALLPAPER: "switch_wallpaper",
   // backup
   EXPORT_BACKUP: "export_backup",
   IMPORT_BACKUP: "import_backup",
@@ -307,11 +306,6 @@ export interface SetSettingReq {
   monitorId?: string;
 }
 
-/** 切换壁纸请求 */
-export interface SwitchWallpaperReq {
-  direction: "next" | "prev";
-}
-
 /** 导出备份请求 */
 export interface ExportBackupReq {
   outputPath: string;
@@ -440,10 +434,6 @@ export interface CommandMap {
   };
   [COMMANDS.SET_SETTING]: {
     params: { req: SetSettingReq };
-    result: void;
-  };
-  [COMMANDS.SWITCH_WALLPAPER]: {
-    params: { req: SwitchWallpaperReq };
     result: void;
   };
   [COMMANDS.EXPORT_BACKUP]: {

@@ -343,26 +343,14 @@ impl Scheduler {
             None => return false,
         };
 
-        let new_wid = match direction {
-            Direction::Next => {
-                collection_service::next_wallpaper_id(
-                    &db,
-                    collection_id,
-                    config.wallpaper_id,
-                    &config.play_mode,
-                )
-                .await
-            }
-            Direction::Prev => {
-                collection_service::prev_wallpaper_id(
-                    &db,
-                    collection_id,
-                    config.wallpaper_id,
-                    &config.play_mode,
-                )
-                .await
-            }
-        };
+        let new_wid = collection_service::adjacent_wallpaper_id(
+            &db,
+            collection_id,
+            config.wallpaper_id,
+            &config.play_mode,
+            direction,
+        )
+        .await;
 
         let wid = match new_wid {
             Ok(Some(wid)) => wid,

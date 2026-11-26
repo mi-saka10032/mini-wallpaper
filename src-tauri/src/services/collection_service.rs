@@ -2,6 +2,7 @@ use anyhow::Result;
 use sea_orm::prelude::Expr;
 use sea_orm::*;
 
+use crate::dto::shortcut_dto::Direction as SwitchDirection;
 use crate::entities::{collection, collection_wallpaper, monitor_config, wallpaper};
 use crate::services::wallpaper_service;
 
@@ -636,6 +637,25 @@ pub async fn next_wallpaper_id(
 /// - sequential: 按 sort_order 取当前 wallpaper_id 的前一张，首部回末尾
 /// - random: 同 next（随机取一张排除当前）
 /// - 智能收藏夹: 委托规则命中集求值（sequential 走 id 逆向游标 / random 走 RANDOM()）
+/// 相邻壁纸的统一入口：轮播 tick、tray / 快捷键切换共用，
+/// 避免两处各自分派 Next / Prev 导致智能收藏夹分流逻辑漂移。
+pub async fn adjacent_wallpaper_id(
+    db: &DatabaseConnection,
+    collection_id: i32,
+    current_wallpaper_id: Option<i32>,
+    play_mode: &str,
+    direction: &SwitchDirection,
+) -> Result<Option<i32>> {
+    match direction {
+        SwitchDirection::Next => {
+            next_wallpaper_id(db, collection_id, current_wallpaper_id, play_mode).await
+        }
+        SwitchDirection::Prev => {
+            prev_wallpaper_id(db, collection_id, current_wallpaper_id, play_mode).await
+        }
+    }
+}
+
 pub async fn prev_wallpaper_id(
     db: &DatabaseConnection,
     collection_id: i32,

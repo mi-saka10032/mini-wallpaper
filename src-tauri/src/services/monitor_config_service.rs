@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    Set, TransactionTrait,
+    Set, TransactionTrait, UpdateResult,
 };
 
 use crate::{
@@ -340,26 +341,120 @@ pub async fn upsert_group(
 /// `wallpaper_id = None` 表示整组清空显示（删除联动里收藏夹已空的场景）。
 /// 与 `upsert_group` 同构：先写基准屏，再把它的完整配置复制到组内其它屏，
 /// commit 后由调用方触发一次 reconcile(All)，避免逐屏派发错开帧时钟。
-pub async fn apply_group_wallpaper(
+/// 组写入守卫：是否要求基准屏的 wallpaper_id 未被并发修改。
+#[derive(Clone, Copy, Debug)]
+pub enum WallpaperGuard {
+    /// 无条件写入（tray / 快捷键 / 删除联动等显式操作）。
+    Unchecked,
+    /// 仅当基准屏当前值等于期望值时写入；不匹配则放弃本轮。
+    /// 用于轮播 tick 的「读 config → 算下一张 → 写回」，防止覆盖用户刚手动设的壁纸。
+    Unchanged(Option<i32>),
+}
+
+/// 条件更新基准屏的 wallpaper_id；返回是否命中（未命中即被并发修改）。
+async fn update_if_unchanged<C: ConnectionTrait>(
+    txn: &C,
+    monitor_id: &str,
+    wallpaper_id: Option<i32>,
+    expected: Option<i32>,
+) -> Result<bool> {
+    let mut update = monitor_config::Entity::update_many()
+        .col_expr(
+            monitor_config::Column::WallpaperId,
+            Expr::value(wallpaper_id),
+        )
+        .filter(monitor_config::Column::MonitorId.eq(monitor_id));
+    update = match expected {
+        Some(id) => update.filter(monitor_config::Column::WallpaperId.eq(id)),
+        None => update.filter(monitor_config::Column::WallpaperId.is_null()),
+    };
+    let result: UpdateResult = update.exec(txn).await?;
+    Ok(result.rows_affected > 0)
+}
+
+async fn write_group_wallpaper(
     db: &DatabaseConnection,
     source_monitor_id: &str,
     wallpaper_id: Option<i32>,
-) -> Result<(Vec<monitor_config::Model>, bool)> {
+    guard: WallpaperGuard,
+) -> Result<Option<(Vec<monitor_config::Model>, bool)>> {
     let (targets, is_sync) = active_targets(db, source_monitor_id).await?;
     let txn = db
         .begin()
         .await
         .context("Failed to begin group wallpaper")?;
 
-    let source = match wallpaper_id {
-        Some(wid) => update_wallpaper_id(&txn, source_monitor_id, wid).await?,
-        None => clear_wallpaper_id(&txn, source_monitor_id).await?,
+    let source = match guard {
+        WallpaperGuard::Unchecked => match wallpaper_id {
+            Some(wid) => update_wallpaper_id(&txn, source_monitor_id, wid).await?,
+            None => clear_wallpaper_id(&txn, source_monitor_id).await?,
+        },
+        WallpaperGuard::Unchanged(expected) => {
+            // 条件路径绕过 update_wallpaper_id，守卫要在这里显式补上。
+            if let Some(wid) = wallpaper_id {
+                ensure_wallpaper_settable(&txn, wid).await?;
+            }
+            if !update_if_unchanged(&txn, source_monitor_id, wallpaper_id, expected).await? {
+                // 事务随 txn drop 回滚；调用方据此跳过本轮，不覆盖并发修改。
+                return Ok(None);
+            }
+            get_by_monitor_id(&txn, source_monitor_id)
+                .await?
+                .context("基准屏配置在条件更新后消失")?
+        }
     };
     let updated = write_group(&txn, source, source_monitor_id, &targets).await?;
     txn.commit()
         .await
         .context("Failed to commit group wallpaper")?;
-    Ok((updated, is_sync))
+    Ok(Some((updated, is_sync)))
+}
+
+/// 无条件把同一张壁纸（或清空）应用到同步组，单事务 + 全量对齐。
+pub async fn apply_group_wallpaper(
+    db: &DatabaseConnection,
+    source_monitor_id: &str,
+    wallpaper_id: Option<i32>,
+) -> Result<(Vec<monitor_config::Model>, bool)> {
+    write_group_wallpaper(
+        db,
+        source_monitor_id,
+        wallpaper_id,
+        WallpaperGuard::Unchecked,
+    )
+    .await?
+    .context("无条件组写入不应被守卫拦截")
+}
+
+/// 带并发守卫的组写入。
+/// `Ok(None)` 表示基准屏已被并发修改、本轮放弃；`Ok(Some(is_sync))` 供调用方定 reconcile 范围。
+pub async fn try_apply_group_wallpaper(
+    db: &DatabaseConnection,
+    source_monitor_id: &str,
+    wallpaper_id: Option<i32>,
+    expected: Option<i32>,
+) -> Result<Option<bool>> {
+    Ok(write_group_wallpaper(
+        db,
+        source_monitor_id,
+        wallpaper_id,
+        WallpaperGuard::Unchanged(expected),
+    )
+    .await?
+    .map(|(_, is_sync)| is_sync))
+}
+
+/// 同步组的确定性基准屏：active 显示器按 monitor_id 排序后的第一个。
+/// 启动轮播 timer 与 display_mode 切换共用同一口径，避免两处选到不同屏。
+pub async fn sync_group_primary(db: &DatabaseConnection) -> Result<Option<String>> {
+    let mut ids: Vec<String> = get_all(db)
+        .await?
+        .into_iter()
+        .filter(|c| c.active)
+        .map(|c| c.monitor_id)
+        .collect();
+    ids.sort();
+    Ok(ids.into_iter().next())
 }
 
 /// 判断是否满足轮播启动条件（纯逻辑判断，不涉及 DB）
@@ -368,4 +463,177 @@ pub async fn apply_group_wallpaper(
 /// collection_id 是否存在由调用方在具体场景中额外判断。
 pub fn should_start_timer(config: &monitor_config::Model) -> bool {
     config.active && config.is_enabled
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    };
+    use sea_orm_migration::MigratorTrait;
+
+    use super::*;
+    use crate::entities::{app_setting, wallpaper};
+    use crate::migration::Migrator;
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "mini-wallpaper-guard-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn test_db(root: &TempDir) -> DatabaseConnection {
+        let path = root.0.join("app.db");
+        let db = Database::connect(format!("sqlite:{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    async fn setup(root: &TempDir) -> (DatabaseConnection, i32, i32) {
+        let db = test_db(root).await;
+        let w1 = wallpaper::ActiveModel {
+            name: Set("one".to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set("wallpapers/one.png".to_string()),
+            play_count: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let w2 = wallpaper::ActiveModel {
+            name: Set("two".to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set("wallpapers/two.png".to_string()),
+            play_count: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        monitor_config::ActiveModel {
+            monitor_id: Set("display-1".to_string()),
+            wallpaper_id: Set(Some(w1.id)),
+            fit_mode: Set("cover".to_string()),
+            play_mode: Set("sequential".to_string()),
+            play_interval: Set(300),
+            is_enabled: Set(true),
+            active: Set(true),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        (db, w1.id, w2.id)
+    }
+
+    async fn current_wid(db: &DatabaseConnection) -> Option<i32> {
+        get_by_monitor_id(db, "display-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .wallpaper_id
+    }
+
+    #[tokio::test]
+    async fn conditional_write_applies_when_expected_matches() {
+        let root = TempDir::new();
+        let (db, old, new) = setup(&root).await;
+        let result = try_apply_group_wallpaper(&db, "display-1", Some(new), Some(old))
+            .await
+            .unwrap();
+        assert_eq!(result, Some(false)); // independent 模式
+        assert_eq!(current_wid(&db).await, Some(new));
+    }
+
+    #[tokio::test]
+    async fn conditional_write_skips_when_wallpaper_changed_concurrently() {
+        let root = TempDir::new();
+        let (db, old, new) = setup(&root).await;
+        // 模拟用户在 tick 的读—算之间手动把壁纸改成了 third
+        let third = wallpaper::ActiveModel {
+            name: Set("three".to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set("wallpapers/three.png".to_string()),
+            play_count: Set(0),
+            created_at: Set("2026-01-01 00:00:00".to_string()),
+            updated_at: Set("2026-01-01 00:00:00".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        update_wallpaper_id(&db, "display-1", third.id)
+            .await
+            .unwrap();
+
+        let result = try_apply_group_wallpaper(&db, "display-1", Some(new), Some(old))
+            .await
+            .unwrap();
+        assert_eq!(result, None);
+        assert_eq!(current_wid(&db).await, Some(third.id)); // 用户选择未被覆盖
+    }
+
+    #[tokio::test]
+    async fn sync_group_primary_uses_sorted_active_monitors() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        // Migrator 已写入默认设置，用条件更新切换为 mirror。
+        app_setting::Entity::update_many()
+            .col_expr(app_setting::Column::Value, Expr::value("mirror"))
+            .filter(app_setting::Column::Key.eq(setting_keys::DISPLAY_MODE))
+            .exec(&db)
+            .await
+            .unwrap();
+        for (mid, active) in [
+            ("display-z", true),
+            ("display-a", true),
+            ("display-m", false),
+        ] {
+            monitor_config::ActiveModel {
+                monitor_id: Set(mid.to_string()),
+                fit_mode: Set("cover".to_string()),
+                play_mode: Set("sequential".to_string()),
+                play_interval: Set(300),
+                is_enabled: Set(true),
+                active: Set(active),
+                updated_at: Set("2026-01-01 00:00:00".to_string()),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            sync_group_primary(&db).await.unwrap(),
+            Some("display-a".to_string())
+        );
+        let (targets, is_sync) = active_targets(&db, "display-z").await.unwrap();
+        assert!(is_sync);
+        assert_eq!(targets, vec!["display-a", "display-z"]);
+    }
 }

@@ -119,4 +119,4 @@ manager.reconcile(scope)
 
 - **串行**：manager 由 `AppContext` 的 Mutex 保证所有 reconcile 不交错
 - **无反向依赖**：native.rs 不持有 AppHandle 之外的上层类型；设备丢失回调由上层注入
-- **并发安全**：所有跨 `'static` 边界持 `AppHandle`，经 `app.state::<AppContext>()` 访问 manager
+- **并发安全**：所有跨 `'static` 边界持 `AppHandle`，经 `app.state::<Arc<AppContext>>()` 访问 manager

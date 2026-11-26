@@ -1,7 +1,7 @@
 //! 全局快捷键注册与路由
 //!
 //! 把"操作系统级别的键盘事件"翻译为 [`Action`]，再委托
-//! [`Scheduler::dispatch_action`] 执行。
+//! [`TaskRegistry::dispatch_action`] 执行。
 //!
 //! ## 职责
 //!
@@ -13,7 +13,7 @@
 //! ## 切换壁纸的统一语义
 //!
 //! 全局快捷键与托盘菜单的"上一张/下一张"都走 [`Action::Next`] / [`Action::Prev`]
-//! → `Scheduler::dispatch_switch` → `switch_to_adjacent_wallpaper`，是同一套逻辑：
+//! → `TaskRegistry::dispatch_switch` → `switch_to_adjacent_wallpaper`，是同一套逻辑：
 //! independent 模式精确切换当前活跃显示器；mirror/extend 模式由后端裁决同步组，
 //! 一次算出下一张并单事务写全组 + reconcile(All)，保证组内壁纸与配置始终一致。
 //! 前端不再判断同步模式，旧的 `switch_wallpaper` command 已删除。
@@ -39,10 +39,10 @@ use tokio::sync::Mutex;
 
 use crate::application::{self, AppServices};
 use crate::context::AppContext;
+use crate::dto::action::Action;
 use crate::dto::app_setting_dto::keys as setting_keys;
-use crate::runtime::action::Action;
-use crate::runtime::Scheduler;
 use crate::services::app_setting_service;
+use crate::tasks::registry::TaskRegistry;
 
 // ==================== 默认快捷键定义 ====================
 
@@ -168,15 +168,18 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
         };
         info!("[GlobalShortcut] 触发动作: {:?}", action);
 
-        let scheduler_state = match app_handle.try_state::<Arc<Mutex<Scheduler>>>() {
+        let scheduler_state = match app_handle.try_state::<Arc<Mutex<TaskRegistry>>>() {
             Some(s) => s,
             None => {
-                warn!("[GlobalShortcut] Scheduler 尚未注册，丢弃动作 {:?}", action);
+                warn!(
+                    "[GlobalShortcut] TaskRegistry 尚未注册，丢弃动作 {:?}",
+                    action
+                );
                 return;
             }
         };
         // 入口层取一次共享状态；业务侧编排收敛在 application 用例。
-        let ctx_state = match app_handle.try_state::<AppContext>() {
+        let ctx_state = match app_handle.try_state::<Arc<AppContext>>() {
             Some(s) => s,
             None => {
                 warn!(
@@ -198,7 +201,7 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
 /// 执行会 panic）。键位必须与注册时一致，所以同样经 `current_accelerator`
 /// 读取 DB 中的自定义值并以默认键位兜底。
 async fn resolve_action(app: &AppHandle, shortcut: &Shortcut) -> Option<Action> {
-    let ctx = app.try_state::<AppContext>()?;
+    let ctx = app.try_state::<Arc<AppContext>>()?;
     let app_ctx: &AppContext = ctx.inner();
     let db = app_ctx.db.clone();
 
@@ -222,7 +225,7 @@ async fn resolve_action(app: &AppHandle, shortcut: &Shortcut) -> Option<Action> 
 ///
 /// 容错策略：单个键位失败仅 warn，不中断整体注册。
 pub async fn register_default_shortcuts(app: &AppHandle) {
-    let ctx = match app.try_state::<AppContext>() {
+    let ctx = match app.try_state::<Arc<AppContext>>() {
         Some(c) => c,
         None => {
             warn!("[GlobalShortcut] AppContext 未就绪，跳过快捷键注册");

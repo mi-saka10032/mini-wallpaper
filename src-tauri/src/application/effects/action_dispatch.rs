@@ -1,12 +1,12 @@
 //! 用户动作派发（ActionDispatch）
 //!
-//! 把 [`crate::runtime::action::Action`] 翻译为对具体 `monitor_config` 的
+//! 把 [`crate::dto::action::Action`] 翻译为对具体 `monitor_config` 的
 //! 副作用调用。承担"动作语义解析"与"目标显示器解析"两件事，
 //! 真正的切换 / 暂停 / 收藏等原子能力由调度器其它 impl 块提供
 //! （如 `switch_to_adjacent_wallpaper` / `manage_carousel_timer`），
 //! 本文件**零业务重复**。
 //!
-//! 所有方法通过 `impl Scheduler` 跨文件实现，与
+//! 所有方法通过 `impl TaskRegistry` 跨文件实现，与
 //! `setting_effects` / `deletion_effects` / `task_lifecycle` 同级，
 //! 天然拥有 `self.app`、`self.tasks` 等内部状态，零参数透传。
 //!
@@ -16,7 +16,7 @@
 //!  trigger_action / global_shortcut / tray_menu
 //!                       │
 //!                       ▼
-//!         Scheduler::dispatch_action(Action)
+//!         AppEffects::dispatch_action(Action)
 //!                       │
 //!     ┌─────────────────┴────────────────┐
 //!     ▼                                  ▼
@@ -35,15 +35,13 @@
 
 use log::{info, warn};
 
-use super::Scheduler;
-use crate::context::AppContext;
+use super::AppEffects;
+use crate::dto::action::Action;
 use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
 use crate::events::{MonitorConfigRefreshedPayload, TypedEmitTo};
-use crate::runtime::action::Action;
 use crate::services::monitor_config_service;
-use tauri::Manager;
 
 /// Toast 反馈消息标识。
 ///
@@ -91,7 +89,7 @@ fn probe_active_device_name() -> Option<String> {
     None
 }
 
-impl Scheduler {
+impl AppEffects<'_> {
     // ==================== 公共入口（供 Command / 快捷键 / 托盘 调用） ====================
 
     /// 派发用户动作
@@ -129,7 +127,7 @@ impl Scheduler {
     /// 切换壁纸（Next / Prev 共用实现）
     ///
     /// 解析目标 config 集合后，逐一委托
-    /// [`Scheduler::switch_to_adjacent_wallpaper`] 完成实际切换、
+    /// [`AppEffects::switch_to_adjacent_wallpaper`] 完成实际切换、
     /// DB 更新、窗口通知与定时器重置。
     async fn dispatch_switch(&mut self, direction: Direction) {
         let targets = match self.resolve_action_targets().await {
@@ -239,7 +237,7 @@ impl Scheduler {
     ///
     /// 与 Next/Prev 一样先解析 active 目标显示器，取其 `wallpaper_id`
     /// （轮播 tick 与手动切换实时回写的权威源）作为收藏对象，
-    /// 再委托 [`Scheduler::toggle_favorite`] 完成切换 + 联动 + 事件广播。
+    /// 再委托 [`AppEffects::toggle_favorite`] 完成切换 + 联动 + 事件广播。
     /// 最后按切换结果动态发送 toast 反馈。
     async fn dispatch_toggle_favorite(&mut self) {
         let targets = match self.resolve_action_targets().await {
@@ -309,16 +307,7 @@ impl Scheduler {
             Action::ToggleFavorite => "toggleFavorite",
         };
 
-        let ctx = match self.app.try_state::<AppContext>() {
-            Some(c) => c,
-            None => {
-                warn!("[ActionDispatch] AppContext 未就绪，跳过 toast");
-                return;
-            }
-        };
-        let app_ctx: &AppContext = ctx.inner();
-
-        let mut toast_mgr = app_ctx.toast_manager.lock().await;
+        let mut toast_mgr = self.ctx.toast_manager.lock().await;
         toast_mgr.show_toast(action_name, message);
     }
 

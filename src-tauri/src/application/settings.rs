@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use super::AppServices;
+use super::{effects::AppEffects, AppServices};
 use crate::dto::app_setting_dto::SetSettingRequest;
 use crate::services::app_setting_service;
 
@@ -11,9 +11,9 @@ pub async fn set_setting(svc: &AppServices<'_>, req: &SetSettingRequest) -> Resu
     req.validate_value_format().map_err(anyhow::Error::msg)?;
     app_setting_service::set(&svc.ctx.db, &req.key, &req.value).await?;
 
-    let mut sched = svc.scheduler.lock().await;
-    sched
-        .apply_setting_side_effect(&req.key, &req.value, req.monitor_id.as_deref())
+    let mut guard = svc.scheduler.lock().await;
+    let mut fx = AppEffects::new(svc.ctx, &mut guard);
+    fx.apply_setting_side_effect(&req.key, &req.value, req.monitor_id.as_deref())
         .await;
     Ok(())
 }

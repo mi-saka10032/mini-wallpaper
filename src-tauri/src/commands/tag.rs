@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tauri::State;
 
 use crate::context::AppContext;
@@ -14,7 +16,7 @@ use super::error::CommandResult;
 
 /// 获取全部标签（带引用计数）
 #[tauri::command]
-pub async fn get_tags(ctx: State<'_, AppContext>) -> CommandResult<Vec<TagWithCount>> {
+pub async fn get_tags(ctx: State<'_, Arc<AppContext>>) -> CommandResult<Vec<TagWithCount>> {
     let app_ctx: &AppContext = ctx.inner();
     Ok(tag_service::get_all_with_count(&app_ctx.db).await?)
 }
@@ -22,7 +24,7 @@ pub async fn get_tags(ctx: State<'_, AppContext>) -> CommandResult<Vec<TagWithCo
 /// 获取某壁纸的标签列表
 #[tauri::command]
 pub async fn get_wallpaper_tags(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<GetWallpaperTagsRequest>,
 ) -> CommandResult<Vec<tag::Model>> {
     let req = req.into_inner();
@@ -33,7 +35,7 @@ pub async fn get_wallpaper_tags(
 /// 给一批壁纸打一批标签（resolve-or-create + 幂等）。返回新增关联条数。
 #[tauri::command]
 pub async fn tag_wallpapers(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<TagWallpapersRequest>,
 ) -> CommandResult<u64> {
     let req = req.into_inner();
@@ -44,7 +46,7 @@ pub async fn tag_wallpapers(
 /// 从一批壁纸移除一批标签（按 tag id）。返回删除关联条数。
 #[tauri::command]
 pub async fn untag_wallpapers(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<UntagWallpapersRequest>,
 ) -> CommandResult<u64> {
     let req = req.into_inner();
@@ -55,7 +57,7 @@ pub async fn untag_wallpapers(
 /// 覆盖式设置单张壁纸的标签集合。返回设置后的完整标签列表。
 #[tauri::command]
 pub async fn set_wallpaper_tags(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<SetWallpaperTagsRequest>,
 ) -> CommandResult<Vec<tag::Model>> {
     let req = req.into_inner();
@@ -66,7 +68,7 @@ pub async fn set_wallpaper_tags(
 /// 按标签筛选壁纸（收藏夹「添加壁纸」选择器的标签筛选，命中任一 tag 即返回）
 #[tauri::command]
 pub async fn get_wallpapers_by_tags(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<WallpapersByTagsRequest>,
 ) -> CommandResult<Vec<wallpaper::Model>> {
     let req = req.into_inner();
@@ -77,7 +79,7 @@ pub async fn get_wallpapers_by_tags(
 /// 重命名标签
 #[tauri::command]
 pub async fn rename_tag(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<RenameTagRequest>,
 ) -> CommandResult<tag::Model> {
     let req = req.into_inner();
@@ -88,7 +90,7 @@ pub async fn rename_tag(
 /// 删除标签（连带清理关联）
 #[tauri::command]
 pub async fn delete_tag(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<DeleteTagRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();

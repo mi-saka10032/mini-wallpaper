@@ -1098,7 +1098,7 @@ M7 阶段回归：`cargo fmt --all --check`、`cargo test --lib` **51 passed**�
 
 M8 阶段回归：`cargo test --lib` **50 passed**——原先两个「明确报错」单测合并为一个 `unsupported_video_falls_back_only_in_auto`（webm / mkv / flv × Auto / NativeOnly），数量净 -1 但覆盖面扩大。改动只在跨平台 `selection.rs` 与注释，Windows 渲染器代码未动，probe 无需同步。当时按 14:05 的决策将 M6 起实机验证统一后置；相关实机项已于 2026-11-22 全部验收通过（用户确认，见第九节收尾结论）。
 
-控制链路收尾回归：`cargo fmt --all`、`cargo test --lib` 50 passed、probe Windows target check 0 error / 0 warning。改动只在 `setting_effects.rs`（Scheduler 层），Windows 渲染器与前端均未动。副屏跟随（含 350ms crossfade 延迟）与切回 Independent 后从屏 fitMode 已实机验收通过（用户确认，2026-11-22）。
+控制链路收尾回归：`cargo fmt --all`、`cargo test --lib` 50 passed、probe Windows target check 0 error / 0 warning。改动只在 `setting_effects.rs`（TaskRegistry 层），Windows 渲染器与前端均未动。副屏跟随（含 350ms crossfade 延迟）与切回 Independent 后从屏 fitMode 已实机验收通过（用户确认，2026-11-22）。
 
 ### 8.5 历史收束
 

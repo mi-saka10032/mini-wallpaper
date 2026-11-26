@@ -8,8 +8,8 @@ use crate::context::AppContext;
 use crate::dto::backup_dto::{ExportBackupRequest, ImportBackupRequest};
 use crate::dto::Validated;
 use crate::events::{BackupProgressPayload, TypedEmit};
-use crate::runtime::Scheduler;
 use crate::services::backup_service;
+use crate::tasks::registry::TaskRegistry;
 use crate::utils::progress_io::ByteProgressFn;
 
 use super::error::CommandResult;
@@ -17,7 +17,7 @@ use super::error::CommandResult;
 /// 导出备份到指定路径
 #[tauri::command]
 pub async fn export_backup(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<ExportBackupRequest>,
 ) -> CommandResult<String> {
     let app_ctx: &AppContext = ctx.inner();
@@ -64,8 +64,8 @@ pub async fn export_backup(
 /// 从 zip 文件导入备份
 #[tauri::command]
 pub async fn import_backup(
-    ctx: State<'_, AppContext>,
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
     req: Validated<ImportBackupRequest>,
 ) -> CommandResult<u64> {
     let app_ctx: &AppContext = ctx.inner();
@@ -114,7 +114,7 @@ pub async fn import_backup(
     // 先停掉会写库的后台任务，再关闭共享连接，最后才替换数据库文件。
     // 连接池固定 1 条且关闭后不会重开（见 ctx/db.rs），所以安装成功后必须重启进程，
     // 否则 AppContext 仍注册在 Tauri state 里、后续所有 command 都会拿到已关闭的连接。
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+    let scheduler_handle: Arc<Mutex<TaskRegistry>> = scheduler.inner().clone();
     scheduler_handle.lock().await.stop_all();
     if let Err(error) = app_ctx.db.close_by_ref().await {
         let _ = std::fs::remove_dir_all(&staging);
@@ -145,7 +145,7 @@ pub async fn import_backup(
 
 /// 获取应用数据总大小（字节）
 #[tauri::command]
-pub async fn get_data_size(ctx: State<'_, AppContext>) -> CommandResult<u64> {
+pub async fn get_data_size(ctx: State<'_, Arc<AppContext>>) -> CommandResult<u64> {
     let app_ctx: &AppContext = ctx.inner();
     let app_data_dir = app_ctx.app_handle.path().app_data_dir()?;
     Ok(backup_service::get_data_size(&app_data_dir))

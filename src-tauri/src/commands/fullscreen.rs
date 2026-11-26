@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
-use crate::runtime::Scheduler;
+use crate::application::{effects::AppEffects, AppServices};
+use crate::context::AppContext;
+use crate::tasks::registry::TaskRegistry;
 
 use super::error::CommandResult;
 
@@ -17,10 +19,13 @@ use super::error::CommandResult;
 /// 不再需要单独的 set_fullscreen_detection command。
 #[tauri::command]
 pub async fn init_fullscreen_detection(
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
 ) -> CommandResult<()> {
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched.init_fullscreen_detection().await;
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    let mut guard = svc.scheduler.lock().await;
+    AppEffects::new(svc.ctx, &mut guard)
+        .init_fullscreen_detection()
+        .await;
     Ok(())
 }

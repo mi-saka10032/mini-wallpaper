@@ -199,7 +199,7 @@ impl EventPayload for MonitorConfigRefreshedPayload {
 
 /// 动作反馈 Toast 事件（通知主窗口显示操作反馈）
 ///
-/// 由 `Scheduler::dispatch_action` 在动作执行完成后发送，
+/// 由 `TaskRegistry::dispatch_action` 在动作执行完成后发送，
 /// 前端监听后通过 sonner toast 显示短暂的操作反馈。
 #[derive(Clone, Serialize)]
 pub struct ActionToastPayload {

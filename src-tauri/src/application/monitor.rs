@@ -2,12 +2,12 @@
 
 use anyhow::{Context, Result};
 
-use super::AppServices;
+use super::{effects::AppEffects, AppServices};
 use crate::context::unified_manager::ReconcileScope;
 use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
 use crate::entities::monitor_config;
-use crate::tasks::carousel::carousel_key;
 use crate::services::monitor_config_service;
+use crate::tasks::carousel::carousel_key;
 
 /// 更新显示器配置（同步组由 service 裁决），并统一下发渲染副作用。
 ///
@@ -21,13 +21,14 @@ pub async fn upsert_monitor_config(
     let (updated, is_sync) = monitor_config_service::upsert_group(&svc.ctx.db, req).await?;
 
     {
-        let mut sched = svc.scheduler.lock().await;
+        let mut guard = svc.scheduler.lock().await;
+        let mut fx = AppEffects::new(svc.ctx, &mut guard);
         for config in &updated {
             if is_sync && config.monitor_id != req.monitor_id {
-                sched.stop(&carousel_key(&config.monitor_id));
+                fx.stop(&carousel_key(&config.monitor_id));
                 continue;
             }
-            sched.manage_carousel_timer(config, need_restart).await;
+            fx.manage_carousel_timer(config, need_restart).await;
         }
     }
 

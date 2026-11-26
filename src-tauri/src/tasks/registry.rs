@@ -1,46 +1,35 @@
 //! 后台任务注册表。
 //!
-//! 原 `Scheduler` 承载了大量业务编排（设置变更、删除联动、动作派发），那些逻辑
+//! 原 `TaskRegistry` 承载了大量业务编排（设置变更、删除联动、动作派发），那些逻辑
 //! 已迁往 `application/effects`。这里只保留 `key -> JoinHandle` 的纯生命周期管理：
 //! 同 key 再 spawn 会先 abort 旧任务，因此所有操作按 key 幂等。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use log::info;
-use sea_orm::DatabaseConnection;
-use tauri::Manager;
 use tokio::task::JoinHandle;
 
 use crate::context::AppContext;
-use crate::tasks::TaskSpawner;
+use crate::tasks::{TaskDeps, TaskSpawner};
 
 pub struct TaskRegistry {
-    /// 注入给 TaskSpawner；阶段 3 收尾时会改为显式 TaskDeps。
-    pub(crate) app: tauri::AppHandle,
-    pub(crate) tasks: HashMap<String, JoinHandle<()>>,
+    /// 显式依赖，spawn 时 clone 给任务；注册表自身不反查 AppHandle state。
+    deps: TaskDeps,
+    tasks: HashMap<String, JoinHandle<()>>,
 }
 
 impl TaskRegistry {
-    // 过渡方法：effects 迁往 AppEffects 后删除，届时注册表不再反查 AppContext。
-    pub(crate) fn db(&self) -> DatabaseConnection {
-        let ctx: &AppContext = self.app.state::<AppContext>().inner();
-        ctx.db.clone()
-    }
-
-    pub(crate) fn app_context(&self) -> tauri::State<'_, AppContext> {
-        self.app.state::<AppContext>()
-    }
-
-    pub fn new(app: tauri::AppHandle) -> Self {
+    pub fn new(ctx: Arc<AppContext>) -> Self {
         Self {
-            app,
+            deps: TaskDeps { ctx },
             tasks: HashMap::new(),
         }
     }
 
     /// 创建并注册任务；同 key 已有任务会先 abort。
     pub fn spawn(&mut self, key: String, task: impl TaskSpawner) {
-        let handle = task.spawn(&self.app);
+        let handle = task.spawn(self.deps.clone());
         self.register(key, handle);
     }
 

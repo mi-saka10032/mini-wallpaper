@@ -4,7 +4,7 @@
 
 `UnifiedWallpaperManager` 是壁纸状态的**唯一聚合入口**：所有显示器 slot、Native 渲染后端、WebView 窗口、配置快照都收在它的一把锁（`AppContext::unified_manager: Mutex<...>`）下。
 
-它取代了早期的 `RenderCoordinator` / `WallpaperWindowManager`，把两者拉平成一个对象。Scheduler、各 command、前端事件都经它串行操作壁纸状态。
+它取代了早期的 `RenderCoordinator` / `WallpaperWindowManager`，把两者拉平成一个对象。TaskRegistry、各 command、前端事件都经它串行操作壁纸状态。
 
 ## 目录结构
 
@@ -109,8 +109,8 @@ manager.reconcile(scope)
 
 | 消费者 | 输入 / 输出 | 契约 |
 |---|---|---|
-| Scheduler / commands | `reconcile(ReconcileScope)` | 经 manager 门面的 `ReconcileScope`；调用方不依赖 engine 内部 |
-| Scheduler / commands | 读 `slots()` / `observed()` | 只读引用，不得直接改；修改必须走 action → reconcile |
+| TaskRegistry / commands | `reconcile(ReconcileScope)` | 经 manager 门面的 `ReconcileScope`；调用方不依赖 engine 内部 |
+| TaskRegistry / commands | 读 `slots()` / `observed()` | 只读引用，不得直接改；修改必须走 action → reconcile |
 | carousel | `ReconcileScope::One(mid)` | 轮播换图写 DB 后触发单屏 reconcile |
 | desktop_renderer | `update_wallpaper` / `set_volume` / `set_paused` 等 | 由 native.rs 的 impl 转给渲染线程；渲染线程不反向依赖 manager |
 | AppContext | `init()` | setup 之后异步调用；桌面嵌入依赖消息循环，不能在 setup 的 block_on 里同步做 |

@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 
 use crate::context::AppContext;
 use crate::platform::{global_shortcut, tray::register_tray};
-use crate::runtime::Scheduler;
+use crate::tasks::registry::TaskRegistry;
 
 pub const AUTOSTART_ARG: &str = "--autostart";
 
@@ -71,21 +71,23 @@ fn register_logger(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 注册 AppContext 与 Scheduler。数据库连接在 AppContext 内部完成。
+/// 注册 AppContext 与 TaskRegistry。数据库连接在 AppContext 内部完成。
 fn register_runtime_state(app: &mut tauri::App) -> tauri::Result<()> {
     let handle = app.handle();
 
-    let ctx: AppContext =
+    let ctx: Arc<AppContext> = Arc::new(
         tauri::async_runtime::block_on(async { AppContext::new(handle.clone()).await }).map_err(
             |error| {
                 log::error!("[Setup] 数据库初始化失败: {error:#}");
                 error
             },
-        )?;
-    app.manage(ctx);
+        )?,
+    );
+    app.manage(ctx.clone());
 
-    let scheduler: Arc<Mutex<Scheduler>> = Arc::new(Mutex::new(Scheduler::new(handle.clone())));
-    app.manage(scheduler);
+    // TaskRegistry 持有同一份 Arc<AppContext>，后台任务无需再反查 AppHandle state。
+    let registry: Arc<Mutex<TaskRegistry>> = Arc::new(Mutex::new(TaskRegistry::new(ctx.clone())));
+    app.manage(registry);
     Ok(())
 }
 
@@ -100,9 +102,9 @@ fn hide_main_on_autostart(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 快捷键要读数据库键位，并派发到 Scheduler，所以放在两者注册之后。
+/// 快捷键要读数据库键位，并派发到 TaskRegistry，所以放在两者注册之后。
 ///
-/// 用 spawn 而非 block_on：注册所需的 AppContext / Scheduler / 快捷键 plugin
+/// 用 spawn 而非 block_on：注册所需的 AppContext / TaskRegistry / 快捷键 plugin
 /// 在调用本函数时已全部就绪，后续 setup 步骤也不依赖「键位已注册」，
 /// 因此无需阻塞启动。代价是进入事件循环后的极短窗口内按键可能无响应，
 /// 注册完成后即恢复；单个键位失败仍由 register_default_shortcuts 内部 warn。
@@ -120,7 +122,7 @@ fn register_shortcuts(app: &tauri::App) {
 fn spawn_manager_init(app: &tauri::App) {
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
-        app_handle.state::<AppContext>().init_manager().await;
+        app_handle.state::<Arc<AppContext>>().init_manager().await;
     });
 }
 
@@ -159,7 +161,7 @@ fn start_monitor_hotplug(app: &tauri::App) {
                     Err(_) => break,         // 静默期到，执行同步
                 }
             }
-            let app_ctx = app_handle.state::<AppContext>();
+            let app_ctx = app_handle.state::<Arc<AppContext>>();
             let mut manager = app_ctx.unified_manager.lock().await;
             if let Err(e) = manager.sync_monitors_from_system().await {
                 log::warn!("[MonitorHotplug] 显示器同步失败: {:#}", e);
@@ -175,6 +177,8 @@ fn start_monitor_hotplug(_app: &tauri::App) {}
 fn spawn_trash_purge(app: &tauri::App) {
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
-        crate::services::trash_maintenance::purge_expired_on_startup(&app_handle).await;
+        // 入口层取一次共享状态，service 内部零反查。
+        let ctx = app_handle.state::<Arc<AppContext>>();
+        crate::services::trash_maintenance::purge_expired_on_startup(ctx.inner()).await;
     });
 }

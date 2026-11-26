@@ -126,7 +126,7 @@ const QUAD: [Vertex; 4] = [
 /// 全屏 quad 所需的对象集合：由 SharedDevice 创建一次并克隆给所有 surface。
 /// 每个字段对应绘制流程的一步：顶点变换 → 光栅化 → 像素采样 → 混合输出。
 #[derive(Clone)]
-pub(super) struct QuadPipeline {
+pub struct QuadPipeline {
     /// 顶点着色器 `vs_main`：把 quad 的 NDC 坐标与 UV 原样透传，无矩阵变换。
     pub(super) vertex_shader: ID3D11VertexShader,
     /// 图片像素着色器 `ps_main`：单张 BGRA 纹理采样 × fade_alpha。

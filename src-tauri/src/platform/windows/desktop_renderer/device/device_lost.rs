@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 
 /// Present 直接返回 windows 原生错误。统一成一个 trait，让 is_device_lost 泛型处理两者。
-trait DeviceLostHResult {
+pub(crate) trait DeviceLostHResult {
     fn lost_hresult(&self) -> Option<windows::core::HRESULT>;
 }
 
@@ -34,8 +34,8 @@ impl DeviceLostHResult for windows::core::Error {
 /// 同时失效，必须整组清理 surface 与 SharedDevice，不能只重试单屏。
 pub(crate) fn is_device_lost<E: DeviceLostHResult>(err: &E) -> bool {
     err.lost_hresult().is_some_and(|code| {
-        code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED
-            || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_RESET
-            || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DRIVER_INTERNAL_ERROR
+        code == DXGI_ERROR_DEVICE_REMOVED
+            || code == DXGI_ERROR_DEVICE_RESET
+            || code == DXGI_ERROR_DRIVER_INTERNAL_ERROR
     })
 }

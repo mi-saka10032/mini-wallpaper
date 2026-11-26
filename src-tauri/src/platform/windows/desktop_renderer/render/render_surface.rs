@@ -9,12 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use windows::core::Interface;
-use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Buffer, ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceContext,
-    ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_VIEWPORT,
+    ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
+    ID3D11Texture2D, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::DirectComposition::{
     IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,

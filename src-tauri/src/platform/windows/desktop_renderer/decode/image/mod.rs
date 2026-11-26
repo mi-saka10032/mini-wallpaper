@@ -3,5 +3,4 @@
 mod decode;
 mod worker;
 
-pub(crate) use decode::decode_and_upload;
-pub(crate) use worker::{ImageDecodeQueue, Ready};
+pub(crate) use worker::ImageDecodeQueue;

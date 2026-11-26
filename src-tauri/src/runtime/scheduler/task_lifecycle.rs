@@ -162,11 +162,23 @@ impl Scheduler {
             .unwrap_or_else(|| "independent".to_string());
 
         let is_sync_mode = monitor_config_service::is_sync_mode(&display_mode);
-        let mut primary_started = false;
+        // 同步组只启基准屏一个 timer；基准屏用确定性的排序口径，
+        // 与 display_mode 切换时的选择一致，避免 DB 返回顺序漂移选到不同屏。
+        let sync_primary = if is_sync_mode {
+            match monitor_config_service::sync_group_primary(&db).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("[Scheduler] 获取同步组基准屏失败: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         for config in &configs {
             if monitor_config_service::should_start_timer(config) {
-                if is_sync_mode && primary_started {
+                if is_sync_mode && (config.monitor_id != sync_primary.as_deref().unwrap_or("")) {
                     continue;
                 }
 
@@ -184,10 +196,6 @@ impl Scheduler {
                                 "[Scheduler] 启动定时器: {} (display_mode={})",
                                 config.monitor_id, display_mode
                             );
-
-                            if is_sync_mode {
-                                primary_started = true;
-                            }
                         }
                         Ok(false) => {}
                         Err(e) => {

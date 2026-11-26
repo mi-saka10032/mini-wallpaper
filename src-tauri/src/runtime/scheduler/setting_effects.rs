@@ -105,12 +105,14 @@ impl Scheduler {
         // mirror/extend：以基准屏配置单事务同步到所有从属屏，再触发一次 reconcile。
         // independent：DB 无批量变更，直接触发一次 reconcile 让所有屏按新 is_sync 重下发。
         if monitor_config_service::is_sync_mode(display_mode) {
-            let primary_mid = monitor_id.unwrap_or_else(|| {
-                active_configs
-                    .first()
-                    .map(|c| c.monitor_id.as_str())
-                    .unwrap_or("")
-            });
+            // 默认基准屏用与 start_all_carousel_timers 相同的确定性口径；
+            // 用户显式指定时仍优先（决定用谁的配置覆盖整组）。
+            let default_primary = monitor_config_service::sync_group_primary(&db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let primary_mid = monitor_id.unwrap_or(default_primary.as_str());
             if let Some(source) = active_configs.iter().find(|c| c.monitor_id == primary_mid) {
                 let targets: Vec<String> = active_configs
                     .iter()
@@ -162,12 +164,12 @@ impl Scheduler {
                 }
             }
             "mirror" | "extend" => {
-                let primary_mid = monitor_id.unwrap_or_else(|| {
-                    active_configs
-                        .first()
-                        .map(|c| c.monitor_id.as_str())
-                        .unwrap_or("")
-                });
+                let default_primary = monitor_config_service::sync_group_primary(&db)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let primary_mid = monitor_id.unwrap_or(default_primary.as_str());
                 let primary_config = active_configs.iter().find(|c| c.monitor_id == primary_mid);
 
                 // 定时器管理（Phase 3 范围排除）：仅保留主 monitor 的定时器

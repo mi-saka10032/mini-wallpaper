@@ -4,7 +4,7 @@ use log::info;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::dto::backup_dto::{ExportBackupRequest, ImportBackupRequest};
 use crate::dto::Validated;
 use crate::events::{BackupProgressPayload, TypedEmit};

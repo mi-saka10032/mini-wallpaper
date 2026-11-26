@@ -13,8 +13,8 @@ use tauri::Manager;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration, MissedTickBehavior};
 
-use crate::ctx::unified_manager::ReconcileScope;
-use crate::ctx::AppContext;
+use crate::context::unified_manager::ReconcileScope;
+use crate::context::AppContext;
 use crate::dto::shortcut_dto::Direction;
 use crate::runtime::scheduler::TaskSpawner;
 use crate::services::{collection_service, monitor_config_service};

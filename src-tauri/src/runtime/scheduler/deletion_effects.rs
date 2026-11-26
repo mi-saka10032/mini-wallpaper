@@ -31,7 +31,7 @@ impl Scheduler {
         let ctx = self.app_context();
         let mut guard = ctx.unified_manager.lock().await;
         if let Err(e) = guard
-            .reconcile(crate::ctx::unified_manager::ReconcileScope::All)
+            .reconcile(crate::context::unified_manager::ReconcileScope::All)
             .await
         {
             warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
@@ -378,9 +378,9 @@ impl Scheduler {
         // 收窄作用域：reconcile 结束后立即释放对 self 的借用，后面 restart 需要 &mut self。
         {
             let scope = if is_sync {
-                crate::ctx::unified_manager::ReconcileScope::All
+                crate::context::unified_manager::ReconcileScope::All
             } else {
-                crate::ctx::unified_manager::ReconcileScope::One(config.monitor_id.clone())
+                crate::context::unified_manager::ReconcileScope::One(config.monitor_id.clone())
             };
             let ctx = self.app_context();
             let mut guard = ctx.unified_manager.lock().await;

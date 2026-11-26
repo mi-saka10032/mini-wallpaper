@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::events::{RendererErrorPayload, TypedEmit};
 use crate::platform::wallpaper_renderer::{DeviceLostHandler, RendererErrorCode};
 

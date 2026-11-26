@@ -6,7 +6,7 @@
 //!
 //! ## 依赖方向（单向，不可反转）
 //!
-//! `application` → `services`（纯 DB）/ `ctx`（纯状态）/ `runtime`（任务生命周期）。
+//! `application` → `services`（纯 DB）/ `context`（纯状态）/ `runtime`（任务生命周期）。
 //! `services` 不得反向依赖本层，也不得持有 AppContext / Scheduler，
 //! 以保证 68 个 SQLite 单测只需一个临时数据库即可运行。
 //!
@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::runtime::Scheduler;
 
 pub mod actions;

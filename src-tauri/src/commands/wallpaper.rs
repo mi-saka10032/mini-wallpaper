@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::application::wallpaper::DeletionMode;
 use crate::application::{wallpaper as wallpaper_use_cases, AppServices};
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::dto::wallpaper_dto::{DeleteWallpapersRequest, ImportWallpapersRequest};
 use crate::dto::Validated;
 use crate::entities::wallpaper;

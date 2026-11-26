@@ -36,7 +36,7 @@
 use log::{info, warn};
 
 use super::Scheduler;
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::dto::monitor_config_dto::UpsertMonitorConfigRequest;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;

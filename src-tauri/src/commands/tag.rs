@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::dto::tag_dto::{
     DeleteTagRequest, GetWallpaperTagsRequest, RenameTagRequest, SetWallpaperTagsRequest,
     TagWallpapersRequest, UntagWallpapersRequest, WallpapersByTagsRequest,

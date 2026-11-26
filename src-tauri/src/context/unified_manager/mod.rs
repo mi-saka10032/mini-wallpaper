@@ -24,7 +24,7 @@ use crate::platform::wallpaper_renderer::{
     RenderBackend,
 };
 
-use crate::ctx::unified_manager::engine::{
+use crate::context::unified_manager::engine::{
     ConfigSnapshot, DispatchAction, GlobalSnapshot, MonitorSnapshot, DEFAULT_DISPLAY_MODE,
 };
 pub mod engine;

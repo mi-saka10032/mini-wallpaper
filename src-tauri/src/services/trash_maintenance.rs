@@ -18,7 +18,7 @@
 use log::{info, warn};
 use tauri::{AppHandle, Manager};
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::dto::app_setting_dto::{keys as setting_keys, DEFAULT_TRASH_RETENTION_DAYS};
 use crate::services::{app_setting_service, wallpaper_service};
 

@@ -28,7 +28,7 @@ use sea_orm::DatabaseConnection;
 use tauri::Manager;
 use tokio::task::JoinHandle;
 
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 
 // re-export TaskSpawner，保持外部引用路径 `crate::runtime::scheduler::TaskSpawner` 兼容
 pub use super::tasks::TaskSpawner;

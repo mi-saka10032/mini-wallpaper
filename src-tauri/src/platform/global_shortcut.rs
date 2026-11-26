@@ -38,7 +38,7 @@ use tauri_plugin_global_shortcut::{
 use tokio::sync::Mutex;
 
 use crate::application::{self, AppServices};
-use crate::ctx::AppContext;
+use crate::context::AppContext;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::runtime::action::Action;
 use crate::runtime::Scheduler;

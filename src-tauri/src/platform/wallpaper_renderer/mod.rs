@@ -15,6 +15,8 @@ pub mod fit;
 pub mod geometry;
 // 后端选择策略（Native / WebView 回退）
 mod selection;
+// 视频帧节拍的跨平台纯逻辑（供 Windows decode worker 消费，便于本机单测）
+pub mod timing;
 
 // 统一对外导出契约类型，让上层无需感知内部分模块结构。
 pub use contracts::{

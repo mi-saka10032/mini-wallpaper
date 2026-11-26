@@ -49,7 +49,7 @@ const MonitorSettingsPanel: React.FC = () => {
     handlePlayModeChange,
     handleIntervalChange,
     handleEnabledChange,
-  } = useMonitorConfig({ selectedMonitorId, isSyncMode });
+  } = useMonitorConfig({ selectedMonitorId });
 
   // 当选中显示器或配置变化时同步 sourceType
   useEffect(() => {

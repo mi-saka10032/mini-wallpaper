@@ -104,7 +104,7 @@ impl Scheduler {
 
         // mirror/extend：以基准屏配置单事务同步到所有从属屏，再触发一次 reconcile。
         // independent：DB 无批量变更，直接触发一次 reconcile 让所有屏按新 is_sync 重下发。
-        if matches!(display_mode, "mirror" | "extend") {
+        if monitor_config_service::is_sync_mode(display_mode) {
             let primary_mid = monitor_id.unwrap_or_else(|| {
                 active_configs
                     .first()

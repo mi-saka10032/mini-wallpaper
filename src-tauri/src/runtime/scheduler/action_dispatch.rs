@@ -351,7 +351,7 @@ impl Scheduler {
             return Some(Vec::new());
         }
 
-        // 同步模式：取第一个 active config，由切换函数内部广播
+        // 同步模式：取一个 active config 作为基准，由切换函数内部扩散到整组
         if self.resolve_is_sync_mode().await {
             return Some(vec![active_configs[0].clone()]);
         }

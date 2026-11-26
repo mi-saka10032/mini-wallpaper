@@ -9,16 +9,14 @@
 //! `spawn` 接收调度器注入的 `AppHandle`，按需获取 db / window_manager 等共享资源。
 
 use log::{error, warn};
-use sea_orm::TransactionTrait;
 use tauri::Manager;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 
 use crate::ctx::unified_manager::ReconcileScope;
 use crate::ctx::AppContext;
-use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::runtime::scheduler::TaskSpawner;
-use crate::services::{app_setting_service, collection_service, monitor_config_service};
+use crate::services::{collection_service, monitor_config_service};
 
 /// 轮播定时器在 Scheduler 中的 key 前缀
 pub const CAROUSEL_TIMER_PREFIX: &str = "carousel:";
@@ -99,17 +97,6 @@ impl TaskSpawner for CarouselTask {
                 let current_wid = current_config.wallpaper_id;
                 let play_mode = current_config.play_mode;
 
-                // 读取全局 display_mode 设置
-                let display_mode =
-                    match app_setting_service::get(&db, setting_keys::DISPLAY_MODE).await {
-                        Ok(Some(dm)) => dm,
-                        Ok(None) => "independent".to_string(),
-                        Err(e) => {
-                            warn!("[Carousel] Failed to get display_mode: {}", e);
-                            "independent".to_string()
-                        }
-                    };
-
                 // 通过 collection_service 获取下一张壁纸
                 match collection_service::next_wallpaper_id(
                     &db,
@@ -120,51 +107,21 @@ impl TaskSpawner for CarouselTask {
                 .await
                 {
                     Ok(Some(new_wid)) => {
-                        // 架构重整 Phase 3：DB 写入（本屏 + 同步模式下的从屏）收进单事务，
-                        // commit 后由 Manager 一次 reconcile 统一下发，不再逐条改 DB + 手动通知。
-                        let is_sync = display_mode == "mirror" || display_mode == "extend";
-
-                        let txn = match db.begin().await {
-                            Ok(t) => t,
+                        // 组写入统一收在 service：单事务写全组 + 全量对齐，
+                        // 回传的 is_sync 决定 reconcile 范围；commit 后一次下发。
+                        let (_, is_sync) = match monitor_config_service::apply_group_wallpaper(
+                            &db,
+                            &mid,
+                            Some(new_wid),
+                        )
+                        .await
+                        {
+                            Ok(v) => v,
                             Err(e) => {
-                                error!("[Carousel] Failed to begin transaction: {}", e);
+                                error!("[Carousel] Failed to apply group wallpaper: {}", e);
                                 continue;
                             }
                         };
-                        if let Err(e) =
-                            monitor_config_service::update_wallpaper_id(&txn, &mid, new_wid).await
-                        {
-                            error!(
-                                "[Carousel] Failed to update wallpaper_id for {}: {}",
-                                mid, e
-                            );
-                            continue;
-                        }
-                        if is_sync {
-                            if let Ok(all_configs) = monitor_config_service::get_all(&txn).await {
-                                for config in &all_configs {
-                                    if config.active && config.monitor_id != mid {
-                                        if let Err(e) = monitor_config_service::update_wallpaper_id(
-                                            &txn,
-                                            &config.monitor_id,
-                                            new_wid,
-                                        )
-                                        .await
-                                        {
-                                            error!(
-                                                "[Carousel] Failed to sync wallpaper_id for {}: {}",
-                                                config.monitor_id, e
-                                            );
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if let Err(e) = txn.commit().await {
-                            error!("[Carousel] Failed to commit wallpaper advance: {}", e);
-                            continue;
-                        }
 
                         let scope = if is_sync {
                             ReconcileScope::All

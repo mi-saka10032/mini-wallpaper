@@ -161,7 +161,7 @@ impl Scheduler {
             .unwrap_or(None)
             .unwrap_or_else(|| "independent".to_string());
 
-        let is_sync_mode = display_mode == "mirror" || display_mode == "extend";
+        let is_sync_mode = monitor_config_service::is_sync_mode(&display_mode);
         let mut primary_started = false;
 
         for config in &configs {

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
+use crate::application::{self, AppServices};
 use crate::ctx::AppContext;
 use crate::dto::app_setting_dto::{GetSettingRequest, SetSettingRequest};
 use crate::dto::Validated;
@@ -48,21 +49,6 @@ pub async fn set_setting(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<SetSettingRequest>,
 ) -> CommandResult<()> {
-    let req = req.into_inner();
-
-    // 跨字段校验：按 key 校验 value 格式
-    req.validate_value_format()?;
-
-    // 1. 写入 DB
-    let app_ctx: &AppContext = ctx.inner();
-    app_setting_service::set(&app_ctx.db, &req.key, &req.value).await?;
-
-    // 2. 通过 Scheduler 执行副作用
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched
-        .apply_setting_side_effect(&req.key, &req.value, req.monitor_id.as_deref())
-        .await;
-
-    Ok(())
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    Ok(application::settings::set_setting(&svc, &req.into_inner()).await?)
 }

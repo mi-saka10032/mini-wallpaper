@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
-use crate::ctx::unified_manager::ReconcileScope;
+use crate::application::{self, AppServices};
 use crate::ctx::AppContext;
 use crate::dto::monitor_config_dto::{
     DeleteMonitorConfigRequest, GetMonitorConfigRequest, UpsertMonitorConfigRequest,
@@ -56,43 +56,8 @@ pub async fn upsert_monitor_config(
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     req: Validated<UpsertMonitorConfigRequest>,
 ) -> CommandResult<monitor_config::Model> {
-    let req: UpsertMonitorConfigRequest = req.into_inner();
-
-    // play_interval / collection_id 变更需重建定时器 interval 或重算收藏夹
-    let need_restart = req.play_interval.is_some() || req.collection_id.is_some();
-    let app_ctx: &AppContext = ctx.inner();
-
-    let (updated, is_sync) = monitor_config_service::upsert_group(&app_ctx.db, &req).await?;
-
-    // ===== 定时器管理 =====
-    // 同步组只保留基准屏一个定时器：组内所有屏共享同一壁纸，若每屏各启一个，
-    // 每个 timer 都会触发一次整组切换，切换频率会翻 N 倍（与 start_all_carousel_timers
-    // 的「同步组只启主屏」语义一致）。独立模式则各管各的。
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    for config in &updated {
-        if is_sync && config.monitor_id != req.monitor_id {
-            sched.stop(&carousel_key(&config.monitor_id));
-            continue;
-        }
-        sched.manage_carousel_timer(config, need_restart).await;
-    }
-    drop(sched);
-
-    // ===== 唯一的渲染副作用入口：一次 action → 一次 reconcile =====
-    let scope = if is_sync {
-        ReconcileScope::All
-    } else {
-        ReconcileScope::One(req.monitor_id.clone())
-    };
-    let mut manager = app_ctx.unified_manager.lock().await;
-    manager.reconcile(scope).await?;
-
-    // 返回基准屏配置；组内其它屏由前端 fetchConfigs 全量刷新
-    updated
-        .into_iter()
-        .find(|c| c.monitor_id == req.monitor_id)
-        .ok_or_else(|| anyhow::anyhow!("基准屏配置未返回").into())
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    Ok(application::monitor::upsert_monitor_config(&svc, &req.into_inner()).await?)
 }
 
 /// 删除显示器配置

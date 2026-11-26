@@ -1,17 +1,18 @@
 //! 用户动作派发 Command
 //!
 //! 暴露统一的 [`trigger_action`] 命令给前端调用。前端只关心"想做什么"，
-//! 显示器解析、display_mode 适配、定时器重置等细节全部内聚在
-//! `Scheduler::dispatch_action` 中。
+//! 显示器解析、display_mode 适配、定时器重置等细节内聚在 application 层。
 //!
-//! 该命令也是后续全局快捷键 / 托盘菜单 → Action 路由路径的**参考实现**：
-//! 三方调用方共享 `Scheduler::dispatch_action` 单一入口。
+//! 前端、全局快捷键、托盘菜单三方共享 `application::actions::dispatch_action`
+//! 单一入口；本命令只是薄壳。
 
 use std::sync::Arc;
 
 use tauri::State;
 use tokio::sync::Mutex;
 
+use crate::application::{self, AppServices};
+use crate::ctx::AppContext;
 use crate::runtime::action::Action;
 use crate::runtime::Scheduler;
 
@@ -25,11 +26,11 @@ use super::error::CommandResult;
 /// 避免快捷键场景下因偶发错误导致用户看到红色报错弹窗。
 #[tauri::command]
 pub async fn trigger_action(
+    ctx: State<'_, AppContext>,
     scheduler: State<'_, Arc<Mutex<Scheduler>>>,
     action: Action,
 ) -> CommandResult<()> {
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched.dispatch_action(action).await;
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    application::actions::dispatch_action(&svc, action).await;
     Ok(())
 }

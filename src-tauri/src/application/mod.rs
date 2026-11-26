@@ -26,6 +26,10 @@ use tokio::sync::Mutex;
 use crate::ctx::AppContext;
 use crate::runtime::Scheduler;
 
+pub mod actions;
+pub mod collection;
+pub mod monitor;
+pub mod settings;
 pub mod wallpaper;
 
 /// 用例执行所需的显式依赖。

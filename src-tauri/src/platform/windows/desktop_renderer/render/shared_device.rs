@@ -7,7 +7,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -18,8 +17,6 @@ use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
 
 use super::pipeline::{create_pipeline, QuadPipeline};
 use crate::platform::windows::desktop_renderer::decode::{VideoPlayback, VideoWorkerHost};
-
-use super::composition::create_composition_swap_chain;
 
 pub struct SharedDevice {
     pub(crate) device: ID3D11Device,

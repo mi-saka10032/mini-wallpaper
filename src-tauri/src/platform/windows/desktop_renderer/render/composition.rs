@@ -3,7 +3,6 @@
 //! 几个 COM 对象必须一起存活，否则 visual 失效、桌面合成树取不到内容。
 //! premultiplied alpha + FLIP_SEQUENTIAL 是 24H2 正确采样壁纸窗口的前提。
 
-use anyhow::Context;
 use anyhow::Result;
 use windows::core::{IUnknown, Interface};
 use windows::Win32::Foundation::{FALSE, HWND};
@@ -16,8 +15,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     IDXGIDevice, IDXGIFactory2, IDXGIOutput, IDXGISwapChain1, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
 /// DirectComposition 合成链：swapchain 的内容经 visual → target → 壁纸 HWND。

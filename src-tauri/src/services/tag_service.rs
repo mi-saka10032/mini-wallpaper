@@ -438,7 +438,7 @@ mod tests {
 
         let w1 = insert_wallpaper(&db, "a").await;
         let w2 = insert_wallpaper(&db, "b").await;
-        let w3 = insert_wallpaper(&db, "c").await;
+        let _w3 = insert_wallpaper(&db, "c").await;
         let t1 = insert_tag(&db, "风景").await;
         let t2 = insert_tag(&db, "动漫").await;
 

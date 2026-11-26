@@ -55,8 +55,8 @@ use windows::Win32::Media::MediaFoundation::{
 };
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToUInt64};
 
-use super::super::audio::AudioPlayback;
-use super::super::frames::YuvCoeffs;
+use super::super::AudioPlayback;
+use super::super::YuvCoeffs;
 use crate::platform::wallpaper_renderer::timing::{resolve_loop_duration, should_read_next_frame};
 
 pub fn startup() -> Result<()> {

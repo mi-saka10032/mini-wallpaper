@@ -25,7 +25,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
-use super::super::frames::{GpuFrame, SharedFrames};
+use super::super::{GpuFrame, SharedFrames};
 use crate::platform::wallpaper_renderer::decoder::{decode_frames, DecodedFrame};
 
 /// 一次解码 + 一次纹理上传，返回整组共用的帧序列。

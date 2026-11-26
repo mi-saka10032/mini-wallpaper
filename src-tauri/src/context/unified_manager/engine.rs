@@ -16,7 +16,7 @@ pub const DEFAULT_DISPLAY_MODE: &str = "independent";
 /// 只保留 3 个字段，理由有两类：
 /// - `id` / `updated_at`：代理主键与时间戳，变化不代表渲染状态变化，纳入会产出伪差异。
 /// - `collection_id` / `play_mode` / `play_interval` / `is_enabled`：只服务轮播定时器，
-///   由 Scheduler 现有路径消费（`manage_carousel_timer` / `should_start_timer`），
+///   由 TaskRegistry 现有路径消费（`manage_carousel_timer` / `should_start_timer`），
 ///   且 `carousel.rs` 每次 tick 动态重读 config，不产生任何窗口动作。
 ///   轮播换图最终写的是 `wallpaper_id`，仍会被本快照捕获。
 /// 本次重整的范围是「窗口调整相关副作用」，timer 不在其中，不进快照。
@@ -41,7 +41,7 @@ pub enum MonitorField {
 /// `app_setting` 白名单里影响渲染的全局字段。
 ///
 /// 其余 key（theme / shortcut_* / 回收站等）不进快照：它们要么无渲染副作用，
-/// 要么归 Scheduler 自己管理，混进来只会产出无意义的 diff。
+/// 要么归 TaskRegistry 自己管理，混进来只会产出无意义的 diff。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalSnapshot {
     pub display_mode: String,

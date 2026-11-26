@@ -13,8 +13,8 @@ use tokio::sync::Mutex;
 
 use crate::application::{self, AppServices};
 use crate::context::AppContext;
-use crate::runtime::action::Action;
-use crate::runtime::Scheduler;
+use crate::dto::action::Action;
+use crate::tasks::registry::TaskRegistry;
 
 use super::error::CommandResult;
 
@@ -26,8 +26,8 @@ use super::error::CommandResult;
 /// 避免快捷键场景下因偶发错误导致用户看到红色报错弹窗。
 #[tauri::command]
 pub async fn trigger_action(
-    ctx: State<'_, AppContext>,
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
     action: Action,
 ) -> CommandResult<()> {
     let svc = AppServices::new(ctx.inner(), scheduler.inner());

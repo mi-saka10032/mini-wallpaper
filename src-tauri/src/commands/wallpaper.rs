@@ -9,8 +9,8 @@ use crate::context::AppContext;
 use crate::dto::wallpaper_dto::{DeleteWallpapersRequest, ImportWallpapersRequest};
 use crate::dto::Validated;
 use crate::entities::wallpaper;
-use crate::runtime::Scheduler;
 use crate::services::wallpaper_service;
+use crate::tasks::registry::TaskRegistry;
 
 use super::error::CommandResult;
 
@@ -22,7 +22,9 @@ pub fn get_supported_extensions() -> Vec<String> {
 
 /// 获取壁纸列表
 #[tauri::command]
-pub async fn get_wallpapers(ctx: State<'_, AppContext>) -> CommandResult<Vec<wallpaper::Model>> {
+pub async fn get_wallpapers(
+    ctx: State<'_, Arc<AppContext>>,
+) -> CommandResult<Vec<wallpaper::Model>> {
     let app_ctx: &AppContext = ctx.inner();
     Ok(wallpaper_service::get_all(&app_ctx.db).await?)
 }
@@ -32,7 +34,7 @@ pub async fn get_wallpapers(ctx: State<'_, AppContext>) -> CommandResult<Vec<wal
 /// 恢复和彻底删除走各自的回收站接口。壁纸窗口重新加载时只应拿到仍可播放的记录。
 #[tauri::command]
 pub async fn get_wallpaper(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     id: i32,
 ) -> CommandResult<Option<wallpaper::Model>> {
     let app_ctx: &AppContext = ctx.inner();
@@ -45,7 +47,7 @@ pub async fn get_wallpaper(
 /// `save_video_thumbnail` 单独写入。
 #[tauri::command]
 pub async fn import_wallpapers(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<ImportWallpapersRequest>,
 ) -> CommandResult<Vec<wallpaper::Model>> {
     let req = req.into_inner();
@@ -70,7 +72,7 @@ pub async fn import_wallpapers(
 /// 数组序列化开销；文件名经 `fileName` 请求头传入（前端 encodeURIComponent 编码）。
 #[tauri::command]
 pub async fn import_wallpaper_bytes(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     request: tauri::ipc::Request<'_>,
 ) -> CommandResult<wallpaper::Model> {
     let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
@@ -105,7 +107,7 @@ pub async fn import_wallpaper_bytes(
 /// 序列化开销；`wallpaperId` 经请求头传入。
 #[tauri::command]
 pub async fn save_video_thumbnail(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     request: tauri::ipc::Request<'_>,
 ) -> CommandResult<String> {
     let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
@@ -138,12 +140,12 @@ pub async fn save_video_thumbnail(
 /// `monitor_configs.wallpaper_id` 引用并触发联动：正在显示的壁纸进了回收站，
 /// 桌面必须立刻切走或清空，这一用户可感知行为与硬删除时保持一致。
 ///
-/// 删除后的联动逻辑委托给 `Scheduler::on_wallpapers_deleted`，
+/// 删除后的联动逻辑委托给 `TaskRegistry::on_wallpapers_deleted`，
 /// Command 层只负责数据操作 + 一行调度器调用。
 #[tauri::command]
 pub async fn delete_wallpapers(
-    ctx: State<'_, AppContext>,
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
     req: Validated<DeleteWallpapersRequest>,
 ) -> CommandResult<u64> {
     let svc = AppServices::new(ctx.inner(), scheduler.inner());
@@ -156,7 +158,7 @@ pub async fn delete_wallpapers(
 /// 获取回收站内的壁纸列表（按移入时间倒序）
 #[tauri::command]
 pub async fn get_trashed_wallpapers(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
 ) -> CommandResult<Vec<wallpaper::Model>> {
     let app_ctx: &AppContext = ctx.inner();
     Ok(wallpaper_service::get_trashed(&app_ctx.db).await?)
@@ -168,7 +170,7 @@ pub async fn get_trashed_wallpapers(
 /// 无需调度器联动：恢复不会改变任何显示器当前的绑定状态。
 #[tauri::command]
 pub async fn restore_wallpapers(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<DeleteWallpapersRequest>,
 ) -> CommandResult<u64> {
     let req = req.into_inner();
@@ -182,8 +184,8 @@ pub async fn restore_wallpapers(
 /// 故此处仍走一次联动以覆盖「直接对未入回收站记录调用」的边界情形。
 #[tauri::command]
 pub async fn purge_wallpapers(
-    ctx: State<'_, AppContext>,
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
     req: Validated<DeleteWallpapersRequest>,
 ) -> CommandResult<u64> {
     let svc = AppServices::new(ctx.inner(), scheduler.inner());
@@ -195,7 +197,7 @@ pub async fn purge_wallpapers(
 
 /// 清空回收站（彻底删除其中全部壁纸，不可恢复）
 #[tauri::command]
-pub async fn empty_trash(ctx: State<'_, AppContext>) -> CommandResult<u64> {
+pub async fn empty_trash(ctx: State<'_, Arc<AppContext>>) -> CommandResult<u64> {
     let app_ctx: &AppContext = ctx.inner();
     Ok(wallpaper_service::empty_trash(&app_ctx.db).await?)
 }

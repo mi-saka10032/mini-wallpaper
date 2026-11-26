@@ -7,7 +7,7 @@
 //! ## 依赖方向（单向，不可反转）
 //!
 //! `application` → `services`（纯 DB）/ `context`（纯状态）/ `runtime`（任务生命周期）。
-//! `services` 不得反向依赖本层，也不得持有 AppContext / Scheduler，
+//! `services` 不得反向依赖本层，也不得持有 AppContext / TaskRegistry，
 //! 以保证 68 个 SQLite 单测只需一个临时数据库即可运行。
 //!
 //! ## 锁序（全仓必须一致）
@@ -24,10 +24,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::context::AppContext;
-use crate::runtime::Scheduler;
+use crate::tasks::registry::TaskRegistry;
 
 pub mod actions;
 pub mod collection;
+pub mod effects;
 pub mod monitor;
 pub mod settings;
 pub mod wallpaper;
@@ -35,16 +36,16 @@ pub mod wallpaper;
 /// 用例执行所需的显式依赖。
 ///
 /// 由 command 的 `State` 或平台层入口构造后传入，用例内部不做
-/// `app.state::<AppContext>()` 反查——那是旧架构里 ctx 散落的根因。
+/// `app.state::<Arc<AppContext>>()` 反查——那是旧架构里 ctx 散落的根因。
 pub struct AppServices<'a> {
     /// 数据库连接与统一壁纸管理器（含 AppHandle，用于 emit / 路径）。
     pub ctx: &'a AppContext,
     /// 后台任务注册表；用例只在需要启停定时器时短暂持锁。
-    pub scheduler: &'a Arc<Mutex<Scheduler>>,
+    pub scheduler: &'a Arc<Mutex<TaskRegistry>>,
 }
 
 impl<'a> AppServices<'a> {
-    pub fn new(ctx: &'a AppContext, scheduler: &'a Arc<Mutex<Scheduler>>) -> Self {
+    pub fn new(ctx: &'a AppContext, scheduler: &'a Arc<Mutex<TaskRegistry>>) -> Self {
         Self { ctx, scheduler }
     }
 }

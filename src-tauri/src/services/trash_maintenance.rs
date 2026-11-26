@@ -16,7 +16,7 @@
 //!   不因配置损坏而误删或崩溃。
 
 use log::{info, warn};
-use tauri::{AppHandle, Manager};
+use std::sync::Arc;
 
 use crate::context::AppContext;
 use crate::dto::app_setting_dto::{keys as setting_keys, DEFAULT_TRASH_RETENTION_DAYS};
@@ -25,13 +25,8 @@ use crate::services::{app_setting_service, wallpaper_service};
 /// 启动时清理回收站中的过期壁纸
 ///
 /// 全过程 best-effort：任何一步失败都只记录日志，绝不影响应用启动与可用性。
-pub async fn purge_expired_on_startup(app: &AppHandle) {
-    let Some(ctx) = app.try_state::<AppContext>() else {
-        warn!("[Trash] AppContext 未就绪，跳过过期清理");
-        return;
-    };
-    let app_ctx: &AppContext = ctx.inner();
-    let db = app_ctx.db.clone();
+pub async fn purge_expired_on_startup(ctx: &Arc<AppContext>) {
+    let db = ctx.db.clone();
 
     // 1. 是否启用自动清理（缺省启用）
     let auto_purge = match app_setting_service::get(&db, setting_keys::TRASH_AUTO_PURGE).await {

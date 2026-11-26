@@ -7,7 +7,7 @@
 //! - **`WallpaperWindowManager`**：壁纸窗口的创建/销毁/事件管理
 //!
 //! 运行时调度（轮播定时器、全屏检测等后台任务）已迁移至 `runtime/` 模块，
-//! `Scheduler` 作为独立的全局 state 与 `AppContext` 平级注册。
+//! `TaskRegistry` 作为独立的全局 state 与 `AppContext` 平级注册。
 //!
 //! ## 设计原则
 //! - **单一入口**：一个 `AppContext` 贯穿全局，替代多个独立 managed state
@@ -30,8 +30,8 @@ use unified_manager::UnifiedWallpaperManager;
 ///
 /// 聚合所有需要跨模块共享的全局状态。Tauri 的 `manage()` 已经用 `Arc` 持有
 /// 整个 `AppContext`，因此字段内不再套一层 `Arc<Mutex<T>>`：所有需要跨
-/// `'static` 边界的地方都持有 `AppHandle`，经 `app.state::<AppContext>()` 即可
-/// 访问同一实例。command 层通过 `State<'_, AppContext>` 注入。
+/// `'static` 边界的地方都持有 `AppHandle`，经 `app.state::<Arc<AppContext>>()` 即可
+/// 访问同一实例。command 层通过 `State<'_, Arc<AppContext>>` 注入。
 ///
 /// 所有子组件在构造时注入 `AppHandle`，方法调用不再需要外部传递句柄。
 pub struct AppContext {
@@ -44,7 +44,7 @@ pub struct AppContext {
     /// 统一壁纸管理器：App 的唯一主体 manager（原 RenderCoordinator /
     /// WallpaperWindowManager 已拉平并入）。
     ///
-    /// reconcile 串行入口、Scheduler 与各 command 共享同一实例；所有壁纸状态
+    /// reconcile 串行入口、TaskRegistry 与各 command 共享同一实例；所有壁纸状态
     /// （Native backends / WebView 窗口 / 显示器 slot / 快照）收在这一把锁下。
     pub unified_manager: Mutex<UnifiedWallpaperManager>,
 

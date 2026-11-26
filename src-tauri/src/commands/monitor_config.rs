@@ -9,23 +9,23 @@ use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
-use crate::application::{self, AppServices};
+use crate::application::{self, effects::AppEffects, AppServices};
 use crate::context::AppContext;
 use crate::dto::monitor_config_dto::{
     DeleteMonitorConfigRequest, GetMonitorConfigRequest, UpsertMonitorConfigRequest,
 };
 use crate::dto::Validated;
 use crate::entities::monitor_config;
-use crate::tasks::carousel::carousel_key;
-use crate::runtime::Scheduler;
 use crate::services::monitor_config_service;
+use crate::tasks::carousel::carousel_key;
+use crate::tasks::registry::TaskRegistry;
 
 use super::error::CommandResult;
 
 /// 获取所有显示器配置
 #[tauri::command]
 pub async fn get_monitor_configs(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
 ) -> CommandResult<Vec<monitor_config::Model>> {
     let app_ctx: &AppContext = ctx.inner();
     Ok(monitor_config_service::get_all(&app_ctx.db).await?)
@@ -34,7 +34,7 @@ pub async fn get_monitor_configs(
 /// 根据 monitor_id 获取配置
 #[tauri::command]
 pub async fn get_monitor_config(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     req: Validated<GetMonitorConfigRequest>,
 ) -> CommandResult<Option<monitor_config::Model>> {
     let req = req.into_inner();
@@ -52,8 +52,8 @@ pub async fn get_monitor_config(
 /// reconcile 会看到「部分屏已更新」的中间态，且同一视频被重复 attach 导致帧时钟错开。
 #[tauri::command]
 pub async fn upsert_monitor_config(
-    ctx: State<'_, AppContext>,
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
     req: Validated<UpsertMonitorConfigRequest>,
 ) -> CommandResult<monitor_config::Model> {
     let svc = AppServices::new(ctx.inner(), scheduler.inner());
@@ -63,15 +63,15 @@ pub async fn upsert_monitor_config(
 /// 删除显示器配置
 #[tauri::command]
 pub async fn delete_monitor_config(
-    ctx: State<'_, AppContext>,
-    scheduler: State<'_, Arc<Mutex<Scheduler>>>,
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
     req: Validated<DeleteMonitorConfigRequest>,
 ) -> CommandResult<()> {
     let req = req.into_inner();
 
     // 先停止可能存在的定时器
     if let Some(mid) = &req.monitor_id {
-        let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
+        let scheduler_handle: Arc<Mutex<TaskRegistry>> = scheduler.inner().clone();
         let mut sched = scheduler_handle.lock().await;
         sched.stop(&carousel_key(mid));
     }
@@ -88,7 +88,7 @@ pub async fn delete_monitor_config(
 /// 后续几何变化由 `extend-viewport` 事件定向推送。
 #[tauri::command]
 pub async fn get_extend_viewport(
-    ctx: State<'_, AppContext>,
+    ctx: State<'_, Arc<AppContext>>,
     monitor_id: String,
 ) -> CommandResult<Option<crate::events::ExtendViewportPayload>> {
     let app_ctx: &AppContext = ctx.inner();
@@ -98,12 +98,17 @@ pub async fn get_extend_viewport(
 
 /// 启动所有满足轮播条件的定时器（应用启动时由前端调用）
 ///
-/// 委托 Scheduler 的 start_all_carousel_timers 方法，
-/// display_mode 感知逻辑已内聚在 Scheduler 中。
+/// 委托 TaskRegistry 的 start_all_carousel_timers 方法，
+/// display_mode 感知逻辑已内聚在 TaskRegistry 中。
 #[tauri::command]
-pub async fn start_timers(scheduler: State<'_, Arc<Mutex<Scheduler>>>) -> CommandResult<()> {
-    let scheduler_handle: Arc<Mutex<Scheduler>> = scheduler.inner().clone();
-    let mut sched = scheduler_handle.lock().await;
-    sched.start_all_carousel_timers().await;
+pub async fn start_timers(
+    ctx: State<'_, Arc<AppContext>>,
+    scheduler: State<'_, Arc<Mutex<TaskRegistry>>>,
+) -> CommandResult<()> {
+    let svc = AppServices::new(ctx.inner(), scheduler.inner());
+    let mut guard = svc.scheduler.lock().await;
+    AppEffects::new(svc.ctx, &mut guard)
+        .start_all_carousel_timers()
+        .await;
     Ok(())
 }

@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 
-use super::AppServices;
+use super::{effects::AppEffects, AppServices};
 use crate::services::{monitor_config_service, wallpaper_service};
 
 /// 删除方式：影响调用哪个数据层写入，联动逻辑完全相同。
@@ -41,11 +41,11 @@ pub async fn delete_wallpapers(
         DeletionMode::Purge => wallpaper_service::delete_batch(&svc.ctx.db, ids).await?,
     };
 
-    // 3. 联动（定时器 + 窗口 + reconcile）：由 Scheduler 内部的 effects 完成，
+    // 3. 联动（定时器 + 窗口 + reconcile）：由 TaskRegistry 内部的 effects 完成，
     //    阶段 2 会把这段编排也搬进本层，此处先保持行为完全一致。
-    let mut sched = svc.scheduler.lock().await;
-    sched
-        .on_wallpapers_deleted(&affected_configs, &deleted_ids)
+    let mut guard = svc.scheduler.lock().await;
+    let mut fx = AppEffects::new(svc.ctx, &mut guard);
+    fx.on_wallpapers_deleted(&affected_configs, &deleted_ids)
         .await;
 
     Ok(deleted)

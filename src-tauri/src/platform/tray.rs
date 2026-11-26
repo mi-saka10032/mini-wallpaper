@@ -1,7 +1,7 @@
 //! 系统托盘图标、菜单及交互事件
 //!
 //! 托盘菜单是 [`Action`] 体系的第三个触发源（与全局快捷键、前端命令并列）。
-//! 菜单项点击统一走 [`Scheduler::dispatch_action`]，保证行为一致。
+//! 菜单项点击统一走 [`TaskRegistry::dispatch_action`]，保证行为一致。
 //!
 //! ## 菜单结构
 //!
@@ -30,8 +30,8 @@ use tokio::sync::Mutex;
 
 use crate::application::{self, AppServices};
 use crate::context::AppContext;
-use crate::runtime::action::Action;
-use crate::runtime::Scheduler;
+use crate::dto::action::Action;
+use crate::tasks::registry::TaskRegistry;
 
 // ==================== 菜单项 ID 常量 ====================
 
@@ -124,20 +124,20 @@ pub fn show_main_window(app: &tauri::AppHandle) {
 
 // ==================== 内部工具 ====================
 
-/// 异步派发 Action 到 Scheduler（与 global_shortcut 中的 dispatch_async 同构）
+/// 异步派发 Action 到 TaskRegistry（与 global_shortcut 中的 dispatch_async 同构）
 fn dispatch_tray_action(app: &tauri::AppHandle, action: Action) {
     info!("[Tray] 触发动作: {:?}", action);
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let scheduler_state = match app_handle.try_state::<Arc<Mutex<Scheduler>>>() {
+        let scheduler_state = match app_handle.try_state::<Arc<Mutex<TaskRegistry>>>() {
             Some(s) => s,
             None => {
-                warn!("[Tray] Scheduler 尚未注册，丢弃动作 {:?}", action);
+                warn!("[Tray] TaskRegistry 尚未注册，丢弃动作 {:?}", action);
                 return;
             }
         };
         // 入口层取一次共享状态；业务侧的显示器解析与副作用由 application 用例负责。
-        let ctx_state = match app_handle.try_state::<AppContext>() {
+        let ctx_state = match app_handle.try_state::<Arc<AppContext>>() {
             Some(s) => s,
             None => {
                 warn!("[Tray] AppContext 尚未注册，丢弃动作 {:?}", action);

@@ -1,6 +1,6 @@
 //! 用户动作（Action）类型定义
 //!
-//! 把"用户希望发生什么"抽象为强类型枚举，由 `Scheduler::dispatch_action`
+//! 把"用户希望发生什么"抽象为强类型枚举，由 `TaskRegistry::dispatch_action`
 //! 统一解释执行。三类调用方共享同一份 Action 定义：
 //!
 //! - **前端**：通过 `trigger_action` Tauri 命令派发（serde 反序列化）

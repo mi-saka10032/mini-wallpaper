@@ -7,20 +7,19 @@
 //! - `check_fullscreen()`: 纯检测函数，返回当前是否有全屏应用
 //! - `FullscreenDetectionTask`: 任务定义，实现 `TaskSpawner` trait
 //!
-//! 定时器生命周期由 `Scheduler` 统一管理，
-//! `FullscreenDetectionTask` 为零字段单元结构体，`spawn` 接收调度器注入的 `AppHandle`。
+//! 定时器生命周期由 `TaskRegistry` 统一管理，
+//! `FullscreenDetectionTask` 为零字段单元结构体，`spawn` 接收显式注入的 `TaskDeps`。
 
 use std::time::Duration;
 
 use log::info;
-use tauri::Manager;
 use tokio::task::JoinHandle;
 
-use super::TaskSpawner;
+use super::{TaskDeps, TaskSpawner};
 use crate::context::AppContext;
 use crate::events::{FullscreenChangedPayload, TypedEmit};
 
-/// 全屏检测定时器在 Scheduler 中的 key
+/// 全屏检测定时器在 TaskRegistry 中的 key
 pub const FULLSCREEN_TIMER_KEY: &str = "fullscreen_detector";
 
 /// 全屏检测任务定义
@@ -32,8 +31,8 @@ pub struct FullscreenDetectionTask;
 impl TaskSpawner for FullscreenDetectionTask {
     /// 每 2 秒轮询一次；仅在全屏状态翻转时才发事件并切换暂停，
     /// 避免持续全屏期间反复下发 pause 命令。
-    fn spawn(self, app: &tauri::AppHandle) -> JoinHandle<()> {
-        let app = app.clone();
+    fn spawn(self, deps: TaskDeps) -> JoinHandle<()> {
+        let ctx = deps.ctx;
 
         tokio::spawn(async move {
             // 上一次的状态，作为边沿触发的基准：
@@ -50,11 +49,13 @@ impl TaskSpawner for FullscreenDetectionTask {
                         info!("全屏应用已退出 — 恢复壁纸");
                     }
 
-                    let _ = app.typed_emit(&FullscreenChangedPayload { is_fullscreen });
+                    let _ = ctx
+                        .app_handle
+                        .typed_emit(&FullscreenChangedPayload { is_fullscreen });
 
                     // 同时暂停 / 恢复渲染协调器：Native 停帧，WebView 隐藏窗口。
                     // 前端的 useFullscreenPause 只负责暂停 video 元素，覆盖不到原生渲染。
-                    let app_ctx: &AppContext = app.state::<AppContext>().inner();
+                    let app_ctx: &AppContext = ctx.as_ref();
                     let manager = app_ctx.unified_manager.lock().await;
                     manager.set_paused(is_fullscreen).await;
 

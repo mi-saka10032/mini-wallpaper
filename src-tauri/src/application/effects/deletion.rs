@@ -3,7 +3,7 @@
 //! 壁纸删除、收藏夹删除、收藏夹移除壁纸等操作触发的联动逻辑，
 //! 包括定时器管理、壁纸窗口通知、config 状态同步等。
 //!
-//! 所有方法通过 `impl Scheduler` 跨文件实现，
+//! 所有方法通过 `impl TaskRegistry` 跨文件实现，
 //! 天然拥有 `self.app`、`self.tasks` 等内部状态，零参数透传。
 //!
 //! ## 设计
@@ -15,14 +15,14 @@ use std::collections::HashSet;
 
 use log::{error, warn};
 
-use super::Scheduler;
+use super::AppEffects;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::dto::shortcut_dto::Direction;
 use crate::entities::monitor_config;
-use crate::tasks::carousel::{carousel_key, CarouselTask};
 use crate::services::{app_setting_service, collection_service, monitor_config_service};
+use crate::tasks::carousel::{carousel_key, CarouselTask};
 
-impl Scheduler {
+impl AppEffects<'_> {
     // ==================== 公共入口方法（供 Command 层调用） ====================
 
     /// 一批删除联动写库完成后的统一收尾：一次 reconcile 覆盖全部受影响屏，
@@ -34,7 +34,7 @@ impl Scheduler {
             .reconcile(crate::context::unified_manager::ReconcileScope::All)
             .await
         {
-            warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
+            warn!("[TaskRegistry] 删除联动 reconcile 失败: {}", e);
         }
         // 结构拉平后 notify_config_refreshed 已在同一个 manager 上，无需换锁。
         guard.notify_config_refreshed();
@@ -84,7 +84,7 @@ impl Scheduler {
         {
             Ok(v) => v,
             Err(e) => {
-                warn!("[Scheduler] 裁决同步组失败: {}", e);
+                warn!("[TaskRegistry] 裁决同步组失败: {}", e);
                 (Vec::new(), false)
             }
         };
@@ -131,7 +131,7 @@ impl Scheduler {
                         }
                     }
                 }
-                Err(e) => warn!("[Scheduler] 同步组删除联动写库失败: {}", e),
+                Err(e) => warn!("[TaskRegistry] 同步组删除联动写库失败: {}", e),
             }
         } else {
             for config in affected_configs {
@@ -153,7 +153,7 @@ impl Scheduler {
                         self.stop(&key);
                         // 无收藏夹时把 wallpaper_id 写空，交给 reconcile 派发清屏。
                         if let Err(e) = monitor_config_service::clear_wallpaper_id(&db, mid).await {
-                            warn!("[Scheduler] 清空 wallpaper_id 失败 {}: {}", mid, e);
+                            warn!("[TaskRegistry] 清空 wallpaper_id 失败 {}: {}", mid, e);
                         }
                     }
                 }
@@ -231,7 +231,7 @@ impl Scheduler {
             match monitor_config_service::active_targets(&db, &bound_configs[0].monitor_id).await {
                 Ok(v) => v,
                 Err(e) => {
-                    warn!("[Scheduler] 裁决同步组失败: {}", e);
+                    warn!("[TaskRegistry] 裁决同步组失败: {}", e);
                     (Vec::new(), false)
                 }
             };
@@ -275,7 +275,7 @@ impl Scheduler {
                             }
                         }
                     }
-                    Err(e) => warn!("[Scheduler] 同步组移除联动写库失败: {}", e),
+                    Err(e) => warn!("[TaskRegistry] 同步组移除联动写库失败: {}", e),
                 }
             } else if self.is_running(&carousel_key(&base.monitor_id)) {
                 Self::manage_timer_by_collection_inner(
@@ -356,7 +356,10 @@ impl Scheduler {
             Ok(Some(wid)) => wid,
             Ok(None) => return false,
             Err(e) => {
-                warn!("[Scheduler] 获取相邻壁纸失败 {}: {}", config.monitor_id, e);
+                warn!(
+                    "[TaskRegistry] 获取相邻壁纸失败 {}: {}",
+                    config.monitor_id, e
+                );
                 return false;
             }
         };
@@ -369,7 +372,7 @@ impl Scheduler {
             {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("[Scheduler] 组写入失败 {}: {}", config.monitor_id, e);
+                    error!("[TaskRegistry] 组写入失败 {}: {}", config.monitor_id, e);
                     return false;
                 }
             };
@@ -385,7 +388,7 @@ impl Scheduler {
             let ctx = self.app_context();
             let mut guard = ctx.unified_manager.lock().await;
             if let Err(e) = guard.reconcile(scope).await {
-                warn!("[Scheduler] 删除联动 reconcile 失败: {}", e);
+                warn!("[TaskRegistry] 删除联动 reconcile 失败: {}", e);
             }
         }
 
@@ -411,10 +414,10 @@ impl Scheduler {
     /// 渲染副作用由外层公共入口在数据落库后调一次 reconcile 统一派发。
     /// 返回 true 表示 config 发生了变更。写库失败时返回 false。
     ///
-    /// 注意：使用 `&mut Scheduler` 而非 `&mut self` 以避免借用冲突
+    /// 注意：使用 `&mut TaskRegistry` 而非 `&mut self` 以避免借用冲突
     async fn handle_current_wallpaper_removed_inner(
         db: &sea_orm::DatabaseConnection,
-        sched: &mut Scheduler,
+        sched: &mut AppEffects<'_>,
         config: &monitor_config::Model,
         collection_id: i32,
         removed_ids: &HashSet<i32>,
@@ -440,7 +443,7 @@ impl Scheduler {
     /// `force_restart`: true 表示需要重启（壁纸被强制切换），false 表示仅检查是否需要停止
     async fn manage_timer_by_collection_inner(
         db: &sea_orm::DatabaseConnection,
-        sched: &mut Scheduler,
+        sched: &mut AppEffects<'_>,
         monitor_id: &str,
         collection_id: i32,
         force_restart: bool,
@@ -471,7 +474,7 @@ impl Scheduler {
     /// 当前壁纸未被删除，但收藏夹内壁纸减少，可能导致定时器需要停止。
     async fn check_orphaned_timers_inner(
         db: &sea_orm::DatabaseConnection,
-        sched: &mut Scheduler,
+        sched: &mut AppEffects<'_>,
         affected_monitor_ids: &HashSet<String>,
     ) {
         let all_configs = monitor_config_service::get_all(db)
@@ -529,14 +532,14 @@ async fn persist_current_wallpaper_removal(
     {
         Ok(Some(next_wid)) if !removed_ids.contains(&next_wid) => {
             if let Err(e) = monitor_config_service::update_wallpaper_id(db, mid, next_wid).await {
-                error!("[Scheduler] 更新 wallpaper_id 失败 {}: {}", mid, e);
+                error!("[TaskRegistry] 更新 wallpaper_id 失败 {}: {}", mid, e);
                 return None;
             }
             Some(CurrentWallpaperOutcome::Advanced)
         }
         _ => {
             if let Err(e) = monitor_config_service::clear_wallpaper_id(db, mid).await {
-                error!("[Scheduler] 清空 wallpaper_id 失败 {}: {}", mid, e);
+                error!("[TaskRegistry] 清空 wallpaper_id 失败 {}: {}", mid, e);
                 return None;
             }
             Some(CurrentWallpaperOutcome::Cleared)

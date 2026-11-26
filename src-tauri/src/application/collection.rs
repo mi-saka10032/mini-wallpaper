@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 
-use super::AppServices;
+use super::{effects::AppEffects, AppServices};
 use crate::services::{collection_service, monitor_config_service};
 
 /// 删除收藏夹，并联动清理绑定它的显示器与窗口。
@@ -15,8 +15,9 @@ pub async fn delete_collection(svc: &AppServices<'_>, collection_id: i32) -> Res
         monitor_config_service::get_configs_by_collection_id(&svc.ctx.db, collection_id).await?;
     collection_service::delete(&svc.ctx.db, collection_id).await?;
 
-    let mut sched = svc.scheduler.lock().await;
-    sched.on_collection_deleted(&affected_configs).await;
+    let mut guard = svc.scheduler.lock().await;
+    let mut fx = AppEffects::new(svc.ctx, &mut guard);
+    fx.on_collection_deleted(&affected_configs).await;
     Ok(())
 }
 
@@ -36,15 +37,16 @@ pub async fn remove_wallpapers_from_collection(
         return Ok(removed);
     }
 
-    let mut sched = svc.scheduler.lock().await;
-    sched
-        .on_wallpapers_removed_from_collection(&bound_configs, collection_id, &removing_ids)
+    let mut guard = svc.scheduler.lock().await;
+    let mut fx = AppEffects::new(svc.ctx, &mut guard);
+    fx.on_wallpapers_removed_from_collection(&bound_configs, collection_id, &removing_ids)
         .await;
     Ok(removed)
 }
 
 /// 切换「我喜欢」归属：红心按钮、托盘、全局快捷键共用这一用例。
 pub async fn toggle_favorite(svc: &AppServices<'_>, wallpaper_id: i32) -> Result<bool> {
-    let mut sched = svc.scheduler.lock().await;
-    sched.toggle_favorite(wallpaper_id).await
+    let mut guard = svc.scheduler.lock().await;
+    let mut fx = AppEffects::new(svc.ctx, &mut guard);
+    fx.toggle_favorite(wallpaper_id).await
 }

@@ -6,7 +6,6 @@ mod entities;
 pub mod events;
 mod migration;
 mod platform;
-mod runtime;
 mod services;
 mod setup;
 mod tasks;

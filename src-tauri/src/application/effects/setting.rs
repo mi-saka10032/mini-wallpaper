@@ -3,18 +3,18 @@
 //! 根据 setting key 执行对应的副作用逻辑，
 //! 确保设置变更写入 DB 后立即生效。
 //!
-//! 所有方法通过 `impl Scheduler` 跨文件实现，
+//! 所有方法通过 `impl TaskRegistry` 跨文件实现，
 //! 天然拥有 `self.app`、`self.tasks` 等内部状态，零参数透传。
 
 use log::{info, warn};
 
-use super::Scheduler;
+use super::AppEffects;
 use crate::dto::app_setting_dto::keys as setting_keys;
+use crate::services::{collection_service, monitor_config_service};
 use crate::tasks::carousel::{carousel_key, CarouselTask};
 use crate::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
-use crate::services::{collection_service, monitor_config_service};
 
-impl Scheduler {
+impl AppEffects<'_> {
     /// 根据 setting key 执行对应的副作用
     ///
     /// 每个需要"写入后立即生效"的 key 在此注册处理逻辑。
@@ -32,11 +32,11 @@ impl Scheduler {
                 if enabled {
                     if !self.is_running(FULLSCREEN_TIMER_KEY) {
                         self.spawn(FULLSCREEN_TIMER_KEY.to_string(), FullscreenDetectionTask);
-                        info!("[Scheduler] 全屏检测已启动");
+                        info!("[TaskRegistry] 全屏检测已启动");
                     }
                 } else {
                     self.stop(FULLSCREEN_TIMER_KEY);
-                    info!("[Scheduler] 全屏检测已停止");
+                    info!("[TaskRegistry] 全屏检测已停止");
                 }
             }
             setting_keys::GLOBAL_VOLUME => {
@@ -48,9 +48,9 @@ impl Scheduler {
                     .reconcile(crate::context::unified_manager::ReconcileScope::All)
                     .await
                 {
-                    warn!("[Scheduler] 音量 reconcile 失败: {}", e);
+                    warn!("[TaskRegistry] 音量 reconcile 失败: {}", e);
                 } else {
-                    info!("[Scheduler] 音量已更新: {}", value);
+                    info!("[TaskRegistry] 音量已更新: {}", value);
                 }
             }
             setting_keys::DISPLAY_MODE => {
@@ -63,7 +63,7 @@ impl Scheduler {
             | setting_keys::SHORTCUT_TOGGLE_FAVORITE => {
                 // 键位已写入 DB，整组重注册使新键位即时生效、旧键位失效
                 crate::platform::global_shortcut::reregister_all(&self.app).await;
-                info!("[Scheduler] 快捷键 {} 变更，已触发重注册", key);
+                info!("[TaskRegistry] 快捷键 {} 变更，已触发重注册", key);
             }
             _ => {}
         }
@@ -82,7 +82,7 @@ impl Scheduler {
         display_mode: &str,
         monitor_id: Option<&str>,
     ) {
-        info!("[Scheduler] display_mode 变更: {}", display_mode);
+        info!("[TaskRegistry] display_mode 变更: {}", display_mode);
 
         let db = self.db();
 
@@ -92,7 +92,7 @@ impl Scheduler {
         let configs = match monitor_config_service::get_all(&db).await {
             Ok(c) => c,
             Err(e) => {
-                warn!("[Scheduler] 获取 monitor configs 失败: {}", e);
+                warn!("[TaskRegistry] 获取 monitor configs 失败: {}", e);
                 return;
             }
         };
@@ -122,7 +122,7 @@ impl Scheduler {
                 if let Err(e) =
                     monitor_config_service::update_monitors_batch(&db, source, &targets).await
                 {
-                    warn!("[Scheduler] 批量同步配置失败: {}", e);
+                    warn!("[TaskRegistry] 批量同步配置失败: {}", e);
                     return;
                 }
             }
@@ -135,7 +135,7 @@ impl Scheduler {
                 .reconcile(crate::context::unified_manager::ReconcileScope::All)
                 .await
             {
-                warn!("[Scheduler] display_mode reconcile 失败: {}", e);
+                warn!("[TaskRegistry] display_mode reconcile 失败: {}", e);
             }
         }
 
@@ -156,7 +156,7 @@ impl Scheduler {
                                             monitor_id: config.monitor_id.clone(),
                                         },
                                     );
-                                    info!("[Scheduler] 恢复定时器: {}", config.monitor_id);
+                                    info!("[TaskRegistry] 恢复定时器: {}", config.monitor_id);
                                 }
                             }
                         }
@@ -178,7 +178,7 @@ impl Scheduler {
                         let key = carousel_key(&config.monitor_id);
                         if self.is_running(&key) {
                             self.stop(&key);
-                            info!("[Scheduler] 停止从属定时器: {}", config.monitor_id);
+                            info!("[TaskRegistry] 停止从属定时器: {}", config.monitor_id);
                         }
                     }
                 }
@@ -196,13 +196,13 @@ impl Scheduler {
                                             monitor_id: source.monitor_id.clone(),
                                         },
                                     );
-                                    info!("[Scheduler] 主定时器已启动: {}", source.monitor_id);
+                                    info!("[TaskRegistry] 主定时器已启动: {}", source.monitor_id);
                                 }
                                 Ok(false) => {
                                     self.stop(&key);
                                 }
                                 Err(e) => {
-                                    warn!("[Scheduler] 检查收藏夹失败: {}", e);
+                                    warn!("[TaskRegistry] 检查收藏夹失败: {}", e);
                                     self.stop(&key);
                                 }
                             }

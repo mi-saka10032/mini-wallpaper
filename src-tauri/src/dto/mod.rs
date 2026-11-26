@@ -1,3 +1,4 @@
+pub mod action;
 pub mod app_setting_dto;
 pub mod backup_dto;
 pub mod collection_dto;

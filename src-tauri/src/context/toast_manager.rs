@@ -87,7 +87,7 @@ impl ToastManager {
     /// 4. 重新计算所有存活窗口的位置
     /// 5. spawn 定时器，duration 后自动销毁
     ///
-    /// 超时定时器经 `AppHandle::state::<AppContext>()` 取回同一个 ToastManager：
+    /// 超时定时器经 `AppHandle::state::<Arc<AppContext>>()` 取回同一个 ToastManager：
     /// Tauri 的 manage() 已用 Arc 持有整个 AppContext，无需再由调用方传入自身句柄。
     /// 不能用 `try_state::<Arc<Mutex<ToastManager>>>()`（ToastManager 从未单独注册）。
     pub fn show_toast(&mut self, action: &str, message: &str) {

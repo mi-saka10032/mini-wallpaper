@@ -56,7 +56,7 @@ pub(super) fn device_lost_handler(app_handle: &AppHandle) -> DeviceLostHandler {
         // unified_manager 是 tokio Mutex，清理要 spawn 到 async runtime 执行。
         let cleanup = cleanup_handle.clone();
         tauri::async_runtime::spawn(async move {
-            if let Some(ctx) = cleanup.try_state::<AppContext>() {
+            if let Some(ctx) = cleanup.try_state::<Arc<AppContext>>() {
                 let app_ctx: &AppContext = ctx.inner();
                 app_ctx.unified_manager.lock().await.destroy_all();
                 log::info!("[UnifiedWallpaperManager] DeviceLost 已清理全部 WebView 壁纸窗口");

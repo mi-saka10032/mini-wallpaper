@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tauri::State;
 
 use crate::context::AppContext;
@@ -10,7 +12,10 @@ use super::error::CommandResult;
 /// 内部委托 `ToastManager::close_toast` 完成：
 /// 从 Vec 移除 → 销毁窗口 → 重排剩余窗口位置（方案 B）。
 #[tauri::command]
-pub async fn close_toast_window(ctx: State<'_, AppContext>, label: String) -> CommandResult<()> {
+pub async fn close_toast_window(
+    ctx: State<'_, Arc<AppContext>>,
+    label: String,
+) -> CommandResult<()> {
     let app_ctx: &AppContext = ctx.inner();
     let mut toast_mgr = app_ctx.toast_manager.lock().await;
     toast_mgr.close_toast(&label);

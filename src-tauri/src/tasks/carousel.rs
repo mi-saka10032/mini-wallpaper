@@ -4,22 +4,21 @@
 //! - `CarouselTask`：轮播任务定义，实现 `TaskSpawner` trait
 //! - `carousel_key()`：生成轮播定时器的 scheduler key
 //!
-//! 定时器生命周期由 `Scheduler` 统一管理，
+//! 定时器生命周期由 `TaskRegistry` 统一管理，
 //! `CarouselTask` 仅持有纯业务参数 `monitor_id`，
 //! `spawn` 接收调度器注入的 `AppHandle`，按需获取 db / window_manager 等共享资源。
 
 use log::{error, warn};
-use tauri::Manager;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration, MissedTickBehavior};
 
 use crate::context::unified_manager::ReconcileScope;
 use crate::context::AppContext;
 use crate::dto::shortcut_dto::Direction;
-use crate::tasks::TaskSpawner;
 use crate::services::{collection_service, monitor_config_service};
+use crate::tasks::{TaskDeps, TaskSpawner};
 
-/// 轮播定时器在 Scheduler 中的 key 前缀
+/// 轮播定时器在 TaskRegistry 中的 key 前缀
 pub const CAROUSEL_TIMER_PREFIX: &str = "carousel:";
 
 /// 生成轮播定时器的 scheduler key
@@ -39,14 +38,13 @@ pub struct CarouselTask {
 impl TaskSpawner for CarouselTask {
     /// 每块显示器一个独立任务。config 与 play_mode 每次 tick 重读，
     /// 因此设置/删除带来的变化无需重启定时器即可生效。
-    fn spawn(self, app: &tauri::AppHandle) -> JoinHandle<()> {
-        let app = app.clone();
+    fn spawn(self, deps: TaskDeps) -> JoinHandle<()> {
         let mid = self.monitor_id;
+        let ctx = deps.ctx;
 
         tokio::spawn(async move {
-            // 从 AppHandle 按需获取共享资源
-            let ctx = app.state::<AppContext>();
-            let app_ctx: &AppContext = ctx.inner();
+            // 依赖由注册表显式注入，任务体内零反查。
+            let app_ctx: &AppContext = ctx.as_ref();
             let db = app_ctx.db.clone();
 
             // 查询 config 获取轮播参数

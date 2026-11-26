@@ -7,7 +7,7 @@
 //!    已在夹内则移除，否则加入（幂等）。
 //! 2. **移除联动**：取消收藏可能影响正在轮播「我喜欢」的显示器
 //!    （当前壁纸被移出需切换 / 停表 / 清屏），复用既有的
-//!    [`Scheduler::on_wallpapers_removed_from_collection`]，零逻辑重复。
+//!    [`AppEffects::on_wallpapers_removed_from_collection`]，零逻辑重复。
 //! 3. **事件广播**：发送 `favorites-changed`，前端据此刷新收藏
 //!    id 集合，红心按钮亮灭与「我喜欢」列表即时同步。
 //!
@@ -16,18 +16,18 @@
 //! - 全局快捷键 / 托盘：作用于"当前显示壁纸"（`dispatch_toggle_favorite` 解析 id）
 //! - 前端红心按钮 / 右键菜单：作用于"卡片壁纸"（`toggle_favorite` command 透传 id）
 //!
-//! 两条路径最终都汇聚到本文件的 [`Scheduler::toggle_favorite`] 单一入口。
+//! 两条路径最终都汇聚到本文件的 [`AppEffects::toggle_favorite`] 单一入口。
 
 use std::collections::HashSet;
 
 use anyhow::{anyhow, Result};
 use log::warn;
 
-use super::Scheduler;
+use super::AppEffects;
 use crate::events::{FavoritesChangedPayload, TypedEmit};
 use crate::services::{collection_service, monitor_config_service};
 
-impl Scheduler {
+impl AppEffects<'_> {
     /// 切换某张壁纸在内置「我喜欢」收藏夹中的归属
     ///
     /// 返回 `Ok(true)` 表示切换后为"已收藏"，`Ok(false)` 表示"已取消收藏"。

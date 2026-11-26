@@ -4,21 +4,21 @@
 //! - **JoinHandle 生命周期管理**：spawn / register / stop / stop_all / is_running / restart
 //! - **轮播/全屏检测编排**：start_all_carousel_timers / manage_carousel_timer / init_fullscreen_detection
 //!
-//! 所有方法通过 `impl Scheduler` 跨文件实现，
+//! 所有方法通过 `impl TaskRegistry` 跨文件实现，
 //! 天然拥有 `self.app`、`self.tasks` 等内部状态，零参数透传。
 
 use log::{info, warn};
 
-use super::Scheduler;
+use super::AppEffects;
 use crate::dto::app_setting_dto::keys as setting_keys;
 use crate::entities::monitor_config;
+use crate::services::{app_setting_service, collection_service, monitor_config_service};
 use crate::tasks::carousel::{carousel_key, CarouselTask};
 use crate::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
-use crate::services::{app_setting_service, collection_service, monitor_config_service};
 
 // ==================== JoinHandle 生命周期管理 ====================
 
-impl Scheduler {
+impl AppEffects<'_> {
     // ==================== 轮播 / 全屏检测编排 ====================
 
     /// 根据更新后的 config 状态管理轮播定时器
@@ -63,7 +63,10 @@ impl Scheduler {
                     self.stop(&key);
                 }
                 Err(e) => {
-                    warn!("[Scheduler] Failed to check collection wallpapers: {}", e);
+                    warn!(
+                        "[TaskRegistry] Failed to check collection wallpapers: {}",
+                        e
+                    );
                     self.stop(&key);
                 }
             }
@@ -79,7 +82,10 @@ impl Scheduler {
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    warn!("[Scheduler] Failed to check collection wallpapers: {}", e);
+                    warn!(
+                        "[TaskRegistry] Failed to check collection wallpapers: {}",
+                        e
+                    );
                 }
             }
         }
@@ -96,7 +102,7 @@ impl Scheduler {
         let configs = match monitor_config_service::get_all(&db).await {
             Ok(c) => c,
             Err(e) => {
-                warn!("[Scheduler] 获取 monitor configs 失败: {}", e);
+                warn!("[TaskRegistry] 获取 monitor configs 失败: {}", e);
                 return;
             }
         };
@@ -113,7 +119,7 @@ impl Scheduler {
             match monitor_config_service::sync_group_primary(&db).await {
                 Ok(v) => v,
                 Err(e) => {
-                    warn!("[Scheduler] 获取同步组基准屏失败: {}", e);
+                    warn!("[TaskRegistry] 获取同步组基准屏失败: {}", e);
                     None
                 }
             }
@@ -138,13 +144,13 @@ impl Scheduler {
                                 },
                             );
                             info!(
-                                "[Scheduler] 启动定时器: {} (display_mode={})",
+                                "[TaskRegistry] 启动定时器: {} (display_mode={})",
                                 config.monitor_id, display_mode
                             );
                         }
                         Ok(false) => {}
                         Err(e) => {
-                            warn!("[Scheduler] 检查收藏夹失败 {}: {}", config.monitor_id, e);
+                            warn!("[TaskRegistry] 检查收藏夹失败 {}: {}", config.monitor_id, e);
                         }
                     }
                 }

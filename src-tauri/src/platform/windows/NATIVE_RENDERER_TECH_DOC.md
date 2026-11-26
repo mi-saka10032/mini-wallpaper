@@ -1,7 +1,7 @@
 # Native Wallpaper Renderer 技术文档
 
-> **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/context/render_coordinator.rs`（协调器）
-> **最后更新**: 2026-11-22（当前分支已重写为 16 个语义化提交，代码基线 `6f831d5`，文档为最终提交；Native renderer M0~M9 全链路完成；最终采用 session 级 GPU；`OUTPUTHAZARD` / 循环高倍速 / 首帧绿黑屏 / fade 视频与音频回放均已修复；纯图片壁纸 Native 有明确内存优势，视频壁纸 Native 优势在 CPU 与帧同步而非最低内存）
+> **模块路径**: `src-tauri/src/platform/wallpaper_renderer/`（跨平台契约）+ `src-tauri/src/platform/windows/desktop_renderer/`（Windows 实现）+ `src-tauri/src/context/unified_manager/`（协调器，原 render_coordinator.rs 已拉平）
+> **最后更新**: 2026-11-26（Native renderer M0~M9 全链路完成；session 级 GPU；`OUTPUTHAZARD` / 循环高倍速 / 首帧绿黑屏 / fade 视频与音频回放均已修复；2026-11-26 追加：视频 loop 时钟改为每圈独立计时、console 全链路收敛为 application 用例层、`ctx`→`context`、`runtime/`→`tasks/`、release 编译期剔除 error 以下日志；纯图片壁纸 Native 有明确内存优势，视频壁纸 Native 优势在 CPU 与帧同步而非最低内存）
 > **适用系统**: Windows 11 24H2 / 25H2 实机验证通过；macOS / Linux 编译通过但为空实现
 > **关联文档**: `DESKTOP_EMBEDDER_TECH_DOC.md`（WorkerW 嵌入层，本文档不重复其版本兼容与 NC 补偿细节）
 > **分支**: `feature/native-wallpaper-renderer`
@@ -70,16 +70,16 @@ WorkerW / Progman / SHELLDLL_DefView 的桌面嵌入层**继续复用** `desktop
 
 ```mermaid
 flowchart TD
-    A[commands / scheduler<br/>轮播 · 删除 · monitor_config · 全屏] --> B[RenderCoordinator<br/>查库 → build_descriptor → resolve_backend]
+    A[commands / tray / shortcut / carousel<br/>→ application 用例] --> B[UnifiedWallpaperManager<br/>reconcile：查库 → diff → 路由]
     B -->|Native| C[DesktopRenderer<br/>mpsc fire-and-forget]
     C --> D[renderer thread<br/>COM STA + 消息泵 + 16ms 循环]
     D --> E[RenderSurface<br/>HWND / D3D11 / DirectComposition]
-    B -->|WebView| F[WallpaperWindowManager<br/>wallpaper.html]
+    B -->|WebView| F[webview 模块<br/>wallpaper.html]
     B -.失败.-> G[renderer-error 事件]
     G --> H[主窗口 App.tsx → toast.error]
 ```
 
-**为什么协调器不塞进 `WallpaperWindowManager`**：WM 只管 WebView 窗口创建与事件 emit，不持有 db / renderer，无法判断壁纸能否被原生解码；把 backend 决策塞进去会让它同时依赖 db 与 renderer，且通知方法是同步 emit，承载不了「查库 → 决策 → 路由」的异步链。独立协调器让调用方只锁一个对象，避免双锁持锁。
+**当前收敛形态**：早期 `RenderCoordinator` / `WallpaperWindowManager` 两个对象已删除，字段与方法原样并入 `UnifiedWallpaperManager`（`context/unified_manager/`）。所有入口（command / tray / shortcut / carousel / 删除联动）经 application 用例调用，由它单点持锁完成「查库 → diff → 路由」，避免双锁与散落的反查。
 
 ### 2.2 渲染契约（`contracts.rs`）
 
@@ -98,7 +98,7 @@ pub struct RenderDescriptor {
 }
 ```
 
-契约表达的原则是：**渲染层接收一份完整描述，不再反问业务层**。当前 `RenderCoordinator` 内部实际使用的是精简版 `Descriptor { file_path, kind, backend, fit_mode }`，`RenderDescriptor` / `ExtendViewport` / `DisplayMode` 属于 M5 mirror / extend 的**契约先行**部分（详见 5.3）。
+契约表达的原则是：**渲染层接收一份完整描述，不再反问业务层**。渲染线程内部实际使用的是精简版 `Descriptor { file_path, kind, backend, fit_mode }`，`RenderDescriptor` / `ExtendViewport` / `DisplayMode` 属于 M5 mirror / extend 的**契约先行**部分（详见 5.3）。
 
 错误码统一为 `RendererErrorCode`（`UnsupportedFormat` / `BackendUnavailable` / `DecodeFailed` / `DeviceLost` / `EmbedFailed` / `BackendSwitchFailed`），经 `RendererErrorPayload` 发到前端。
 
@@ -918,63 +918,46 @@ HWND bitblt swapchain 在传统 GDI 重定向表面工作，但 24H2 桌面根�
 
 ```
 src-tauri/src/
+├── application/                       用例层：编排 DB + ctx + TaskRegistry
+│   ├── mod.rs                         AppServices（显式依赖注入）+ 锁序约定
+│   ├── wallpaper.rs / collection.rs / monitor.rs / settings.rs / actions.rs
+│   └── effects/                       副作用编排（原 runtime/scheduler）
+│       ├── mod.rs                     AppEffects：&AppContext + &mut TaskRegistry
+│       ├── deletion.rs / setting.rs / favorite.rs / timers.rs / action_dispatch.rs
+├── commands/                          Tauri 薄壳：解包 req → 调用例
+├── context/                           纯状态容器（原 ctx/）
+│   ├── mod.rs                         AppContext（AppHandle / db / unified_manager / toast_manager）
+│   ├── db.rs / toast_manager.rs
+│   └── unified_manager/               渲染链路唯一入口（原 RenderCoordinator/）
+│       ├── mod.rs                     UnifiedWallpaperManager + ConfigSnapshot
+│       ├── engine.rs / native.rs / webview.rs / reconcile.rs / monitors.rs / errors.rs
+│       └── README.md
+├── dto/action.rs                      用户动作枚举（原 runtime/action.rs）
 ├── platform/
-│   ├── wallpaper_renderer/                 跨平台契约（不依赖 windows crate）
-│   │   ├── mod.rs                          facade：Windows 导出真实 DesktopRenderer，
-│   │   │                                   其它平台同签名 no-op（macOS/CI 可编译）
-│   │   ├── contracts.rs                    RenderDescriptor / ExtendViewport / enums / RendererError /
-│   │   │                                   crossfade_progress + CROSSFADE_DURATION（350ms，含单测）
-│   │   ├── selection.rs                    default_backend_selection / resolve_backend
-│   │   ├── decoder.rs                      image 0.25：GIF / WebP / 静态图 → BGRA 帧
-│   │   ├── fit.rs                          fit_rect → D3D11_VIEWPORT，含单元测试
-│   │   ├── frame_cache.rs                  CacheKey / ByteSize / 泛型字节预算 LRU
-│   │   │                                   （解码结果缓存，跨平台纯逻辑 + 8 个单测）
-│   │   └── geometry.rs                     union_rect / extend_viewport / group_viewports
-│   │                                       （M5 跨屏几何，跨平台纯函数 + 6 个单测）
-│   │
+│   ├── wallpaper_renderer/            跨平台契约与纯逻辑（不依赖 windows crate）
+│   │   ├── contracts.rs / fit.rs / geometry.rs / decoder.rs / selection.rs
+│   │   └── timing.rs                  视频帧节拍门控与圈长解析（带回归单测）
 │   └── windows/
-│       ├── desktop_embedder/               复用既有 WorkerW 嵌入层
-│       │   ├── mod.rs                      EmbedPolicy + embed_in_desktop(policy)
-│       │   ├── strategy.rs                 EmbedStrategy::embed(..., policy)
-│       │   ├── modern.rs                   24H2+：policy==Native 才清 WS_POPUP / 校验 parent
-│       │   └── legacy.rs                  旧版本：忽略 policy
-│       │
-│       ├── desktop_renderer/
-│       │   ├── mod.rs                      导出 DesktopRenderer / SharedDevice / SharedFrames
-│       │   ├── renderer.rs                 渲染线程：共享 device / 组级 SetWallpaper(crossfade) /
-│       │   │                              SetGroupGeometry / FrameCache / ComScope / 消息泵 /
-│       │   │                              oneshot ack / advance_videos（fade 冻结 + 去重）/
-│       │   │                              finish_transition（视频 reset 按 Arc 去重）/ 16ms 循环
-│       │   ├── video.rs                    M6：MF SourceReader 流式解码 / RGB32 → 复用纹理 /
-│       │   │                              100ns 帧时钟 / 循环 seek / 暂停冻结 /
-│       │   │                              M7：reset_clock（fade 结束后从 0 开始）
-│       │   ├── window.rs                   NativeWindow：窗口创建 / exstyle 归一 / bounds / Drop
-│       │   └── surface.rs                  SharedDevice / SharedFrames（图片帧时钟 + ByteSize）/
-│       │                                  WallpaperMedia（Frames | Video）/ Transition /
-│       │                                  VecDeque fade 队列 / blend + cbuffer 两 pass / RenderSurface
+│       ├── desktop_embedder/          WorkerW 嵌入层（mod/strategy/modern/legacy/version/workerw/wndproc）
+│       ├── desktop_renderer/          D3D11 原生渲染
+│       │   ├── renderer.rs            渲染线程入口：组级 SetWallpaper / crossfade / 16ms 循环
+│       │   ├── decode/                image / video / audio 三组 worker + frames.rs
+│       │   ├── device/                COM / HWND / 设备丢失判定
+│       │   └── render/                SharedDevice / RenderSurface / swapchain / Present
 │       └── DESKTOP_EMBEDDER_TECH_DOC.md
-│
-├── ctx/
-│   ├── render_coordinator.rs               渲染链路唯一入口（backend / wallpaper_ids / rect /
-│   │                                      display_mode / 组几何 / D2 降级 / 路由 / 错误上报 /
-│   │                                      M7：跨 Native 换图才下发 crossfade）
-│   ├── window_manager.rs                   WebView 窗口，embed 传 EmbedPolicy::WebView
-│   └── mod.rs                              AppContext 持有 Arc<Mutex<RenderCoordinator>>
-├── commands/wallpaper_window.rs            create / destroy / hide / show / active_ids 全改走协调器
-├── commands/monitor_config.rs              fitMode / 壁纸变更走协调器
-├── application/effects/deletion.rs         删除联动批量派发
-├── application/effects/setting.rs          display_mode 变更同步给 coordinator（M5）
-├── runtime/tasks/carousel.rs               换图走 coordinator.update_wallpaper
-├── runtime/tasks/fullscreen_detector.rs    暂停走 coordinator.set_paused
-├── events.rs                               RendererErrorPayload
-└── Cargo.toml                              [target.'cfg(windows)'] 追加 windows 0.61
-                                            （D3D11 / Dxgi / DirectComposition / COM / Fxc / Gdi）
-                                            + [profile.dev.package.*] 覆盖（见 3.12）
+├── tasks/                             后台任务（原 runtime/tasks/）
+│   ├── mod.rs                         TaskSpawner trait + TaskDeps（显式依赖注入）
+│   ├── registry.rs                    TaskRegistry：key → JoinHandle 生命周期（72 行）
+│   ├── carousel.rs / fullscreen_detector.rs
+├── services/                          纯 DB 门面（无 AppContext / Scheduler 依赖）
+├── events.rs / migration/ / entities/ / utils/
+└── Cargo.toml                         [profile.release] 视诊断需要临时开 debug=1
+                                       （WPR/WPA 定位内存分配时用，分析后还原）
 ```
 
 前端：`src/api/event.ts` 增 `RENDERER_ERROR` + `RendererErrorPayload` + `EventMap`；`src/pages/main/App.tsx` 单点监听，`ExtendDegraded` 用 `toast.warning`、其余用 `toast.error`。
 
-### 6.2 RenderCoordinator 的 backend 状态
+### 6.2 UnifiedWallpaperManager 的 backend 状态
 
 ```
 backends:      HashMap<monitor_id, RenderBackend>   ← 当前 active backend
@@ -998,7 +981,7 @@ selection:     BackendSelection                     ← 进程启动时确定
 | `dispatch_notifications` | `RenderNotification::Updated/Cleared` 批量派发，DB 阶段收集、短锁内一次性执行 |
 | `active_ids` | Native + WebView 合并去重 |
 
-`RenderNotification` 替代了 `WmNotification`，目的是把「查库 → 决策 → 路由」从 `WindowManager` 锁内搬出去，延续 P1 的锁范围治理。
+早期的 `RenderNotification` / `WmNotification` 批量派发已由 `reconcile(scope)` 取代：一次 action 只触发一次 reconcile，由 Manager 内部 diff 出需要下发的窗口动作，不再有独立通知队列。
 
 > `FrameCache<SharedFrames>` **不属于**协调器状态：它持有 D3D11 SRV，只能活在渲染线程 `run()` 的栈上（见 3.12）。协调器只负责下发命令，重复命令在渲染线程侧去重，两边不共享任何 GPU 对象。
 

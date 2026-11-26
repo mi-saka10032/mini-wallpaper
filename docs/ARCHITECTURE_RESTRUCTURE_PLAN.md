@@ -1,6 +1,6 @@
 # 架构重整：action 驱动的批量 diff 收敛
 
-> 状态：**方案定案，待实施**（2026-11-23 15:19 用户最终收敛）
+> 状态：**已实施**（2026-11-23 15:19 用户定案）；本文是当时的方案记录，落地后的现行结构见 `NATIVE_RENDERER_TECH_DOC.md` 第 6 节
 >
 > 演进：轮询快照（10:54 提案）→ 事务成功后直调 reconcile（14:22）→ **action 归一：一个 action = 一次事务 = 一次 reconcile（15:19）**。
 > 15:19 明确：**display_mode 同样走 diff，只是批量**；无常驻 task、无旁路派发、无 `fast_forward_observed`。

@@ -2,7 +2,7 @@
 
 - 日期：2026-11-22
 - 分支：`feature/native-wallpaper-renderer`
-- 当前验证基线：代码 `6f831d5`，文档 HEAD 随分支（session 级 GPU + fade 期间视频/音频暂停 + 音频线程 paused 初始状态修复）
+- 当前验证基线：本文记录 2026-11-22 评审时的代码 `6f831d5`（session 级 GPU + fade 期间视频/音频暂停）；2026-11-26 后的现行结构见 `NATIVE_RENDERER_TECH_DOC.md`
 - 评审对象：Windows Native 壁纸渲染链路，重点为视频解码、多屏绘制、内存生命周期与后续架构方向
 
 ---

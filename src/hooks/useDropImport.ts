@@ -32,7 +32,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
  * - 用 `dragCounterRef` 处理嵌套元素的 enter/leave 事件抖动。
  * - `enabled = false` 时所有 handler 为 noop，浏览器自动显示禁止光标。
  *
- * @param enabled    是否启用拖拽响应（管理模式 / 排序模式 / 收藏夹下传 false）
+ * @param enabled    是否启用拖拽响应（仅「全部壁纸」栏传 true；收藏夹 / 设置 / 回收站 /
+ *                   管理模式 / 排序模式 / 加载中一律传 false）
  * @param onImport   HTML5 通道回调，拿到 File[]（降级路径）
  * @param onImportPaths 原生通道回调，拿到文件路径（Tauri 容器内的主路径）
  */

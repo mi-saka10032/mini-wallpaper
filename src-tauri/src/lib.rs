@@ -9,6 +9,7 @@ mod platform;
 mod runtime;
 mod services;
 mod setup;
+mod tasks;
 mod utils;
 
 use setup::{focus_existing_window, AUTOSTART_ARG};

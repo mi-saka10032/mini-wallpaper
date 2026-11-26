@@ -10,8 +10,8 @@ use log::{info, warn};
 
 use super::Scheduler;
 use crate::dto::app_setting_dto::keys as setting_keys;
-use crate::runtime::tasks::carousel::{carousel_key, CarouselTask};
-use crate::runtime::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
+use crate::tasks::carousel::{carousel_key, CarouselTask};
+use crate::tasks::fullscreen_detector::{FullscreenDetectionTask, FULLSCREEN_TIMER_KEY};
 use crate::services::{collection_service, monitor_config_service};
 
 impl Scheduler {

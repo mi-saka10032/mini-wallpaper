@@ -9,6 +9,7 @@
 use tokio::task::JoinHandle;
 
 pub mod carousel;
+pub mod registry;
 pub mod fullscreen_detector;
 
 /// 任务工厂 trait

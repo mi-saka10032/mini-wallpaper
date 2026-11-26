@@ -16,7 +16,7 @@ use crate::dto::monitor_config_dto::{
 };
 use crate::dto::Validated;
 use crate::entities::monitor_config;
-use crate::runtime::tasks::carousel::carousel_key;
+use crate::tasks::carousel::carousel_key;
 use crate::runtime::Scheduler;
 use crate::services::monitor_config_service;
 

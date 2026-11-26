@@ -16,7 +16,7 @@ use tokio::time::{interval, Duration, MissedTickBehavior};
 use crate::context::unified_manager::ReconcileScope;
 use crate::context::AppContext;
 use crate::dto::shortcut_dto::Direction;
-use crate::runtime::scheduler::TaskSpawner;
+use crate::tasks::TaskSpawner;
 use crate::services::{collection_service, monitor_config_service};
 
 /// 轮播定时器在 Scheduler 中的 key 前缀

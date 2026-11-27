@@ -132,7 +132,21 @@
   "preview": {
     "video": "视频",
     "gif": "GIF",
-    "image": "图片"
+    "image": "图片",
+    "fit": "适应窗口",
+    "actual": "原始尺寸 1:1",
+    "close": "关闭预览",
+    "duration": "时长",
+    "createdAt": "添加于",
+    "playCount": "播放次数",
+    "tags": "标签",
+    "editTags": "编辑标签",
+    "save": "保存",
+    "cancel": "取消",
+    "favorite": "加入我喜欢",
+    "unfavorite": "取消收藏",
+    "tagsSaved": "标签已保存",
+    "emptyHint": "当前视图已无壁纸，已退出预览"
   },
   "picker": {
     "title": "添加壁纸",

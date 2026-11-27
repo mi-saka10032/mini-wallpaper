@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef, lazy, Suspense } from "react";
+import { useEffect, useState, useRef, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Toolbar from "@/components/layout/Toolbar";
@@ -18,6 +18,7 @@ import { useAccentColor } from "@/hooks/useAccentColor";
 import { useStartupUpdateCheck } from "@/hooks/useStartupUpdateCheck";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
 import { useSceneStore } from "@/stores/sceneStore";
+import { usePreviewStore } from "@/stores/previewStore";
 import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
@@ -161,9 +162,8 @@ const App: React.FC = () => {
   // 视图切换与数据拉取在 store 内完成（含竞态守卫），组件只订阅结果。
   const activeId = useWallpaperStore((s) => s.activeId);
   const setActiveId = useWallpaperStore((s) => s.setActiveId);
-  const viewWallpapers = useWallpaperStore((s) => s.viewWallpapers);
   const viewSwitching = useWallpaperStore((s) => s.viewSwitching);
-  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const previewOpen = usePreviewStore((s) => s.index !== null);
 
   // 管理模式状态（用于蒙层遮挡）
   const [manageMode, setManageMode] = useState(false);
@@ -191,13 +191,7 @@ const App: React.FC = () => {
     }
   }, [language]);
 
-  const openPreview = useCallback((index: number) => {
-    setPreviewIndex(index);
-  }, []);
-
-  const closePreview = useCallback(() => {
-    setPreviewIndex(null);
-  }, []);
+  // 预览开关由 previewStore 统一管理：播放列表需随网格派生结果实时同步。
 
   return (
     <TooltipProvider>
@@ -255,20 +249,16 @@ const App: React.FC = () => {
                   (isOverlayView || viewSwitching) && "hidden",
                 )}
               >
-                <MainContent onPreview={openPreview} onManageModeChange={setManageMode} />
+                <MainContent onManageModeChange={setManageMode} />
               </div>
             </div>
           </ErrorBoundary>
         </main>
 
-        {previewIndex !== null && (
+        {previewOpen && (
           <ErrorBoundary>
             <Suspense fallback={null}>
-              <PreviewDialog
-                wallpapers={viewWallpapers}
-                initialIndex={previewIndex}
-                onClose={closePreview}
-              />
+              <PreviewDialog />
             </Suspense>
           </ErrorBoundary>
         )}

@@ -21,9 +21,10 @@ import { useSortMode } from "@/hooks/useSortMode";
 import { useWallpaperSearch } from "@/hooks/useWallpaperSearch";
 import { cn } from "@/lib/utils";
 import { useCollectionStore } from "@/stores/collectionStore";
+import { usePreviewStore } from "@/stores/previewStore";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
 import { ImagePlus, Search } from "lucide-react";
-import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ManageToolbar from "./ManageToolbar";
 import NormalToolbar from "./NormalToolbar";
@@ -37,11 +38,10 @@ const SmartCollectionDialog = lazy(() => import("@/components/wallpaper/SmartCol
 
 interface MainContentProps {
   className?: string;
-  onPreview: (index: number) => void;
   onManageModeChange?: (active: boolean) => void;
 }
 
-const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManageModeChange }) => {
+const MainContent: React.FC<MainContentProps> = ({ className, onManageModeChange }) => {
   const { t } = useTranslation();
 
   // 视图数据直接取自 store，不再由 App 自上而下灌入：
@@ -134,9 +134,16 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
 
   const wallpaperIds = useMemo(() => displayWallpapers.map((w) => w.id), [displayWallpapers]);
 
-  // 用 ref 持有 wallpapers，避免 handleCardClick 依赖数组引用变化
-  const wallpapersRef = useRef(wallpapers);
-  wallpapersRef.current = wallpapers;
+  // 用 ref 持有网格「实际展示」的列表：点击时按 id 在该列表里定位，
+  // 保证灯箱播放列表与用户看到的网格口径一致（含关键词过滤 / 排序）。
+  const displayRef = useRef(displayWallpapers);
+  displayRef.current = displayWallpapers;
+
+  // 视图数据刷新后同步给灯箱，驱动「锚点 id 消失」的重定位；
+  // syncList 内部只在预览打开期间生效，关闭时是空操作。
+  useEffect(() => {
+    usePreviewStore.getState().syncList(displayWallpapers);
+  }, [displayWallpapers]);
 
   // ===== 稳定的单个删除回调（避免内联函数导致 WallpaperCard memo 失效） =====
   const handleSingleDelete = useCallback(
@@ -151,11 +158,12 @@ const MainContent: React.FC<MainContentProps> = ({ className, onPreview, onManag
       if (manage.manageMode) {
         manage.toggleSelect(wp.id);
       } else {
-        const realIndex = wallpapersRef.current.findIndex((w) => w.id === wp.id);
-        onPreview(realIndex !== -1 ? realIndex : _index);
+        const list = displayRef.current;
+        const realIndex = list.findIndex((w) => w.id === wp.id);
+        usePreviewStore.getState().open(list, realIndex !== -1 ? realIndex : _index);
       }
     },
-    [sort.sortMode, manage.manageMode, manage.toggleSelect, onPreview],
+    [sort.sortMode, manage.manageMode, manage.toggleSelect],
   );
 
   // ===== 拖拽导入（H5 drag）=====

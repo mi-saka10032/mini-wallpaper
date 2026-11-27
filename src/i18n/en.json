@@ -132,7 +132,21 @@
   "preview": {
     "video": "Video",
     "gif": "GIF",
-    "image": "Image"
+    "image": "Image",
+    "fit": "Fit to window",
+    "actual": "Actual size 1:1",
+    "close": "Close preview",
+    "duration": "Duration",
+    "createdAt": "Added",
+    "playCount": "Plays",
+    "tags": "Tags",
+    "editTags": "Edit tags",
+    "save": "Save",
+    "cancel": "Cancel",
+    "favorite": "Add to Favorites",
+    "unfavorite": "Remove from Favorites",
+    "tagsSaved": "Tags saved",
+    "emptyHint": "No wallpapers left in this view, preview closed"
   },
   "picker": {
     "title": "Add Wallpapers",

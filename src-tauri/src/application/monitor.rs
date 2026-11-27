@@ -20,6 +20,13 @@ pub async fn upsert_monitor_config(
     let need_restart = req.play_interval.is_some() || req.collection_id.is_some();
     let (updated, is_sync) = monitor_config_service::upsert_group(&svc.ctx.db, req).await?;
 
+    // 切到顺序播放后牌堆不再被消费，全部清空；切回 random 时下一次消费
+    // 会以当前显示图为锚重建。用 clear 而非删单 key，是因为同步组的牌堆
+    // key 统一在基准屏，请求里的 monitor_id 未必就是基准屏。
+    if req.play_mode.as_deref() == Some("sequential") {
+        svc.ctx.play_queues().clear();
+    }
+
     {
         let mut guard = svc.scheduler.lock().await;
         let mut fx = AppEffects::new(svc.ctx, &mut guard);

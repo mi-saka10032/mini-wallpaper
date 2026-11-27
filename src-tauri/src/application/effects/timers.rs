@@ -35,9 +35,15 @@ impl AppEffects<'_> {
         let key = carousel_key(&config.monitor_id);
         let db = self.db();
 
-        // 暂停态持久化在 is_enabled，should_start_timer 已覆盖 active && is_enabled
+        // 暂停态持久化在 is_enabled，should_start_timer 已覆盖 active && is_enabled。
+        // 两者要分开：active=false 是显示器消失，牌堆条目应删；仅 is_enabled=false
+        // 是用户暂停，牌堆必须留着，否则恢复后「上一张」回不到暂停前那张。
         if !monitor_config_service::should_start_timer(config) {
-            self.stop(&key);
+            if config.active {
+                self.pause_timer(&key);
+            } else {
+                self.stop(&key);
+            }
             return;
         }
 

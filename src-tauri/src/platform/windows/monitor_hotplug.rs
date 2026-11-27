@@ -15,6 +15,7 @@
 //! 这里只做 `try_send(())` 投信，业务逻辑全部在异步消费侧。
 
 use log::{debug, warn};
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -28,13 +29,11 @@ use super::desktop_embedder::wndproc::{
 };
 
 /// 投信器：热插拔消息到达时只做 `try_send`，不阻塞 UI 线程。
-static HOTPLUG_TX: std::sync::OnceLock<std::sync::Mutex<Option<mpsc::UnboundedSender<()>>>> =
-    std::sync::OnceLock::new();
+static HOTPLUG_TX: OnceLock<Mutex<Option<mpsc::UnboundedSender<()>>>> = OnceLock::new();
 
 /// 已子类化的主窗口 HWND（存 isize：HWND 是裸指针、非 Send/Sync，不能进 static），
 /// 用于应用退出时注销。还原成 HWND 时再 as 转回。
-static SUBCLASSED_HWND: std::sync::OnceLock<std::sync::Mutex<Option<isize>>> =
-    std::sync::OnceLock::new();
+static SUBCLASSED_HWND: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 
 /// 启动监听：把主窗口 WndProc 换成 `hotplug_wndproc`，并把投信器存入全局。
 ///
@@ -66,11 +65,11 @@ pub fn start(app: &AppHandle, tx: mpsc::UnboundedSender<()>) -> bool {
     }
 
     *HOTPLUG_TX
-        .get_or_init(|| std::sync::Mutex::new(None))
+        .get_or_init(|| Mutex::new(None))
         .lock()
         .expect("hotplug tx lock poisoned") = Some(tx);
     *SUBCLASSED_HWND
-        .get_or_init(|| std::sync::Mutex::new(None))
+        .get_or_init(|| Mutex::new(None))
         .lock()
         .expect("hotplug hwnd lock poisoned") = Some(hwnd as isize);
 

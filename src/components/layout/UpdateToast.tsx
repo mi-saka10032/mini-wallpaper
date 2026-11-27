@@ -86,6 +86,7 @@ const UpdateToast: FC = memo(() => {
         </div>
         <button
           type="button"
+          data-update-action
           onClick={dismissToast}
           title={t("update.dismiss")}
           className="shrink-0 rounded-sm p-0.5 text-foreground/40 transition-colors hover:bg-primary-hover hover:text-foreground"
@@ -96,9 +97,10 @@ const UpdateToast: FC = memo(() => {
 
       <button
         type="button"
+        data-update-action
         onClick={handleDownload}
         disabled={isBusy}
-        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <ArrowDownToLine className="size-3.5" />
         {isBusy ? t("update.downloading") : t("update.downloadNow")}

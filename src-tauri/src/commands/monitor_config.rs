@@ -69,11 +69,15 @@ pub async fn delete_monitor_config(
 ) -> CommandResult<()> {
     let req = req.into_inner();
 
-    // 先停止可能存在的定时器
+    // 先停止可能存在的定时器；配置删除后牌堆条目也应随之消失，
+    // 否则显示器热插拔会让 map 只增不删。
     if let Some(mid) = &req.monitor_id {
+        let key = carousel_key(mid);
         let scheduler_handle: Arc<Mutex<TaskRegistry>> = scheduler.inner().clone();
         let mut sched = scheduler_handle.lock().await;
-        sched.stop(&carousel_key(mid));
+        sched.stop(&key);
+        drop(sched);
+        ctx.inner().play_queues().remove(&key);
     }
 
     let app_ctx: &AppContext = ctx.inner();

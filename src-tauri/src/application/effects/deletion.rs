@@ -338,19 +338,15 @@ impl AppEffects<'_> {
     ) -> bool {
         let db = self.db();
 
-        let collection_id = match config.collection_id {
-            Some(cid) => cid,
-            None => return false,
-        };
+        if config.collection_id.is_none() {
+            return false;
+        }
 
-        let new_wid = collection_service::adjacent_wallpaper_id(
-            &db,
-            collection_id,
-            config.wallpaper_id,
-            &config.play_mode,
-            direction,
-        )
-        .await;
+        // 统一用例按 play_mode 分流：random 消费环形牌堆、sequential 走原游标。
+        // 这里只消费不重洗——写库成功后 DB 的 id 正好是 cursor 那张，
+        // 下次切换仍在同一条序列上，Prev 才能回退到刚才那张。
+        let new_wid =
+            crate::application::playlist::pick_adjacent(self.ctx, &db, config, direction).await;
 
         let wid = match new_wid {
             Ok(Some(wid)) => wid,

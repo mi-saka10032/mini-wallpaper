@@ -63,6 +63,12 @@ const RotationSection: FC<RotationSectionProps> = memo(
               {t("monitor.random")}
             </Button>
           </div>
+          {/* 随机模式是一轮不重复的洗牌队列，手动排序不生效，需显式告知 */}
+          {playMode === "random" && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              {t("monitor.randomHint")}
+            </p>
+          )}
         </div>
 
         {/* 轮播间隔 */}

@@ -116,6 +116,9 @@ pub async fn import_backup(
     // 否则 AppContext 仍注册在 Tauri state 里、后续所有 command 都会拿到已关闭的连接。
     let scheduler_handle: Arc<Mutex<TaskRegistry>> = scheduler.inner().clone();
     scheduler_handle.lock().await.stop_all();
+    // 整库替换后旧牌堆里的 id 全部失效；正常路径会 restart 清空内存，
+    // 这里显式清一次，保证即便重启失败也不会留下指向旧库的序列。
+    app_ctx.play_queues().clear();
     if let Err(error) = app_ctx.db.close_by_ref().await {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(error.to_string().into());

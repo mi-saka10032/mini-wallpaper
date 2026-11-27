@@ -47,6 +47,15 @@ impl<'a> AppEffects<'a> {
 
     pub fn stop(&mut self, key: &str) {
         self.registry.stop(key);
+        // timer 消失就顺手删牌堆条目，避免显示器热插拔 / 解绑后 map 只增不删。
+        // 纯暂停要走 pause_timer 保留队列；B1 的 restart 不经过这里，队列也保留。
+        self.ctx.play_queues().remove(key);
+    }
+
+    /// 只停 timer、保留牌堆：用于 `is_enabled=false` 的暂停，
+    /// 恢复后「上一张」仍应能回到暂停前那张。
+    pub fn pause_timer(&mut self, key: &str) {
+        self.registry.stop(key);
     }
 
     pub fn is_running(&self, key: &str) -> bool {

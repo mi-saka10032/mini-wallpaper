@@ -415,6 +415,37 @@ pub async fn remove_wallpapers(
     Ok(result.rows_affected)
 }
 
+/// 求收藏夹当前可播放的壁纸 id 集合（升序去重）。
+///
+/// 随机播放牌堆用它做失效判据：只要命中集与队列快照不同就重洗。
+/// 手动夹经过 `active_member_filter` 排除回收站内成员，智能夹经规则引擎
+/// 实时求值，两条路径都不物化成员顺序，因此 manual 的 `sort_order` 不参与。
+pub async fn playable_wallpaper_ids(
+    db: &DatabaseConnection,
+    collection_id: i32,
+) -> Result<Vec<i32>> {
+    if let Some(model) = collection::Entity::find_by_id(collection_id)
+        .one(db)
+        .await?
+    {
+        if model.kind == "smart" {
+            return crate::services::smart_collection_service::matched_ids(db, &model).await;
+        }
+    }
+
+    let mut ids: Vec<i32> = collection_wallpaper::Entity::find()
+        .select_only()
+        .column(collection_wallpaper::Column::WallpaperId)
+        .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
+        .filter(active_member_filter())
+        .into_tuple::<i32>()
+        .all(db)
+        .await?;
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
 /// 获取收藏夹内的壁纸数量
 pub async fn count_wallpapers(db: &DatabaseConnection, collection_id: i32) -> Result<u64> {
     // 智能收藏夹：命中数由规则参数化 COUNT 求值

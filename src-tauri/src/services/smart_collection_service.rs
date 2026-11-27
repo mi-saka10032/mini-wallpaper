@@ -69,6 +69,24 @@ pub async fn matched_wallpapers(
     Ok(rows)
 }
 
+/// 只求值命中的 id（升序），供随机播放牌堆做命中集快照比对。
+///
+/// 与 `matched_wallpapers` 共用 `rule_condition`，因此回收站过滤、白名单校验、
+/// OR 组合子的顶层 AND 语义完全一致；只 SELECT id 避免每轮轮播拉全量 Model。
+pub async fn matched_ids(db: &DatabaseConnection, model: &collection::Model) -> Result<Vec<i32>> {
+    let rule = load_rule(model)?;
+    let cond = rule_condition(&rule)?;
+    let ids = wallpaper::Entity::find()
+        .select_only()
+        .column(wallpaper::Column::Id)
+        .filter(cond)
+        .order_by_asc(wallpaper::Column::Id)
+        .into_tuple::<i32>()
+        .all(db)
+        .await?;
+    Ok(ids)
+}
+
 /// 命中数（参数化 COUNT，不物化 id）
 pub async fn count_matched(db: &DatabaseConnection, model: &collection::Model) -> Result<u64> {
     let rule = load_rule(model)?;

@@ -117,6 +117,7 @@
     "playMode": "播放模式",
     "sequential": "顺序播放",
     "random": "随机播放",
+    "randomHint": "随机播放会把收藏夹洗牌成一轮不重复的环形序列，可用「上一张」回看；不遵循手动排序",
     "interval": "切换间隔",
     "displayMode": "显示模式",
     "displayIndependent": "独立显示",

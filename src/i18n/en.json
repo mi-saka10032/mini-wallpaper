@@ -117,6 +117,7 @@
     "playMode": "Play Mode",
     "sequential": "Sequential",
     "random": "Random",
+    "randomHint": "Random shuffles the collection into a no-repeat ring; Previous steps back. Manual order is ignored",
     "interval": "Interval",
     "displayMode": "Display Mode",
     "displayIndependent": "Independent",

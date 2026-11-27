@@ -12,10 +12,11 @@ use log::{error, warn};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration, MissedTickBehavior};
 
+use crate::application::playlist;
 use crate::context::unified_manager::ReconcileScope;
 use crate::context::AppContext;
 use crate::dto::shortcut_dto::Direction;
-use crate::services::{collection_service, monitor_config_service};
+use crate::services::monitor_config_service;
 use crate::tasks::{TaskDeps, TaskSpawner};
 
 /// 轮播定时器在 TaskRegistry 中的 key 前缀
@@ -98,22 +99,16 @@ impl TaskSpawner for CarouselTask {
                 // 不用启动时缓存的值：快捷键切图、删除联动都会改 DB，
                 // 必须按最新 wallpaper_id / play_mode 计算下一张才不会回退到旧图。
                 let current_wid = current_config.wallpaper_id;
-                let play_mode = current_config.play_mode;
                 // 收藏夹绑定也按最新 config：切回单张壁纸或收藏夹被删时直接退出，
                 // 不再依赖 command 侧的 timer 重启兜底。
-                let Some(collection_id) = current_config.collection_id else {
+                if current_config.collection_id.is_none() {
                     break;
-                };
+                }
 
-                // 通过 collection_service 获取下一张壁纸
-                match collection_service::adjacent_wallpaper_id(
-                    &db,
-                    collection_id,
-                    current_wid,
-                    &play_mode,
-                    &Direction::Next,
-                )
-                .await
+                // 统一用例按 play_mode 分流：顺序走游标，随机走环形牌堆。
+                // 牌堆以「命中集快照 + 当前显示 id」自愈，条件写入失败
+                // （Ok(None)）时下一 tick 会自动以最新 id 为锚重洗。
+                match playlist::pick_adjacent(app_ctx, &db, &current_config, &Direction::Next).await
                 {
                     Ok(Some(new_wid)) => {
                         // 条件写入：读 config 到写回之间用户可能手动换过壁纸，

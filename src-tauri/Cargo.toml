@@ -38,6 +38,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 image = "0.25.10"
 uuid = { version = "1.23.0", features = ["v4"] }
+fastrand = "2.4.1"
 zip = "2"
 walkdir = "2"
 garde = { version = "0.22", features = ["derive"] }

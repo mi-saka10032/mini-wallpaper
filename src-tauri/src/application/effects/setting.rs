@@ -84,6 +84,10 @@ impl AppEffects<'_> {
     ) {
         info!("[TaskRegistry] display_mode 变更: {}", display_mode);
 
+        // 同步组只启一个 timer、独立模式每屏一个，牌堆 key 的映射整体改变。
+        // 清空后下一次消费会按新的 carousel_key 以当前显示图为锚重建。
+        self.ctx.play_queues().clear();
+
         let db = self.db();
 
         // 架构重整 Phase 3：display_mode 的渲染副作用（set_display_mode、配置同步、

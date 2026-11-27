@@ -371,12 +371,16 @@
   animation: dialog-exit 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.toolbar-primary button:not([data-window-close]) {
+/* 仅作用于工具栏自身的图标按钮。
+ * UpdateToast 虽是 absolute 浮窗，DOM 上仍是 .toolbar-primary 的后代，
+ * 若不过滤会把里面的下载/关闭按钮一并变成透明（!important 会覆盖 bg-primary）。
+ * 浮窗内按钮统一带 data-update-action，显式排除在此规则之外。 */
+.toolbar-primary button:not([data-window-close]):not([data-update-action]) {
   color: var(--primary-foreground);
   opacity: 0.7;
 }
 
-.toolbar-primary button:not([data-window-close]):hover {
+.toolbar-primary button:not([data-window-close]):not([data-update-action]):hover {
   background: transparent !important;
   opacity: 1;
 }

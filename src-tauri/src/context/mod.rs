@@ -4,7 +4,8 @@
 //!
 //! - **`AppContext`**：全局状态的唯一聚合入口
 //! - **`db`**：数据库连接初始化与迁移
-//! - **`WallpaperWindowManager`**：壁纸窗口的创建/销毁/事件管理
+//! - **`unified_manager`**：壁纸渲染目标的统一管理器
+//! - **`play_queue`**：随机播放的环形洗牌牌堆（纯内存运行时状态）
 //!
 //! 运行时调度（轮播定时器、全屏检测等后台任务）已迁移至 `runtime/` 模块，
 //! `TaskRegistry` 作为独立的全局 state 与 `AppContext` 平级注册。
@@ -15,6 +16,7 @@
 //! - **职责分离**：`context` 管"是什么"（状态），`runtime` 管"做什么"（调度）
 
 mod db;
+pub mod play_queue;
 pub mod toast_manager;
 /// 统一壁纸管理器：主体 + native（渲染链路）/ webview（窗口链路）两个 impl 文件
 pub mod unified_manager;
@@ -23,6 +25,7 @@ use anyhow::Result;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 
+use play_queue::PlayQueueStore;
 use toast_manager::ToastManager;
 use unified_manager::UnifiedWallpaperManager;
 
@@ -53,6 +56,13 @@ pub struct AppContext {
 
     /// 备份操作互斥锁（防止导入/导出并发执行导致数据损坏）
     pub backup_lock: Mutex<()>,
+
+    /// 随机播放牌堆：key 为 `carousel_key(monitor_id)`，与轮播 timer 对齐。
+    ///
+    /// 用同步锁是因为临界区只有 Vec 洗牌与 cursor 移动、零 await；
+    /// 同步锁也让 `AppEffects::stop` 能在停止 timer 时顺手删条目，
+    /// 避免显示器热插拔后 map 只增不删。
+    pub play_queues: std::sync::Mutex<PlayQueueStore>,
 }
 
 impl AppContext {
@@ -79,6 +89,7 @@ impl AppContext {
             app_handle,
             db,
             backup_lock: Mutex::new(()),
+            play_queues: std::sync::Mutex::new(PlayQueueStore::default()),
         })
     }
 
@@ -91,5 +102,12 @@ impl AppContext {
         if let Err(err) = manager.init().await {
             log::error!("[UnifiedWallpaperManager] 初始化失败: {:#}", err);
         }
+    }
+
+    /// 取牌堆锁；单次 panic 污染不应让整个轮播链路连锁 panic，故恢复内层值。
+    pub fn play_queues(&self) -> std::sync::MutexGuard<'_, PlayQueueStore> {
+        self.play_queues
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }

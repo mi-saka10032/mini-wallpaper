@@ -589,7 +589,7 @@ struct WorkerGpu {
     manager: IMFDXGIDeviceManager,
     manager_handle: HANDLE,
     /// VP Blt 的目标 staging texture 按分辨率复用，避免每个 session 各持一份 NV12。
-    staging_output: std::sync::Mutex<HashMap<(u32, u32), ID3D11Texture2D>>,
+    staging_output: Mutex<HashMap<(u32, u32), ID3D11Texture2D>>,
 }
 
 /// 关闭 device manager 的 device handle。调用方需保证 SourceReader / view / texture 先释放

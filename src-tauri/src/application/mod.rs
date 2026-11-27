@@ -30,6 +30,7 @@ pub mod actions;
 pub mod collection;
 pub mod effects;
 pub mod monitor;
+pub mod playlist;
 pub mod settings;
 pub mod wallpaper;
 

@@ -5,6 +5,7 @@ pub mod collection;
 pub mod error;
 pub mod fullscreen;
 pub mod monitor_config;
+pub mod scene;
 pub mod tag;
 pub mod toast;
 pub mod wallpaper;
@@ -29,6 +30,10 @@ pub use fullscreen::init_fullscreen_detection;
 pub use monitor_config::{
     delete_monitor_config, get_monitor_config, get_monitor_configs, start_timers,
     upsert_monitor_config,
+};
+#[allow(unused_imports)]
+pub use scene::{
+    apply_scene, delete_scene, get_current_scene_state, list_scenes, rename_scene, save_scene,
 };
 #[allow(unused_imports)]
 pub use tag::{
@@ -103,6 +108,13 @@ macro_rules! all_handlers {
             $crate::commands::tag::set_wallpaper_tags,
             $crate::commands::tag::rename_tag,
             $crate::commands::tag::delete_tag,
+            // scene
+            $crate::commands::scene::get_current_scene_state,
+            $crate::commands::scene::list_scenes,
+            $crate::commands::scene::save_scene,
+            $crate::commands::scene::rename_scene,
+            $crate::commands::scene::delete_scene,
+            $crate::commands::scene::apply_scene,
         ]
     };
 }

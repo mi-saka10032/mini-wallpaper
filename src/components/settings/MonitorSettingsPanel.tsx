@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Monitor as MonitorIcon, RefreshCw } from "lucide-react";
+import { Layers, Monitor as MonitorIcon, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -17,6 +18,9 @@ import MonitorVisualizer from "./MonitorVisualizer";
 import DisplayModeSection from "./DisplayModeSection";
 import WallpaperSourceSection from "./WallpaperSourceSection";
 import RotationSection from "./RotationSection";
+
+// 场景快照弹窗只在打开显示器设置视图、且用户点开时才需要加载。
+const SceneDialog = lazy(() => import("@/components/scene/SceneDialog"));
 
 const MonitorSettingsPanel: React.FC = () => {
   const { t } = useTranslation();
@@ -64,15 +68,33 @@ const MonitorSettingsPanel: React.FC = () => {
           <MonitorIcon className="size-5 text-muted-foreground" />
           <h2 className="text-base font-semibold">{t("monitor.title")}</h2>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleRefresh}
-          className="text-muted-foreground hover:text-foreground hover:bg-primary-hover"
-        >
-          <RefreshCw className="mr-1.5 size-3.5" />
-          {t("monitor.refresh")}
-        </Button>
+        <div className="flex items-center gap-1">
+          {/* 场景快照：与显示器配置同源，入口放在刷新按钮左侧 */}
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground hover:bg-primary-hover"
+              >
+                <Layers className="mr-1.5 size-3.5" />
+                {t("scene.entryTip")}
+              </Button>
+            </DialogTrigger>
+            <Suspense fallback={null}>
+              <SceneDialog />
+            </Suspense>
+          </Dialog>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleRefresh}
+            className="text-muted-foreground hover:text-foreground hover:bg-primary-hover"
+          >
+            <RefreshCw className="mr-1.5 size-3.5" />
+            {t("monitor.refresh")}
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">

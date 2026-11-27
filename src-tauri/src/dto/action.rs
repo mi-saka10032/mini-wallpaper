@@ -41,4 +41,8 @@ pub enum Action {
     Quit,
     /// 收藏 / 取消收藏当前显示中的壁纸（切换其在内置「我喜欢」收藏夹中的归属）
     ToggleFavorite,
+    /// 应用指定场景（托盘场景子菜单动态项）
+    ApplyScene { scene_id: i32 },
+    /// 返回上一个场景（托盘固定项）
+    ApplyLastScene,
 }

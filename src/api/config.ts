@@ -47,6 +47,13 @@ export const COMMANDS = {
   GET_SETTINGS: "get_settings",
   GET_SETTING: "get_setting",
   SET_SETTING: "set_setting",
+  // scene
+  GET_CURRENT_SCENE_STATE: "get_current_scene_state",
+  LIST_SCENES: "list_scenes",
+  SAVE_SCENE: "save_scene",
+  RENAME_SCENE: "rename_scene",
+  DELETE_SCENE: "delete_scene",
+  APPLY_SCENE: "apply_scene",
   // shortcut
   // backup
   EXPORT_BACKUP: "export_backup",
@@ -316,6 +323,53 @@ export interface ImportBackupReq {
   zipPath: string;
 }
 
+// ---------- 场景快照 ----------
+
+/** 单屏桌面状态；与后端存库 payload 完全同构 */
+export interface SceneMonitorState {
+  monitorId: string;
+  wallpaperId: number | null;
+  collectionId: number | null;
+  fitMode: string;
+  playMode: string;
+  playInterval: number;
+  isEnabled: boolean;
+}
+
+/** 完整场景状态：两个全局设置 + 逐屏配置 */
+export interface SceneState {
+  displayMode: string;
+  globalVolume: string;
+  monitors: SceneMonitorState[];
+}
+
+export interface SceneSummary {
+  id: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  state: SceneState;
+}
+
+/** 应用结果：skipped 是需要提示给用户的失配说明 */
+export interface ApplySceneResult {
+  applied: number;
+  skipped: string[];
+}
+
+export interface SaveSceneReq {
+  name: string;
+}
+
+export interface RenameSceneReq {
+  id: number;
+  name: string;
+}
+
+export interface SceneIdReq {
+  id: number;
+}
+
 // ==================== Command 入参/出参类型映射 ====================
 
 /** Command 入参/出参类型映射 */
@@ -499,5 +553,29 @@ export interface CommandMap {
   [COMMANDS.DELETE_TAG]: {
     params: { req: DeleteTagReq };
     result: void;
+  };
+  [COMMANDS.GET_CURRENT_SCENE_STATE]: {
+    params: Record<string, never>;
+    result: SceneState;
+  };
+  [COMMANDS.LIST_SCENES]: {
+    params: Record<string, never>;
+    result: SceneSummary[];
+  };
+  [COMMANDS.SAVE_SCENE]: {
+    params: { req: SaveSceneReq };
+    result: SceneSummary;
+  };
+  [COMMANDS.RENAME_SCENE]: {
+    params: { req: RenameSceneReq };
+    result: SceneSummary;
+  };
+  [COMMANDS.DELETE_SCENE]: {
+    params: { req: SceneIdReq };
+    result: void;
+  };
+  [COMMANDS.APPLY_SCENE]: {
+    params: { req: SceneIdReq };
+    result: ApplySceneResult;
   };
 }

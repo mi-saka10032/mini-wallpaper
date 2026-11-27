@@ -197,6 +197,17 @@ impl EventPayload for MonitorConfigRefreshedPayload {
     const EVENT_NAME: &'static str = "monitor-config-refreshed";
 }
 
+/// 应用设置刷新事件（场景恢复等后端直接改 app_settings 后通知主窗口重取）
+///
+/// 托盘点击场景不经过前端 invoke，因此不能用 COMMAND_SIGNALS 覆盖，
+/// 必须由后端发事件；monitor-config-refreshed 走同一条链路。
+#[derive(Clone, Serialize)]
+pub struct AppSettingsRefreshedPayload;
+
+impl EventPayload for AppSettingsRefreshedPayload {
+    const EVENT_NAME: &'static str = "app-settings-refreshed";
+}
+
 /// 动作反馈 Toast 事件（通知主窗口显示操作反馈）
 ///
 /// 由 `TaskRegistry::dispatch_action` 在动作执行完成后发送，

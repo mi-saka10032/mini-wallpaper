@@ -17,6 +17,7 @@ import { useWebGuard } from "@/hooks/useWebGuard";
 import { useAccentColor } from "@/hooks/useAccentColor";
 import { useStartupUpdateCheck } from "@/hooks/useStartupUpdateCheck";
 import { useMonitorConfigStore } from "@/stores/monitorConfigStore";
+import { useSceneStore } from "@/stores/sceneStore";
 import { changeLanguage } from "@/i18n";
 import { invoke } from "@/api/invoke";
 import { COMMANDS } from "@/api/config";
@@ -127,6 +128,19 @@ const App: React.FC = () => {
       unlisten.then((fn) => fn());
     };
   }, [applyFavoriteChange]);
+
+  // 场景恢复可能由托盘触发（不经过前端 invoke），后端直接改了 app_settings，
+  // 必须靠事件让 settingStore 重取；monitor_configs 由 MONITOR_CONFIG_REFRESHED 负责。
+  useEffect(() => {
+    const unlisten = listen(EVENTS.APP_SETTINGS_REFRESHED, () => {
+      void useSettingStore.getState().fetchSettings();
+      // 弹窗可能正开着，陈列的状态也要跟上（含托盘触发的路径）。
+      void useSceneStore.getState().refresh();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   useEffect(() => {
     const unlisten = listen(EVENTS.RENDERER_ERROR, ({ monitor_id, message, code }) => {

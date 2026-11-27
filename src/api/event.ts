@@ -19,6 +19,8 @@ export const EVENTS = {
   WALLPAPER_CLEARED: "wallpaper-cleared",
   /** 显示器配置刷新事件（后端删除操作导致 config 变更，通知主窗口重新拉取） */
   MONITOR_CONFIG_REFRESHED: "monitor-config-refreshed",
+  /** 应用设置刷新事件（场景恢复等后端直接改 app_settings 后通知主窗口重取） */
+  APP_SETTINGS_REFRESHED: "app-settings-refreshed",
   /** 动作反馈 Toast 事件（后端 dispatch_action 完成后通知前端显示反馈） */
   ACTION_TOAST: "action-toast",
   /** 收藏归属变更事件（壁纸被加入/移出内置「我喜欢」收藏夹时发送） */
@@ -113,6 +115,7 @@ export interface EventMap {
   [EVENTS.DISPLAY_MODE_CHANGED]: DisplayModeChangedPayload;
   [EVENTS.WALLPAPER_CLEARED]: WallpaperClearedPayload;
   [EVENTS.MONITOR_CONFIG_REFRESHED]: Record<string, never>;
+  [EVENTS.APP_SETTINGS_REFRESHED]: Record<string, never>;
   [EVENTS.ACTION_TOAST]: ActionToastPayload;
   [EVENTS.FAVORITES_CHANGED]: FavoritesChangedPayload;
   [EVENTS.RENDERER_ERROR]: RendererErrorPayload;

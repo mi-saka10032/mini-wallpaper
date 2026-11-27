@@ -43,6 +43,4 @@ pub enum Action {
     ToggleFavorite,
     /// 应用指定场景（托盘场景子菜单动态项）
     ApplyScene { scene_id: i32 },
-    /// 返回上一个场景（托盘固定项）
-    ApplyLastScene,
 }

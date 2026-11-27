@@ -101,11 +101,7 @@ async fn refresh_scene_menu(svc: &AppServices<'_>) {
         .await
         .unwrap_or_default();
     let summaries = list_scenes_from_db(rows);
-    crate::platform::tray::refresh_tray_menu(
-        &svc.ctx.app_handle,
-        &summaries,
-        svc.ctx.last_scene_id(),
-    );
+    crate::platform::tray::refresh_tray_menu(&svc.ctx.app_handle, &summaries);
 }
 
 /// 保存当前状态；同名覆盖，并返回可立即渲染的摘要。
@@ -135,10 +131,6 @@ pub async fn rename_scene(svc: &AppServices<'_>, id: i32, name: &str) -> Result<
 
 pub async fn delete_scene(svc: &AppServices<'_>, id: i32) -> Result<()> {
     scene_service::delete(&svc.ctx.db, id).await?;
-    // 回切目标失效时清掉，避免指向已删场景。
-    if svc.ctx.last_scene_id() == Some(id) {
-        svc.ctx.set_last_scene_id(None);
-    }
     refresh_scene_menu(svc).await;
     Ok(())
 }
@@ -272,7 +264,6 @@ pub async fn apply_scene(svc: &AppServices<'_>, id: i32) -> Result<ApplySceneRes
         warn!("[Scene] 发送 app-settings-refreshed 失败: {}", e);
     }
 
-    svc.ctx.set_last_scene_id(Some(id));
     refresh_scene_menu(svc).await;
 
     Ok(ApplySceneResult {

@@ -107,7 +107,7 @@ impl AppEffects<'_> {
             Action::ToggleFavorite => None, // ToggleFavorite 的 toast 在内部根据收藏结果动态生成
             // 场景动作已在 application::actions 的锁外入口拦截，不会走到这里；
             // 穷尽分支仅为编译完整性保留。
-            Action::ApplyScene { .. } | Action::ApplyLastScene => None,
+            Action::ApplyScene { .. } => None,
         };
 
         match action {
@@ -117,7 +117,7 @@ impl AppEffects<'_> {
             Action::OpenMain => self.dispatch_open_main(),
             Action::Quit => self.dispatch_quit(),
             Action::ToggleFavorite => self.dispatch_toggle_favorite().await,
-            Action::ApplyScene { .. } | Action::ApplyLastScene => {}
+            Action::ApplyScene { .. } => {}
         }
 
         // 发送 toast 反馈（仅对需要反馈的动作）
@@ -310,7 +310,6 @@ impl AppEffects<'_> {
             Action::Quit => "quit",
             Action::ToggleFavorite => "toggleFavorite",
             Action::ApplyScene { .. } => "applyScene",
-            Action::ApplyLastScene => "applyLastScene",
         };
 
         let mut toast_mgr = self.ctx.toast_manager.lock().await;

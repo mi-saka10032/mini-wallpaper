@@ -15,17 +15,6 @@ pub async fn dispatch_action(svc: &AppServices<'_>, action: Action) {
             }
             return;
         }
-        Action::ApplyLastScene => {
-            match svc.ctx.last_scene_id() {
-                Some(id) => {
-                    if let Err(e) = scene::apply_scene(svc, id).await {
-                        warn!("[Action] 返回上一个场景失败: {:#}", e);
-                    }
-                }
-                None => warn!("[Action] 没有可返回的场景"),
-            }
-            return;
-        }
         _ => {}
     }
 

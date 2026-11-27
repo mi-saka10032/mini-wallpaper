@@ -63,26 +63,6 @@ pub struct AppContext {
     /// 同步锁也让 `AppEffects::stop` 能在停止 timer 时顺手删条目，
     /// 避免显示器热插拔后 map 只增不删。
     pub play_queues: std::sync::Mutex<PlayQueueStore>,
-
-    /// 最近一次应用的场景 id，供托盘「返回上一个场景」使用。
-    /// 纯运行时状态：重启后不恢复，也不需要持久化。
-    pub last_scene_id: std::sync::Mutex<Option<i32>>,
-}
-
-impl AppContext {
-    pub fn last_scene_id(&self) -> Option<i32> {
-        *self
-            .last_scene_id
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    pub fn set_last_scene_id(&self, id: Option<i32>) {
-        *self
-            .last_scene_id
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = id;
-    }
 }
 
 impl AppContext {
@@ -110,7 +90,6 @@ impl AppContext {
             db,
             backup_lock: Mutex::new(()),
             play_queues: std::sync::Mutex::new(PlayQueueStore::default()),
-            last_scene_id: std::sync::Mutex::new(None),
         })
     }
 

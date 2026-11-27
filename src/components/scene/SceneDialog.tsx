@@ -13,7 +13,10 @@ import { useWallpaperStore } from "@/stores/wallpaperStore";
 import type { SceneMonitorState } from "@/api/config";
 
 /**
- * 场景快照弹窗：陈列当前桌面状态供保存前阅览确认，并管理已保存的场景。
+ * 场景快照弹窗：左右分栏，左栏陈列当前桌面状态（并保存），右栏管理已保存场景。
+ *
+ * 两栏各自独立滚动：列表区 min-h-0 + overflow-y-auto，父容器给确定高度，
+ * 避免显示器多 / 场景多时把弹窗撑出屏幕。
  *
  * 展示用的壁纸名 / 收藏夹名按 id 从已有 store 查，不写进快照——
  * 改名后仍显示新名字，不会被保存时的名称固化。
@@ -127,7 +130,7 @@ const SceneDialog: FC = memo(() => {
         className="rounded-lg border border-border/50 bg-card px-3 py-2.5"
       >
         <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-foreground">
-          <Monitor className="size-3.5 text-primary" />
+          <Monitor className="size-3.5 shrink-0 text-primary" />
           <span className="truncate">{t("scene.monitor", { id: monitor.monitorId })}</span>
         </div>
         <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
@@ -158,18 +161,20 @@ const SceneDialog: FC = memo(() => {
   };
 
   return (
-    <DialogContent className="gap-0 overflow-hidden rounded-xl border-border/50 p-0 sm:max-w-140">
-      <DialogTitle className="flex items-center gap-2 border-b border-border/40 px-6 py-4 text-base font-semibold">
-        <Layers className="size-4 text-primary" />
-        {t("scene.title")}
-      </DialogTitle>
+    <DialogContent className="gap-0 overflow-hidden rounded-xl border-border/50 p-0 sm:max-w-[860px]">
+      <div className="border-b border-border/40 px-6 py-3">
+        <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+          <Layers className="size-4 text-primary" />
+          {t("scene.title")}
+        </DialogTitle>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{t("scene.desc")}</p>
+      </div>
 
-      <div className="max-h-[70vh] space-y-5 overflow-y-auto px-6 py-5">
-        <p className="text-xs leading-relaxed text-muted-foreground">{t("scene.desc")}</p>
-
-        {/* ===== 当前桌面状态 ===== */}
-        <section className="space-y-2">
-          <div className="flex items-center justify-between">
+      {/* 固定高度 + 两栏各自 min-h-0/overflow，内容再多也不会撑破弹窗 */}
+      <div className="flex h-[560px] max-h-[70vh]">
+        {/* ===== 左：当前桌面状态 + 保存 ===== */}
+        <div className="flex min-w-0 flex-1 flex-col border-r border-border/40">
+          <div className="flex items-center justify-between px-5 pt-4 pb-2">
             <h3 className="text-sm font-medium text-foreground">{t("scene.currentTitle")}</h3>
             <Button
               variant="ghost"
@@ -181,8 +186,8 @@ const SceneDialog: FC = memo(() => {
               <RefreshCw className="size-3.5" />
             </Button>
           </div>
-          <div className="rounded-lg border border-border/50 bg-card px-3 py-2 text-[11px]">
-            <div className="flex flex-wrap gap-x-5 gap-y-1">
+          <div className="mx-5 rounded-lg border border-border/50 bg-card px-3 py-2 text-[11px]">
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
               <span className="text-muted-foreground">
                 {t("scene.displayMode")}：
                 <span className="text-foreground/80">
@@ -195,47 +200,52 @@ const SceneDialog: FC = memo(() => {
               </span>
             </div>
           </div>
-          {current?.monitors.length ? (
-            <div className="space-y-2">{current.monitors.map(renderMonitor)}</div>
-          ) : (
-            <p className="rounded-lg border border-dashed border-border/50 px-3 py-4 text-center text-xs text-muted-foreground">
-              {t("scene.emptyCurrent")}
-            </p>
-          )}
-        </section>
 
-        {/* ===== 保存当前状态 ===== */}
-        <section className="space-y-2">
-          <h3 className="text-sm font-medium text-foreground">{t("scene.saveTitle")}</h3>
-          <div className="flex gap-2">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleSave();
-              }}
-              placeholder={t("scene.namePlaceholder")}
-              maxLength={32}
-              className="h-8 text-xs"
-            />
-            <Button size="sm" onClick={() => void handleSave()} disabled={loading}>
-              <Save className="size-3.5" />
-              {t("scene.save")}
-            </Button>
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-3">
+            {current?.monitors.length ? (
+              current.monitors.map(renderMonitor)
+            ) : (
+              <p className="rounded-lg border border-dashed border-border/50 px-3 py-4 text-center text-xs text-muted-foreground">
+                {t("scene.emptyCurrent")}
+              </p>
+            )}
           </div>
-          <p className="text-[11px] text-muted-foreground">{t("scene.overwriteHint")}</p>
-        </section>
 
-        {/* ===== 已保存场景 ===== */}
-        <section className="space-y-2">
-          <h3 className="text-sm font-medium text-foreground">{t("scene.listTitle")}</h3>
-          {scenes.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border/50 px-3 py-4 text-center text-xs text-muted-foreground">
-              {t("scene.empty")}
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {scenes.map((scene) => (
+          {/* 保存区固定在左栏底部，不随列表滚动 */}
+          <div className="space-y-2 border-t border-border/40 px-5 py-3">
+            <h3 className="text-sm font-medium text-foreground">{t("scene.saveTitle")}</h3>
+            <div className="flex gap-2">
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleSave();
+                }}
+                placeholder={t("scene.namePlaceholder")}
+                maxLength={32}
+                className="h-8 text-xs"
+              />
+              <Button size="sm" onClick={() => void handleSave()} disabled={loading}>
+                <Save className="size-3.5" />
+                {t("scene.save")}
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">{t("scene.overwriteHint")}</p>
+          </div>
+        </div>
+
+        {/* ===== 右：已保存的场景 ===== */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="px-5 pt-4 pb-3">
+            <h3 className="text-sm font-medium text-foreground">{t("scene.listTitle")}</h3>
+          </div>
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 pb-4">
+            {scenes.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border/50 px-3 py-4 text-center text-xs text-muted-foreground">
+                {t("scene.empty")}
+              </p>
+            ) : (
+              scenes.map((scene) => (
                 <div
                   key={scene.id}
                   className="rounded-lg border border-border/50 bg-card px-3 py-2.5"
@@ -258,7 +268,7 @@ const SceneDialog: FC = memo(() => {
                       </Button>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-xs font-medium text-foreground">{scene.name}</p>
                         <p className="text-[11px] text-muted-foreground">
@@ -295,10 +305,10 @@ const SceneDialog: FC = memo(() => {
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
-        </section>
+              ))
+            )}
+          </div>
+        </div>
       </div>
     </DialogContent>
   );

@@ -1,8 +1,9 @@
-import { Check, Tags, X } from "lucide-react";
+import { Tags, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TagWithCount } from "@/api/config";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import TagOptionItem from "./TagOptionItem";
 
 export interface TagSelectProps {
   /** 全部可选标签（带引用计数），空数组时控件禁用 */
@@ -16,6 +17,7 @@ export interface TagSelectProps {
 
 /**
  * 标签多选筛选器：Popover + 勾选列表，仅可选择已有标签。
+ * 与 TagInput 共用 TagOptionItem 的 checkbox 勾选语义，差异只在不支持输入新建。
  *
  * 用于空间紧凑的工具栏（如 FilterBar）——TagInput 的 chips 在窄容器里会
  * 换行把工具栏撑高，而 Select 形态宽度恒定。命中任一选中 tag 即算匹配，
@@ -63,30 +65,15 @@ export const TagSelect: React.FC<TagSelectProps> = ({
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="max-h-72 w-56 overflow-y-auto p-1">
-          {options.map((tagItem) => {
-            const checked = selectedIds.has(tagItem.id);
-            return (
-              <button
-                key={tagItem.id}
-                type="button"
-                onClick={() => toggle(tagItem.id)}
-                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
-              >
-                <span
-                  className={cn(
-                    "flex size-4 shrink-0 items-center justify-center rounded border",
-                    checked ? "border-primary bg-primary text-primary-foreground" : "border-input",
-                  )}
-                >
-                  {checked && <Check className="size-3" />}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-left">{tagItem.name}</span>
-                <span className="shrink-0 text-xs text-foreground/40">
-                  {tagItem.wallpaperCount}
-                </span>
-              </button>
-            );
-          })}
+          {options.map((tagItem) => (
+            <TagOptionItem
+              key={tagItem.id}
+              label={tagItem.name}
+              checked={selectedIds.has(tagItem.id)}
+              onToggle={() => toggle(tagItem.id)}
+              count={tagItem.wallpaperCount}
+            />
+          ))}
         </PopoverContent>
       </Popover>
       {hasTags && selectedIds.size > 0 && (

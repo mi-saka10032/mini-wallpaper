@@ -363,8 +363,12 @@
   transform: translate(-50%, -50%) scale(1);
 }
 
+/* 刻意不用 forwards：动画结束后回到 .dialog-animate 的静态
+   translate(-50%, -50%)，百分比按当前高度实时计算。若把动画末帧冻结，
+   Dialog 内容加载变高（loading → 表单 / chips）后中心会偏移 Δ高度/2，
+   表现为偶发「下移一点」。 */
 .dialog-animate[data-state="open"] {
-  animation: dialog-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: dialog-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .dialog-animate[data-state="closed"] {

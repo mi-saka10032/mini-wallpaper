@@ -11,14 +11,33 @@ function PopoverTrigger({ ...props }: ComponentProps<typeof PopoverPrimitive.Tri
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
 }
 
+/**
+ * 当前打开的 DialogContent（Portal 目标）。
+ *
+ * modal Dialog 会用 RemoveScroll 吞掉 Dialog 之外的 wheel，并给 body 设
+ * pointer-events:none 只放行 DialogContent。挂到 body 的弹层因此滚不动、
+ * 点不动。改挂 DialogContent 内既落在滚动允许区，又不在其内部的
+ * overflow-y-auto 容器里，不会撑出滚动条。
+ */
+function dialogContentContainer(): HTMLElement | undefined {
+  if (typeof document === "undefined") return undefined;
+  const nodes = document.querySelectorAll<HTMLElement>('[data-slot="dialog-content"]');
+  return nodes.length ? nodes[nodes.length - 1] : undefined;
+}
+
 function PopoverContent({
   className,
   align = "center",
   sideOffset = 4,
+  container,
   ...props
-}: ComponentProps<typeof PopoverPrimitive.Content>) {
+}: ComponentProps<typeof PopoverPrimitive.Content> & {
+  container?: HTMLElement | null;
+}) {
+  // 无 Dialog 时 container 为 undefined，Radix 走默认的 body。
+  const portalContainer = container ?? dialogContentContainer();
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={portalContainer}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
         align={align}

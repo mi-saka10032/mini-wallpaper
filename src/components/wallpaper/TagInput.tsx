@@ -18,6 +18,8 @@ export interface TagInputProps {
   disabled?: boolean;
   /** 自动聚焦 */
   autoFocus?: boolean;
+  /** 下拉向上弹出：用在靠近视口底部的容器里，避免候选列表被裁掉 */
+  dropUp?: boolean;
   className?: string;
 }
 
@@ -50,6 +52,7 @@ export const TagInput: React.FC<TagInputProps> = ({
   placeholder,
   disabled = false,
   autoFocus = false,
+  dropUp = false,
   className,
 }) => {
   const { t } = useTranslation();
@@ -152,7 +155,12 @@ export const TagInput: React.FC<TagInputProps> = ({
 
       {/* 联想候选下拉 */}
       {showSuggestions && (
-        <div className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+        <div
+          className={cn(
+            "absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-md border bg-popover p-1 shadow-md",
+            dropUp && "bottom-full mt-0 mb-1",
+          )}
+        >
           {filteredSuggestions.map((s) => (
             <button
               key={s}

@@ -112,6 +112,7 @@ impl AppEffects<'_> {
                 .await
             {
                 Ok(_) => {
+                    self.record_wallpaper_play(next_wid).await;
                     // 定时器按整组裁决：有下一张则重启组基准定时器，否则全组停止。
                     match (&base.collection_id, next_wid) {
                         (Some(cid), Some(_)) => {
@@ -259,6 +260,7 @@ impl AppEffects<'_> {
                     .await
                 {
                     Ok(_) => {
+                        self.record_wallpaper_play(next_wid).await;
                         config_changed = true;
                         if next_wid.is_some() {
                             Self::manage_timer_by_collection_inner(
@@ -372,6 +374,9 @@ impl AppEffects<'_> {
                     return false;
                 }
             };
+
+        // 组写入一次就是一次播放：同步组也只在这里记一次，不按屏重复计。
+        self.record_wallpaper_play(Some(wid)).await;
 
         // 单次 reconcile：同步组用 All，一次看到全量新状态，避免逐屏 attach 错开帧时钟。
         // 收窄作用域：reconcile 结束后立即释放对 self 的借用，后面 restart 需要 &mut self。

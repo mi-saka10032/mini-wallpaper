@@ -248,10 +248,16 @@ pub async fn apply_scene(svc: &AppServices<'_>, id: i32) -> Result<ApplySceneRes
     set_setting_in_txn(&txn, setting_keys::GLOBAL_VOLUME, &state.global_volume).await?;
     txn.commit().await?;
 
-    // 复用既有副作用编排：同步组对齐 + 一次 reconcile(All) + timer 重建 + 清牌堆。
+    // 场景恢复把 wid 设回快照值：按去重后的壁纸各记一次播放，
+    // 同步组多屏指向同一张时不重复计。计数放在事务提交后，失败只告警。
+    let played_wids: HashSet<i32> = plans.iter().filter_map(|m| m.wallpaper_id).collect();
     {
         let mut guard = svc.scheduler.lock().await;
         let mut fx = AppEffects::new(svc.ctx, &mut guard);
+        for wid in played_wids {
+            fx.record_wallpaper_play(Some(wid)).await;
+        }
+        // 复用既有副作用编排：同步组对齐 + 一次 reconcile(All) + timer 重建 + 清牌堆。
         fx.apply_setting_side_effect(setting_keys::DISPLAY_MODE, &state.display_mode, None)
             .await;
     }

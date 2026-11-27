@@ -128,6 +128,16 @@ impl TaskSpawner for CarouselTask {
                             }
                             Ok(Some(is_sync)) => {
                                 consecutive_failures = 0;
+                                // 轮播 tick 在 tasks 层没有 AppEffects 上下文，直接调 service；
+                                // 与本任务直接调 monitor_config_service 的形态一致。
+                                if let Err(e) =
+                                    crate::services::wallpaper_service::increment_play_count(
+                                        &db, new_wid,
+                                    )
+                                    .await
+                                {
+                                    error!("[Carousel] Failed to record play count: {}", e);
+                                }
                                 let scope = if is_sync {
                                     ReconcileScope::All
                                 } else {

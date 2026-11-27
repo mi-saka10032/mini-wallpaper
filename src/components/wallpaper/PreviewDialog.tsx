@@ -20,8 +20,11 @@ type ZoomMode = "fit" | "actual";
 /** 预加载相邻图片（前后各 1 张），减少切换时白屏 */
 function usePreloadAdjacent(wallpapers: Wallpaper[], currentIndex: number) {
   useEffect(() => {
-    for (const idx of [currentIndex - 1, currentIndex + 1]) {
-      if (idx < 0 || idx >= wallpapers.length) continue;
+    const len = wallpapers.length;
+    if (len === 0) return;
+    // 环形：末尾的下一张是首张，首张的上一张是末尾。
+    const indices = new Set([(currentIndex - 1 + len) % len, (currentIndex + 1) % len]);
+    for (const idx of indices) {
       const wp = wallpapers[idx];
       if (wp.type === "video") continue;
       const img = new Image();
@@ -73,8 +76,8 @@ const PreviewDialog: FC = memo(() => {
 
   const wallpaper = wallpapers[currentIndex];
   const wallpaperId = wallpaper?.id;
-  const hasPrev = currentIndex > 0;
-  const hasNext = currentIndex < wallpapers.length - 1;
+  // 环形导航：只要列表多于一张，前后都可达。
+  const canCycle = wallpapers.length > 1;
 
   // ===== 列表变化后的统一重定位 =====
   useEffect(() => {
@@ -118,12 +121,16 @@ const PreviewDialog: FC = memo(() => {
   }, []);
 
   const goPrev = useCallback(() => {
-    if (currentIndex > 0) goTo(wallpapers[currentIndex - 1].id);
-  }, [currentIndex, wallpapers, goTo]);
+    if (!canCycle) return;
+    const len = wallpapers.length;
+    goTo(wallpapers[(currentIndex - 1 + len) % len].id);
+  }, [canCycle, currentIndex, wallpapers, goTo]);
 
   const goNext = useCallback(() => {
-    if (currentIndex < wallpapers.length - 1) goTo(wallpapers[currentIndex + 1].id);
-  }, [currentIndex, wallpapers, goTo]);
+    if (!canCycle) return;
+    const len = wallpapers.length;
+    goTo(wallpapers[(currentIndex + 1) % len].id);
+  }, [canCycle, currentIndex, wallpapers, goTo]);
 
   const goFirst = useCallback(() => {
     if (wallpapers.length) goTo(wallpapers[0].id);
@@ -240,18 +247,32 @@ const PreviewDialog: FC = memo(() => {
   const isVideo = wallpaper.type === "video";
   const actualZoom = zoomMode === "actual" && !isVideo;
 
-  const stripStart = Math.max(0, currentIndex - FILMSTRIP_RADIUS);
-  const strip = wallpapers.slice(stripStart, currentIndex + FILMSTRIP_RADIUS + 1);
+  // 环形胶片条：接近队尾时把 0 索引处的图拼在后面。
+  // 窗口大小取 min(len, 2R+1)，保证同一张图在一个窗口里只出现一次。
+  const stripCount = Math.min(wallpapers.length, FILMSTRIP_RADIUS * 2 + 1);
+  const half = Math.floor(stripCount / 2);
+  const stripStart =
+    (((currentIndex - half) % wallpapers.length) + wallpapers.length) % wallpapers.length;
+  const strip = Array.from({ length: stripCount }, (_, slot) => ({
+    slot,
+    wp: wallpapers[(stripStart + slot) % wallpapers.length],
+  }));
 
   const stop = (e: React.MouseEvent) => e.stopPropagation();
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center rounded-xl bg-black/70 px-16 pb-44 backdrop-blur-xl"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden rounded-xl bg-black/70 px-16 pb-44"
       onClick={close}
     >
+      {/* 模糊层单独铺成矩形：backdrop-filter 直接作用在带圆角的元素上时，
+          WebView2 会在圆角边缘采到窗口外的亮背景，漏出一丝弧形白边
+          （顶部被 Toolbar 盖住，所以只有下方两角肉眼可见）。
+          改由外层 overflow-hidden + rounded-xl 统一裁剪。 */}
+      <div className="pointer-events-none absolute inset-0 backdrop-blur-xl" />
+
       {/* 顶部：缩放切换 + 关闭 */}
-      <div className="fixed right-6 top-6 z-50 flex items-center gap-2">
+      <div className="absolute right-6 top-6 z-50 flex items-center gap-2">
         {!isVideo && (
           <button
             type="button"
@@ -276,26 +297,26 @@ const PreviewDialog: FC = memo(() => {
       </div>
 
       {/* 左右翻页 */}
-      {hasPrev && (
+      {canCycle && (
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             goPrev();
           }}
-          className="fixed left-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/8 p-2.5 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
+          className="absolute left-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/8 p-2.5 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
         >
           <ChevronLeft className="size-6" />
         </button>
       )}
-      {hasNext && (
+      {canCycle && (
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             goNext();
           }}
-          className="fixed right-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/8 p-2.5 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
+          className="absolute right-6 top-1/2 z-50 -translate-y-1/2 rounded-full bg-white/8 p-2.5 text-white/60 transition-colors hover:bg-white/15 hover:text-white"
         >
           <ChevronRight className="size-6" />
         </button>
@@ -354,13 +375,13 @@ const PreviewDialog: FC = memo(() => {
 
       {/* 底部统一面板：上为胶片条，下为信息与就地操作 */}
       <div
-        className="fixed bottom-4 left-1/2 z-50 w-[min(92vw,900px)] -translate-x-1/2 overflow-hidden rounded-xl bg-black/60 text-white/70 backdrop-blur-xl"
+        className="absolute bottom-4 left-1/2 z-50 w-[min(92vw,900px)] -translate-x-1/2 overflow-hidden rounded-xl bg-black/60 text-white/70 backdrop-blur-xl"
         onClick={stop}
       >
         <div className="flex gap-1.5 overflow-x-auto px-3 py-2">
-          {strip.map((wp) => (
+          {strip.map(({ slot, wp }) => (
             <button
-              key={wp.id}
+              key={slot}
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
@@ -409,6 +430,7 @@ const PreviewDialog: FC = memo(() => {
                   value={tagDraft}
                   onChange={setTagDraft}
                   suggestions={suggestions}
+                  dropUp
                   className="w-40"
                 />
                 <Button size="xs" onClick={() => void handleSaveTags()}>

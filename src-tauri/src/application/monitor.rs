@@ -18,6 +18,14 @@ pub async fn upsert_monitor_config(
     req: &UpsertMonitorConfigRequest,
 ) -> Result<monitor_config::Model> {
     let need_restart = req.play_interval.is_some() || req.collection_id.is_some();
+    // 手动选壁纸也算一次播放；只有显式请求且与当前值不同才计，
+    // 避免反复点同一张、或只改 fit_mode / 间隔时虚增计数。
+    let previous_wid = monitor_config_service::get_by_monitor_id(&svc.ctx.db, &req.monitor_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|c| c.wallpaper_id);
+    let played_wid = req.wallpaper_id.filter(|wid| Some(*wid) != previous_wid);
     let (updated, is_sync) = monitor_config_service::upsert_group(&svc.ctx.db, req).await?;
 
     // 切到顺序播放后牌堆不再被消费，全部清空；切回 random 时下一次消费
@@ -30,6 +38,7 @@ pub async fn upsert_monitor_config(
     {
         let mut guard = svc.scheduler.lock().await;
         let mut fx = AppEffects::new(svc.ctx, &mut guard);
+        fx.record_wallpaper_play(played_wid).await;
         for config in &updated {
             if is_sync && config.monitor_id != req.monitor_id {
                 fx.stop(&carousel_key(&config.monitor_id));

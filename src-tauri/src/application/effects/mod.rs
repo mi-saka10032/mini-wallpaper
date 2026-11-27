@@ -16,6 +16,7 @@ use crate::tasks::TaskSpawner;
 pub mod action_dispatch;
 pub mod deletion;
 pub mod favorite;
+pub mod play_count;
 pub mod setting;
 pub mod timers;
 

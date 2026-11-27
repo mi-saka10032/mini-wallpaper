@@ -8,9 +8,10 @@ use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use image::GenericImageView;
 use log::{info, warn};
+use sea_orm::prelude::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Select, Set,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
+    QueryFilter, QueryOrder, Select, Set,
 };
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -50,6 +51,24 @@ pub fn not_deleted() -> Condition {
 /// 已删除条件：`deleted_at IS NOT NULL`
 pub fn is_deleted() -> Condition {
     Condition::all().add(wallpaper::Column::DeletedAt.is_not_null())
+}
+
+/// 壁纸被设为当前显示时原子累加播放次数。
+///
+/// 用 SQL 表达式 `play_count + 1` 而非读-改-写：轮播 tick、快捷键、托盘
+/// 可能并发触发，读改写会丢计数。已进回收站的壁纸不再累计。
+pub async fn increment_play_count<C: ConnectionTrait>(db: &C, wallpaper_id: i32) -> Result<()> {
+    wallpaper::Entity::update_many()
+        .col_expr(
+            wallpaper::Column::PlayCount,
+            Expr::col(wallpaper::Column::PlayCount).add(1),
+        )
+        .filter(wallpaper::Column::Id.eq(wallpaper_id))
+        .filter(not_deleted())
+        .exec(db)
+        .await
+        .context("Failed to increment play_count")?;
+    Ok(())
 }
 
 /// 默认视图：仅正常壁纸（不含回收站）
@@ -1045,5 +1064,27 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn play_count_increments_atomically() {
+        use super::increment_play_count;
+
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let wp = insert_wallpaper(&db, "played").await;
+
+        increment_play_count(&db, wp.id).await.unwrap();
+        increment_play_count(&db, wp.id).await.unwrap();
+
+        let refreshed = wallpaper::Entity::find_by_id(wp.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(refreshed.play_count, 2);
+
+        // 不存在的 id 只是 0 行受影响，不该报错阻断切换主流程。
+        increment_play_count(&db, wp.id + 9999).await.unwrap();
     }
 }

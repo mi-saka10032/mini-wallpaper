@@ -141,11 +141,8 @@
     "playCount": "播放次数",
     "tags": "标签",
     "editTags": "编辑标签",
-    "save": "保存",
-    "cancel": "取消",
     "favorite": "加入我喜欢",
     "unfavorite": "取消收藏",
-    "tagsSaved": "标签已保存",
     "emptyHint": "当前视图已无壁纸，已退出预览"
   },
   "picker": {

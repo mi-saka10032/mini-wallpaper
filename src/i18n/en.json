@@ -141,11 +141,8 @@
     "playCount": "Plays",
     "tags": "Tags",
     "editTags": "Edit tags",
-    "save": "Save",
-    "cancel": "Cancel",
     "favorite": "Add to Favorites",
     "unfavorite": "Remove from Favorites",
-    "tagsSaved": "Tags saved",
     "emptyHint": "No wallpapers left in this view, preview closed"
   },
   "picker": {

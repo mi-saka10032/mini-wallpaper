@@ -1,16 +1,29 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, Heart, Maximize2, Minimize2, Pencil, X } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FC } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import type { Wallpaper } from "@/api/config";
-import { getTags, getWallpaperTags, setWallpaperTags } from "@/api/tag";
+import { getWallpaperTags } from "@/api/tag";
+import { getById } from "@/api/wallpaper";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
-import TagInput from "@/components/wallpaper/TagInput";
 import { cn } from "@/lib/utils";
 import { useFavoritesStore } from "@/stores/favoritesStore";
 import { usePreviewStore } from "@/stores/previewStore";
+
+// 标签编辑复用网格右键菜单同款弹窗，只在点开时加载。
+const TagEditorDialog = lazy(() => import("@/components/wallpaper/TagEditorDialog"));
 
 /** 胶片条只渲染当前前后各 6 张，避免大库时把缩略图全塞进 DOM */
 const FILMSTRIP_RADIUS = 6;
@@ -60,12 +73,14 @@ const PreviewDialog: FC = memo(() => {
   );
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit");
   const [tags, setTags] = useState<string[]>([]);
-  const [tagDraft, setTagDraft] = useState<string[]>([]);
-  const [editingTags, setEditingTags] = useState(false);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [tagDialogOpen, setTagDialogOpen] = useState(false);
+  /** 按需拉取的单条 play_count；null 表示还没拿到或拉取失败，回退到缓存值 */
+  const [freshPlayCount, setFreshPlayCount] = useState<number | null>(null);
 
   const pendingNextRef = useRef<number | null>(null);
   const closedRef = useRef(false);
+  /** 弹窗关闭的那一次事件循环里，抑制灯箱响应同一个 Esc */
+  const suppressEscapeRef = useRef(false);
   const tagsCacheRef = useRef<Map<number, string[]>>(new Map());
   const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
 
@@ -116,7 +131,6 @@ const PreviewDialog: FC = memo(() => {
   // ===== 导航 =====
   const goTo = useCallback((id: number) => {
     setAnchorId(id);
-    setEditingTags(false);
     setZoomMode("fit");
   }, []);
 
@@ -142,20 +156,21 @@ const PreviewDialog: FC = memo(() => {
 
   // ===== 键盘（输入框聚焦时不劫持） =====
   useEffect(() => {
+    // 标签弹窗打开时不注册快捷键：Esc 该由弹窗消费，方向键也不该翻页。
+    if (tagDialogOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
       ) {
-        if (e.key === "Escape") {
-          target.blur();
-          setEditingTags(false);
-        }
         return;
       }
       switch (e.key) {
         case "Escape":
+          // Radix 关闭弹窗会让上面的 effect 同步重注册本监听，同一个 Esc
+          // 仍会冒泡到 window；此时 tagDialogOpen 已是 false，必须靠标记拦住。
+          if (suppressEscapeRef.current) return;
           close();
           break;
         case "ArrowLeft":
@@ -181,21 +196,14 @@ const PreviewDialog: FC = memo(() => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [close, goPrev, goNext, goFirst, goLast]);
+  }, [close, goPrev, goNext, goFirst, goLast, tagDialogOpen]);
 
   // ===== 标签（按 id 缓存，避免来回翻页重复请求） =====
-  useEffect(() => {
-    void getTags()
-      .then((list) => setSuggestions(list.map((x) => x.name)))
-      .catch(() => {});
-  }, []);
-
   useEffect(() => {
     if (wallpaperId === undefined) return;
     const cached = tagsCacheRef.current.get(wallpaperId);
     if (cached) {
       setTags(cached);
-      setTagDraft(cached);
       return;
     }
     void getWallpaperTags(wallpaperId)
@@ -203,25 +211,52 @@ const PreviewDialog: FC = memo(() => {
         const names = list.map((x) => x.name);
         tagsCacheRef.current.set(wallpaperId, names);
         setTags(names);
-        setTagDraft(names);
       })
       .catch(() => {});
   }, [wallpaperId]);
 
-  const handleSaveTags = useCallback(async () => {
+  // 打开灯箱 / 切到另一张时拉一次单条详情，覆盖 play_count。
+  // 后端的计数是副作用、不走前端订阅，缓存里可能是旧值；按需单条拉取代价
+  // 只有 1 次 IPC，灯箱开着期间不实时刷新。cancelled 防止快速翻页时旧响应覆盖。
+  useEffect(() => {
     if (wallpaperId === undefined) return;
-    recordPendingNext();
-    try {
-      const updated = await setWallpaperTags(wallpaperId, tagDraft);
-      const names = updated.map((x) => x.name);
-      tagsCacheRef.current.set(wallpaperId, names);
-      setTags(names);
-      setEditingTags(false);
-      toast.success(t("preview.tagsSaved"));
-    } catch {
-      return;
-    }
-  }, [wallpaperId, tagDraft, recordPendingNext, t]);
+    let cancelled = false;
+    setFreshPlayCount(null);
+    void getById(wallpaperId)
+      .then((wp) => {
+        if (!cancelled) setFreshPlayCount(wp?.play_count ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [wallpaperId]);
+
+  /** 标签弹窗关闭后重取一次，覆盖缓存让 chips 立刻反映保存结果。 */
+  const reloadTags = useCallback(() => {
+    if (wallpaperId === undefined) return;
+    void getWallpaperTags(wallpaperId)
+      .then((list) => {
+        const names = list.map((x) => x.name);
+        tagsCacheRef.current.set(wallpaperId, names);
+        setTags(names);
+      })
+      .catch(() => {});
+  }, [wallpaperId]);
+
+  const tagTargetIds = useMemo(
+    () => (wallpaperId === undefined ? [] : [wallpaperId]),
+    [wallpaperId],
+  );
+
+  /**
+   * 标签弹窗经 Radix Portal 挂到 body，DOM 上不是遮罩的子节点，
+   * 但 React 事件仍沿组件树冒泡到这里。弹窗打开时若照常 close()，
+   * 弹窗内任意点击（含点空白处让输入框失焦）都会把底层灯箱一起卸载。
+   */
+  const handleOverlayClick = useCallback(() => {
+    if (!tagDialogOpen) close();
+  }, [close, tagDialogOpen]);
 
   const handleToggleFavorite = useCallback(async () => {
     if (wallpaperId === undefined) return;
@@ -263,7 +298,7 @@ const PreviewDialog: FC = memo(() => {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden rounded-xl bg-black/70 px-16 pb-44"
-      onClick={close}
+      onClick={handleOverlayClick}
     >
       {/* 模糊层单独铺成矩形：backdrop-filter 直接作用在带圆角的元素上时，
           WebView2 会在圆角边缘采到窗口外的亮背景，漏出一丝弧形白边
@@ -325,7 +360,9 @@ const PreviewDialog: FC = memo(() => {
       {/* 主内容区：1:1 时用滚动容器 + 拖拽平移 */}
       <div
         className={cn(
-          "flex max-h-[68vh] max-w-[80vw] items-center justify-center",
+          // 显式提到模糊层之上：absolute 的 backdrop 层是 z-index:auto 的
+          // positioned 元素，会绘制在非定位内容之上，否则图片会被一起采样模糊。
+          "relative z-10 flex max-h-[68vh] max-w-[80vw] items-center justify-center",
           actualZoom && "overflow-auto",
         )}
         onClick={stop}
@@ -417,52 +454,28 @@ const PreviewDialog: FC = memo(() => {
             {t("preview.createdAt")} {wallpaper.created_at.slice(0, 16)}
           </span>
           <span>
-            {t("preview.playCount")} {wallpaper.play_count}
+            {t("preview.playCount")} {freshPlayCount ?? wallpaper.play_count}
           </span>
           <span className="text-white/40">
             {currentIndex + 1} / {wallpapers.length}
           </span>
 
           <div className="ml-auto flex items-center gap-1.5">
-            {editingTags ? (
-              <>
-                <TagInput
-                  value={tagDraft}
-                  onChange={setTagDraft}
-                  suggestions={suggestions}
-                  dropUp
-                  className="w-40"
-                />
-                <Button size="xs" onClick={() => void handleSaveTags()}>
-                  {t("preview.save")}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => {
-                    setTagDraft(tags);
-                    setEditingTags(false);
-                  }}
-                >
-                  {t("preview.cancel")}
-                </Button>
-              </>
-            ) : (
-              <Button
-                variant="ghost"
-                size="xs"
-                title={t("preview.editTags")}
-                onClick={() => {
-                  setTagDraft(tags);
-                  setEditingTags(true);
-                }}
-              >
-                <Pencil className="size-3" />
-                <span className="max-w-32 truncate">
-                  {tags.length ? tags.join(", ") : t("preview.tags")}
-                </span>
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              size="xs"
+              title={t("preview.editTags")}
+              onClick={() => {
+                // 保存标签可能让当前张不再匹配筛选视图，先记下原下一张 id。
+                recordPendingNext();
+                setTagDialogOpen(true);
+              }}
+            >
+              <Pencil className="size-3" />
+              <span className="max-w-32 truncate">
+                {tags.length ? tags.join(", ") : t("preview.tags")}
+              </span>
+            </Button>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -474,6 +487,34 @@ const PreviewDialog: FC = memo(() => {
           </div>
         </div>
       </div>
+
+      {/* 标签弹窗由 Radix Portal 挂到 body 末尾，DOM 顺序在预览遮罩之后；
+          DialogContent 另设 z-[60]，确保盖住 z-50 的预览灯箱。 */}
+      {tagDialogOpen && wallpaperId !== undefined && (
+        // contents 不产生布局盒；Portal 的 React 事件先在这里截断，
+        // 弹窗内部点击（含 Overlay）一律不冒泡到灯箱遮罩。
+        <div className="contents" onClick={stop}>
+          <Suspense fallback={null}>
+            <TagEditorDialog
+              open={tagDialogOpen}
+              onOpenChange={(open) => {
+                setTagDialogOpen(open);
+                if (!open) {
+                  reloadTags();
+                  // 弹窗关闭后用一个宏任务窗口抑制 Esc：事件冒泡是同步的，
+                  // setTimeout(0) 一定在同一次事件派发结束后才清除标记。
+                  suppressEscapeRef.current = true;
+                  setTimeout(() => {
+                    suppressEscapeRef.current = false;
+                  }, 0);
+                }
+              }}
+              mode="single"
+              wallpaperIds={tagTargetIds}
+            />
+          </Suspense>
+        </div>
+      )}
     </div>
   );
 });

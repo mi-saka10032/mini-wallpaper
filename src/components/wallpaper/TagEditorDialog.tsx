@@ -133,7 +133,7 @@ export const TagEditorDialog: React.FC<TagEditorDialogProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="z-[60] sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{isBatch ? t("tags.batchTitle") : t("tags.editTitle")}</DialogTitle>
           <DialogDescription>

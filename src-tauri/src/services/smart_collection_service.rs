@@ -49,9 +49,10 @@ fn load_rule(model: &collection::Model) -> Result<SmartRule> {
 /// 且会把回收站外任意壁纸误纳入命中集。此处显式建立顶层 AND：
 /// `(规则条件) AND (deleted_at IS NULL)`，与 combinator 取值无关。
 fn rule_condition(rule: &SmartRule) -> Result<Condition> {
+    // local_only() 同时排除回收站与「外部监听」壁纸：智能夹只覆盖本地导入库。
     Ok(Condition::all()
         .add(rule.build_condition()?)
-        .add(wallpaper_service::not_deleted()))
+        .add(wallpaper_service::local_only()))
 }
 
 /// 求值命中的完整壁纸列表（按 id 升序）

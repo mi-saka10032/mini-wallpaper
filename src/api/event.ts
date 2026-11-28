@@ -28,6 +28,8 @@ export const EVENTS = {
   RENDERER_ERROR: "renderer-error",
   /** extend 视口（M20：Rust 按目标屏 DPI 算好 CSS 像素后定向推送） */
   EXTEND_VIEWPORT: "extend-viewport",
+  /** 监听目录生命周期变化（新建 / 移除 / 路径失效清库删夹） */
+  WATCHED_FOLDERS_CHANGED: "watched-folders-changed",
 } as const;
 
 /** 壁纸变更事件 payload */
@@ -120,6 +122,7 @@ export interface EventMap {
   [EVENTS.FAVORITES_CHANGED]: FavoritesChangedPayload;
   [EVENTS.RENDERER_ERROR]: RendererErrorPayload;
   [EVENTS.EXTEND_VIEWPORT]: ExtendViewportPayload;
+  [EVENTS.WATCHED_FOLDERS_CHANGED]: { invalidated_collection_id: number | null };
 }
 
 /** extend 视口 payload（字段单位已是 CSS 像素，前端零计算） */

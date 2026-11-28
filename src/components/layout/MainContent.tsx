@@ -62,11 +62,13 @@ const MainContent: React.FC<MainContentProps> = ({ className, onManageModeChange
     [isCollectionView, collections, activeId],
   );
   const isSmartCollection = activeCollection?.kind === "smart";
+  const isWatchedCollection = activeCollection?.kind === "watched";
 
   // ===== 独立 hooks 组合 =====
   const manage = useManageMode({
     isCollectionView,
     collectionId,
+    isWatchedCollection,
     onManageModeChange,
   });
 
@@ -283,12 +285,14 @@ const MainContent: React.FC<MainContentProps> = ({ className, onManageModeChange
             <NormalToolbar
               isCollectionView={isCollectionView}
               isSmartCollection={isSmartCollection}
+              isWatchedCollection={isWatchedCollection}
               isEmpty={isEmpty}
               searchExpanded={search.searchExpanded}
               normalKeyword={search.normalKeyword}
               collectionId={collectionId}
               collectionWallpapers={wallpapers}
               onRefresh={() => useWallpaperStore.getState().fetchWallpapers()}
+              onSync={() => void useWallpaperStore.getState().refreshView()}
               onSearchExpand={() => search.setSearchExpanded(true)}
               onSearchCollapse={() => search.setSearchExpanded(false)}
               onNormalKeywordChange={search.setNormalKeyword}

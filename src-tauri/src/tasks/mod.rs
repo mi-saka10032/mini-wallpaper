@@ -21,6 +21,7 @@ pub struct TaskDeps {
 pub mod carousel;
 pub mod fullscreen_detector;
 pub mod registry;
+pub mod watched_folder;
 
 /// 任务工厂 trait
 ///

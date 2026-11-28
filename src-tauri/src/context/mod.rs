@@ -63,6 +63,14 @@ pub struct AppContext {
     /// 同步锁也让 `AppEffects::stop` 能在停止 timer 时顺手删条目，
     /// 避免显示器热插拔后 map 只增不删。
     pub play_queues: std::sync::Mutex<PlayQueueStore>,
+
+    /// 目录监听：正在同步的 folder_id 集合（per-folder 互斥，临界区零 await）。
+    pub watched_syncing: std::sync::Mutex<std::collections::HashSet<i32>>,
+
+    /// 当前主窗口 active 的收藏夹 id（0 = 本地壁纸库）。
+    /// 后台轮询据此跳过 active 夹的完整 diff，避免浏览中被强制刷新打断；
+    /// 存活探测不受它影响。
+    pub active_collection_id: std::sync::atomic::AtomicI32,
 }
 
 impl AppContext {
@@ -90,6 +98,8 @@ impl AppContext {
             db,
             backup_lock: Mutex::new(()),
             play_queues: std::sync::Mutex::new(PlayQueueStore::default()),
+            watched_syncing: std::sync::Mutex::new(std::collections::HashSet::new()),
+            active_collection_id: std::sync::atomic::AtomicI32::new(0),
         })
     }
 

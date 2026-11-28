@@ -21,6 +21,19 @@ pub struct Model {
     pub updated_at: String,
     /// 回收站标记：None = 正常可见；Some(时刻) = 已移入回收站
     pub deleted_at: Option<String>,
+    /// 来源标志：0 = 本地导入（AppData 内有文件副本）；1 = 外部目录监听（不复制源文件）
+    ///
+    /// 两类壁纸在业务上完全隔离，全部「本地壁纸库」查询走
+    /// `wallpaper_service::local_only()` 统一过滤，禁止在各 service 手写条件。
+    pub is_external: i32,
+    /// 所属监听目录；本地导入壁纸恒为 NULL
+    pub watched_folder_id: Option<i32>,
+    /// 目录内相对文件名（lowercase），与 watched_folder_id 组成身份键
+    pub source_key: Option<String>,
+    /// 源文件字节数，用于判断内容是否变化
+    pub source_size: Option<i64>,
+    /// 源文件修改时间（unix 秒），与 source_size 一起判断内容是否变化
+    pub source_mtime: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

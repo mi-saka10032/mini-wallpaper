@@ -68,6 +68,12 @@ const COMMAND_SIGNALS: Record<string, readonly Signal[]> = {
   [COMMANDS.RESTORE_WALLPAPERS]: [Signal.VIEW, Signal.FAVORITES, Signal.TRASH],
   [COMMANDS.PURGE_WALLPAPERS]: [Signal.VIEW, Signal.FAVORITES, Signal.TRASH],
   [COMMANDS.EMPTY_TRASH]: [Signal.VIEW, Signal.FAVORITES, Signal.TRASH],
+  // 监听目录写命令：同时影响侧栏（新建/删夹）与当前视图（增删壁纸）。
+  // SYNC_WATCHED_FOLDER / SET_ACTIVE_VIEW 刻意不映射：前者在 refreshView
+  // 内部调用，若发 VIEW 会触发 sync()→refreshView()→再同步的死循环。
+  [COMMANDS.ADD_WATCHED_FOLDER]: [Signal.VIEW, Signal.COLLECTIONS],
+  [COMMANDS.REMOVE_WATCHED_FOLDER]: [Signal.VIEW, Signal.COLLECTIONS],
+  [COMMANDS.DELETE_WATCHED_WALLPAPERS]: [Signal.VIEW],
 };
 
 interface PubSubState {

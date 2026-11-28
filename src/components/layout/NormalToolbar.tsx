@@ -11,6 +11,8 @@ interface NormalToolbarProps {
   isCollectionView: boolean;
   /** 当前收藏夹是否为智能收藏夹（成员按规则实时求值，不支持手动排序） */
   isSmartCollection: boolean;
+  /** 监听夹：成员由目录扫描独占，禁止新增、提供同步、管理走源文件删除 */
+  isWatchedCollection: boolean;
   isEmpty: boolean;
   searchExpanded: boolean;
   normalKeyword: string;
@@ -19,6 +21,8 @@ interface NormalToolbarProps {
   /** 收藏夹中已有的壁纸列表（用于 picker 禁用已添加项） */
   collectionWallpapers: Wallpaper[];
   onRefresh: () => void;
+  /** 监听夹手动同步（触发后端强制扫描并刷新视图） */
+  onSync: () => void;
   onSearchExpand: () => void;
   onSearchCollapse: () => void;
   onNormalKeywordChange: (value: string) => void;
@@ -42,12 +46,14 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
   ({
     isCollectionView,
     isSmartCollection,
+    isWatchedCollection,
     isEmpty,
     searchExpanded,
     normalKeyword,
     collectionId,
     collectionWallpapers,
     onRefresh,
+    onSync,
     onSearchExpand,
     onSearchCollapse,
     onNormalKeywordChange,
@@ -102,7 +108,19 @@ const NormalToolbar: FC<NormalToolbarProps> = memo(
         {/* ===== 槽位一：左操作区（视图级动作，统一为定宽图标按钮） ===== */}
         <div className="flex shrink-0 items-center gap-1">
           {isCollectionView ? (
-            collectionId !== null && !isSmartCollection ? (
+            isWatchedCollection ? (
+              /* 监听夹成员由扫描独占：没有「新增」，只提供手动同步 */
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={onSync}
+                className="text-muted-foreground hover:bg-primary-hover hover:text-foreground"
+                title={t("watched.rescan")}
+                aria-label={t("watched.rescan")}
+              >
+                <RefreshCw className="size-3.5" />
+              </Button>
+            ) : collectionId !== null && !isSmartCollection ? (
               <Dialog open={pickerOpen} onOpenChange={handlePickerOpenChange}>
                 <DialogTrigger asChild>
                   <Button

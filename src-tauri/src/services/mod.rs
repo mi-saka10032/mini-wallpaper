@@ -8,3 +8,4 @@ pub mod smart_rule;
 pub mod tag_service;
 pub mod trash_maintenance;
 pub mod wallpaper_service;
+pub mod watched_folder_service;

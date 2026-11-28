@@ -143,6 +143,21 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // 后台轮询发现目录失效时，后端已清库删夹；前端必须刷新夹列表，
+  // 并在当前正看着这个夹时强制回本地壁纸栏，避免 activeId 指向不存在的夹。
+  useEffect(() => {
+    const unlisten = listen(EVENTS.WATCHED_FOLDERS_CHANGED, ({ invalidated_collection_id }) => {
+      const { activeId, setActiveId } = useWallpaperStore.getState();
+      if (invalidated_collection_id !== null && activeId === invalidated_collection_id) {
+        void setActiveId(0);
+      }
+      publish([Signal.VIEW, Signal.COLLECTIONS]);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   useEffect(() => {
     const unlisten = listen(EVENTS.RENDERER_ERROR, ({ monitor_id, message, code }) => {
       const text = monitor_id ? `${message} (${monitor_id})` : message;
@@ -203,7 +218,7 @@ const App: React.FC = () => {
           {manageMode && <div className="absolute inset-0 z-40 bg-black/20 backdrop-blur-[1px]" />}
         </div>
 
-        <main className="main-gradient flex h-[calc(100vh-48px)]">
+        <main className="main-gradient relative flex h-[calc(100vh-48px)]">
           {/* 侧边栏 */}
           <div className="relative h-full shrink-0">
             <Sidebar activeId={activeId} onActiveIdChange={setActiveId} />
@@ -243,16 +258,22 @@ const App: React.FC = () => {
                 </div>
               </Suspense>
 
-              <div
-                className={cn(
-                  "flex min-h-0 flex-1 flex-col",
-                  (isOverlayView || viewSwitching) && "hidden",
-                )}
-              >
+              <div className={cn("flex min-h-0 flex-1 flex-col", isOverlayView && "hidden")}>
                 <MainContent onManageModeChange={setManageMode} />
               </div>
             </div>
           </ErrorBoundary>
+
+          {/* 视图切换 / 监听夹同步抽帧期间，同时遮住 Sidebar 与 MainContent，
+              直到 refreshView 整条链路（含视频封面绘制）结束才撤掉 */}
+          {viewSwitching && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-[2px]">
+              <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-popover/95 px-6 py-4 fluent-shadow-lg">
+                <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <span className="text-sm font-medium text-foreground">{t("watched.loading")}</span>
+              </div>
+            </div>
+          )}
         </main>
 
         {previewOpen && (

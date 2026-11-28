@@ -6,12 +6,15 @@ import { addWallpapers, removeWallpapers } from "@/api/collectionWallpaper";
 export interface UseManageModeOptions {
   isCollectionView: boolean;
   collectionId: number | null;
+  /** 监听夹：成员由目录扫描独占，删除必须走「源文件进回收站 + 硬删」而非解除关联 */
+  isWatchedCollection?: boolean;
   onManageModeChange?: (active: boolean) => void;
 }
 
 export function useManageMode({
   isCollectionView,
   collectionId,
+  isWatchedCollection = false,
   onManageModeChange,
 }: UseManageModeOptions) {
   const deleteWallpapers = useWallpaperStore((s) => s.deleteWallpapers);
@@ -62,10 +65,17 @@ export function useManageMode({
   const exitManageMode = useCallback(async () => {
     if (!beginSubmit()) return false;
     try {
-      if (isCollectionView && collectionId !== null && pendingRemovalsRef.current.length > 0) {
+      if (isWatchedCollection) {
+        // 只解除关联会让下次扫描把文件重新收进来；必须删源文件 + 硬删记录。
+        const ids = [...pendingRemovalsRef.current, ...pendingDeletionsRef.current];
+        if (ids.length > 0) await deleteWallpapers(ids);
+      } else if (
+        isCollectionView &&
+        collectionId !== null &&
+        pendingRemovalsRef.current.length > 0
+      ) {
         await removeWallpapers(collectionId, pendingRemovalsRef.current);
-      }
-      if (!isCollectionView && pendingDeletionsRef.current.length > 0) {
+      } else if (!isCollectionView && pendingDeletionsRef.current.length > 0) {
         await deleteWallpapers(pendingDeletionsRef.current);
       }
       pendingRemovalsRef.current = [];
@@ -85,6 +95,7 @@ export function useManageMode({
     }
   }, [
     isCollectionView,
+    isWatchedCollection,
     collectionId,
     deleteWallpapers,
     onManageModeChange,
@@ -146,7 +157,9 @@ export function useManageMode({
     if (!beginSubmit()) return;
     const ids = pendingDeleteIdsRef.current;
     try {
-      if (isCollectionView && collectionId !== null) {
+      if (isWatchedCollection) {
+        await deleteWallpapers(ids);
+      } else if (isCollectionView && collectionId !== null) {
         await removeWallpapers(collectionId, ids);
       } else {
         await deleteWallpapers(ids);
@@ -160,7 +173,14 @@ export function useManageMode({
     } finally {
       endSubmit();
     }
-  }, [deleteWallpapers, isCollectionView, collectionId, beginSubmit, endSubmit]);
+  }, [
+    deleteWallpapers,
+    isCollectionView,
+    isWatchedCollection,
+    collectionId,
+    beginSubmit,
+    endSubmit,
+  ]);
 
   const handleAddToCollection = useCallback(
     async (wallpaperId: number, targetCollectionId: number) => {

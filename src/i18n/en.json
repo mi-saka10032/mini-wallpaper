@@ -417,5 +417,31 @@
     "appliedPartial": "Applied \"{{name}}\" with some items skipped",
     "renamed": "Renamed",
     "deleted": "Scene deleted"
+  },
+  "watched": {
+    "title": "Watched Folders",
+    "section": "Watched Folders",
+    "noticeItems": [
+      "Only files directly inside the selected folder are scanned; subfolders are skipped and unsupported formats are ignored.",
+      "Source files are not copied into the app directory, but image thumbnails are cached and use a small amount of disk space.",
+      "The collection stays strictly in sync with the folder; deleting a wallpaper moves its source file to the system Recycle Bin.",
+      "If the path becomes invalid, its collection and records are cleared without automatic recovery. Re-select the same path to activate it again."
+    ],
+    "nameTitle": "Confirm Collection Name",
+    "nameLabel": "A collection was created with the folder name. Rename it here, or close to keep the default.",
+    "add": "Add Folder",
+    "empty": "No watched folders yet",
+    "valid": "Active",
+    "invalid": "Invalid path",
+    "invalidHint": "This path is invalid; its collection and records were cleared. Restore the directory, then re-select the same path with Add Folder to reactivate it.",
+    "rescan": "Refresh",
+    "rescanDone": "Refresh complete, {{count}} files added",
+    "remove": "Remove",
+    "renameTitle": "Collection created — rename it?",
+    "renamePlaceholder": "Collection name",
+    "added": "Watching started, {{count}} files added",
+    "pathInvalid": "Watched path is invalid. Returned to the local library — please refresh.",
+    "invalidPreview": "Source file unavailable. Please refresh.",
+    "loading": "Syncing folder and generating video thumbnails…"
   }
 }

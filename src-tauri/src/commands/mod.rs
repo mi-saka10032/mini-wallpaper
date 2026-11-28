@@ -9,6 +9,7 @@ pub mod scene;
 pub mod tag;
 pub mod toast;
 pub mod wallpaper;
+pub mod watched_folder;
 
 // 重导出所有 command 函数，便于 rust-analyzer 提供跳转支持（IDE 导航用途）
 #[allow(unused_imports)]
@@ -47,6 +48,11 @@ pub use wallpaper::{
     delete_wallpapers, empty_trash, get_supported_extensions, get_trashed_wallpapers,
     get_wallpaper, get_wallpapers, import_wallpaper_bytes, import_wallpapers, purge_wallpapers,
     restore_wallpapers, save_video_thumbnail,
+};
+#[allow(unused_imports)]
+pub use watched_folder::{
+    add_watched_folder, delete_watched_wallpapers, list_watched_folders, remove_watched_folder,
+    set_active_view, sync_watched_folder,
 };
 /// 聚合所有 command，供 lib.rs 一行调用
 macro_rules! all_handlers {
@@ -115,6 +121,13 @@ macro_rules! all_handlers {
             $crate::commands::scene::rename_scene,
             $crate::commands::scene::delete_scene,
             $crate::commands::scene::apply_scene,
+            // watched folder
+            $crate::commands::watched_folder::list_watched_folders,
+            $crate::commands::watched_folder::add_watched_folder,
+            $crate::commands::watched_folder::remove_watched_folder,
+            $crate::commands::watched_folder::sync_watched_folder,
+            $crate::commands::watched_folder::set_active_view,
+            $crate::commands::watched_folder::delete_watched_wallpapers,
         ]
     };
 }

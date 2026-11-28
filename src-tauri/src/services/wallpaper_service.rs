@@ -71,10 +71,30 @@ pub async fn increment_play_count<C: ConnectionTrait>(db: &C, wallpaper_id: i32)
     Ok(())
 }
 
-/// 默认视图：仅正常壁纸（不含回收站）
+/// 本地壁纸条件：`deleted_at IS NULL AND is_external = 0`
 ///
-/// 主网格、收藏夹成员、轮播、标签计数等一切面向用户的常规链路都应使用它。
+/// 目录监听引入后 wallpapers 表同时承载两类互斥来源。主网格、标签计数、
+/// 智能收藏夹、场景快照等一切「本地壁纸库」链路都必须复用本条件，
+/// 禁止在各 service 里手写 `is_external` 字面条件；按 id 的精确查询
+/// （恢复 / 彻底删除 / 保存缩略图）不需要过滤。
+pub fn local_only() -> Condition {
+    Condition::all()
+        .add(wallpaper::Column::DeletedAt.is_null())
+        .add(wallpaper::Column::IsExternal.eq(0))
+}
+
+/// 默认视图：仅正常壁纸（不含回收站、不含外部监听）
+///
+/// 主网格、标签计数、智能夹、场景快照等「本地壁纸库」链路都应使用它。
 pub fn active() -> Select<wallpaper::Entity> {
+    wallpaper::Entity::find().filter(local_only())
+}
+
+/// 未删除视图（含外部监听，仅排除回收站）
+///
+/// 只供按收藏夹 id 精确取成员的场景使用：监听夹成员是 external，
+/// 若走 active() 会被 local_only() 全部滤掉。普通夹仍走 active()。
+pub fn undeleted() -> Select<wallpaper::Entity> {
     wallpaper::Entity::find().filter(not_deleted())
 }
 
@@ -112,12 +132,16 @@ pub async fn get_by_id(db: &DatabaseConnection, id: i32) -> Result<Option<wallpa
         .context("Failed to fetch wallpaper by id")
 }
 
-/// 根据 ID 获取单个正常壁纸（回收站内的视为不存在）
+/// 根据 ID 获取单个可显示壁纸（仅排除回收站）
+///
+/// 不能走 `active()`：它带 `local_only()`，会把 `is_external = 1` 的监听壁纸
+/// 一并滤掉，导致 `get_wallpaper` / `refreshByIds` 取不到监听壁纸，
+/// 前端补抽的视频缩略图保存成功却刷新不回来。来源隔离由列表查询负责。
 pub async fn get_active_by_id<C: sea_orm::ConnectionTrait>(
     db: &C,
     id: i32,
 ) -> Result<Option<wallpaper::Model>> {
-    active()
+    undeleted()
         .filter(wallpaper::Column::Id.eq(id))
         .one(db)
         .await
@@ -138,8 +162,8 @@ pub fn get_supported_extensions() -> Vec<String> {
         .collect()
 }
 
-/// 判断文件类型
-fn detect_file_type(ext: &str) -> Option<&'static str> {
+/// 判断文件类型（供目录监听的扫描白名单复用）
+pub(crate) fn detect_file_type(ext: &str) -> Option<&'static str> {
     let ext = ext.to_lowercase();
     if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
         Some("image")
@@ -153,11 +177,19 @@ fn detect_file_type(ext: &str) -> Option<&'static str> {
 }
 
 /// 确保目录存在
-fn ensure_dir(dir: &Path) -> Result<()> {
+pub(crate) fn ensure_dir(dir: &Path) -> Result<()> {
     if !dir.exists() {
         std::fs::create_dir_all(dir).context("Failed to create directory")?;
     }
     Ok(())
+}
+
+/// 按 wallpaper_id 命名缩略图。
+///
+/// 早期按源文件 stem 命名，不同监听目录下的同名 `cover.mp4` 会互相覆盖；
+/// 统一改为按主键命名，老数据仍保留 DB 里已存的路径，不需要迁移。
+pub(crate) fn thumbnail_path_for_id(thumbnails_dir: &Path, wallpaper_id: i32) -> PathBuf {
+    thumbnails_dir.join(format!("{wallpaper_id}.webp"))
 }
 
 /// 复制文件到应用目录，返回新路径
@@ -174,7 +206,7 @@ fn copy_to_app_dir(source: &Path, wallpapers_dir: &Path) -> Result<PathBuf> {
 }
 
 /// 生成图片/GIF 缩略图（image crate，等比缩放最大宽度 480px）
-fn generate_static_thumbnail(source: &Path, thumb_path: &Path) -> Result<()> {
+pub(crate) fn generate_static_thumbnail(source: &Path, thumb_path: &Path) -> Result<()> {
     let img = image::open(source).context("Failed to open image")?;
     let thumbnail = img.thumbnail(480, 480);
     thumbnail
@@ -552,14 +584,10 @@ pub async fn save_video_thumbnail(
         .context("Failed to query wallpaper")?
         .ok_or_else(|| anyhow::anyhow!("Wallpaper not found: {}", wallpaper_id))?;
 
-    // 2. 根据壁纸文件名生成缩略图文件名（与壁纸文件同 stem）
+    // 2. 按 wallpaper_id 命名：监听目录下的源文件保留用户原名，
+    //    不同目录的 cover.mp4 若按 stem 命名会互相覆盖缩略图。
     ensure_dir(thumbnails_dir)?;
-    let stem = Path::new(&model.file_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown_video");
-    let thumb_name = format!("{}.webp", stem);
-    let thumb_path = thumbnails_dir.join(&thumb_name);
+    let thumb_path = thumbnail_path_for_id(thumbnails_dir, wallpaper_id);
 
     // 3. 写入文件
     std::fs::write(&thumb_path, &data).context("Failed to write video thumbnail")?;
@@ -1086,5 +1114,97 @@ mod tests {
 
         // 不存在的 id 只是 0 行受影响，不该报错阻断切换主流程。
         increment_play_count(&db, wp.id + 9999).await.unwrap();
+    }
+
+    /// m012 对历史行只做 ADD COLUMN：老库已有的壁纸自动归为本地导入，
+    /// 不需要任何数据回填脚本。
+    #[tokio::test]
+    async fn m012_backfills_existing_rows_as_local() {
+        use sea_orm::ConnectionTrait;
+
+        let root = TempDir::new();
+        let path = root.0.join("app.db");
+        let db = Database::connect(format!("sqlite:{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+
+        // 只跑到 m011，模拟升级前已存在的行
+        Migrator::up(&db, Some(11)).await.unwrap();
+        db.execute_unprepared(
+            "INSERT INTO wallpapers (name, type, file_path) VALUES ('legacy', 'image', '/legacy.png')",
+        )
+        .await
+        .unwrap();
+
+        Migrator::up(&db, None).await.unwrap();
+
+        let row = wallpaper::Entity::find().one(&db).await.unwrap().unwrap();
+        assert_eq!(row.is_external, 0);
+        assert_eq!(row.watched_folder_id, None);
+        assert_eq!(row.source_key, None);
+    }
+
+    /// 两类壁纸同表但视图隔离：active() 只返回本地导入，
+    /// not_deleted() 保留原义（供按 id 的精确操作使用）。
+    #[tokio::test]
+    async fn local_only_excludes_external_wallpapers() {
+        use super::{active, not_deleted};
+
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let local = insert_wallpaper(&db, "local").await;
+
+        wallpaper::ActiveModel {
+            name: Set("external".to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set("/external/pic.png".to_string()),
+            is_external: Set(1),
+            watched_folder_id: Set(Some(7)),
+            source_key: Set(Some("pic.png".to_string())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let list = active().all(&db).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, local.id);
+
+        let without_source_filter = wallpaper::Entity::find()
+            .filter(not_deleted())
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(without_source_filter.len(), 2);
+    }
+
+    /// 按 id 取单条必须能看到监听壁纸，否则前端补抽的视频封面保存成功却
+    /// 刷新不回来（get_wallpaper / refreshByIds 都走这条）。
+    #[tokio::test]
+    async fn get_active_by_id_includes_external_wallpapers() {
+        use super::get_active_by_id;
+
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let external = wallpaper::ActiveModel {
+            name: Set("external".to_string()),
+            r#type: Set("video".to_string()),
+            file_path: Set("/external/clip.mp4".to_string()),
+            is_external: Set(1),
+            watched_folder_id: Set(Some(7)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let found = get_active_by_id(&db, external.id).await.unwrap();
+        assert_eq!(found.map(|m| m.id), Some(external.id));
+
+        // 回收站语义不受影响
+        let local = insert_wallpaper(&db, "trashed").await;
+        trash_batch(&db, vec![local.id]).await.unwrap();
+        assert!(get_active_by_id(&db, local.id).await.unwrap().is_none());
     }
 }

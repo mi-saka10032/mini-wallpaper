@@ -36,7 +36,27 @@ pub fn init(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     spawn_trash_purge(app);
     start_monitor_hotplug(app);
     spawn_manager_init(app);
+    start_watched_folders(app);
     Ok(())
+}
+
+/// 启动编排：重放 asset scope（进程内存态，重启即丢）+ 起后台轮询任务。
+fn start_watched_folders(app: &mut tauri::App) {
+    let ctx = app.state::<Arc<AppContext>>().inner().clone();
+    let handle = app.handle().clone();
+    if let Err(e) = tauri::async_runtime::block_on(
+        crate::services::watched_folder_service::restore_asset_scopes(&handle, &ctx.db),
+    ) {
+        warn!("[Watched] 启动重放 asset scope 失败: {e:#}");
+    }
+
+    let registry = app.state::<Arc<Mutex<TaskRegistry>>>().inner().clone();
+    tauri::async_runtime::block_on(async {
+        registry.lock().await.spawn(
+            "watched_folder_scan".to_string(),
+            crate::tasks::watched_folder::WatchedFolderTask,
+        );
+    });
 }
 
 /// `tauri dev` 是 debug 构建，日志走控制台，默认 info，可用 `RUST_LOG` 覆盖。

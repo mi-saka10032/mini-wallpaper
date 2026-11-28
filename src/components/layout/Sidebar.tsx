@@ -1,5 +1,15 @@
 import { lazy, Suspense, useCallback, useState } from "react";
-import { FolderOpen, Plus, Sparkles, Star, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  FolderSync,
+  Heart,
+  Plus,
+  Sparkles,
+  Star,
+  Trash2,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Separator } from "@/components/ui/separator";
@@ -60,6 +70,32 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
   // 智能收藏夹规则对话框（创建 / 编辑）
   const [smartDialogOpen, setSmartDialogOpen] = useState(false);
   const [smartEditing, setSmartEditing] = useState<Collection | null>(null);
+
+  // 手风琴折叠态放 localStorage（不进 DB、不与备份耦合）
+  const [normalExpanded, setNormalExpanded] = useState(
+    () => localStorage.getItem("sidebar.normalExpanded") !== "0",
+  );
+  const [watchedExpanded, setWatchedExpanded] = useState(
+    () => localStorage.getItem("sidebar.watchedExpanded") !== "0",
+  );
+  const toggleNormal = useCallback(() => {
+    setNormalExpanded((v) => {
+      localStorage.setItem("sidebar.normalExpanded", v ? "0" : "1");
+      return !v;
+    });
+  }, []);
+  const toggleWatched = useCallback(() => {
+    setWatchedExpanded((v) => {
+      localStorage.setItem("sidebar.watchedExpanded", v ? "0" : "1");
+      return !v;
+    });
+  }, []);
+
+  // 三组各自独立：内置夹置顶、普通夹一组、监听夹一组。
+  // 两个 SortableCollectionList 各自持有 DndContext，天然禁止跨组拖拽。
+  const builtin = collections.find((c) => c.is_builtin === 1);
+  const normalCollections = collections.filter((c) => c.is_builtin !== 1 && c.kind !== "watched");
+  const watchedCollections = collections.filter((c) => c.kind === "watched");
 
   const openCreateSmart = useCallback(() => {
     setSmartEditing(null);
@@ -128,8 +164,8 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
 
   return (
     <div className="flex h-full w-52 shrink-0 flex-col overflow-hidden border-r border-border/50">
-      <div className="flex-1 overflow-y-auto p-1">
-        {/* 壁纸库 */}
+      {/* 顶部固定：壁纸库 + My Favorites 单独置顶 */}
+      <div className="shrink-0 p-1">
         <div className="h-8">
           <button
             type="button"
@@ -145,14 +181,43 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
             <span>{t("sidebar.allWallpapers")}</span>
           </button>
         </div>
+        {builtin && (
+          <div className="h-8">
+            <button
+              type="button"
+              onClick={() => onActiveIdChange(builtin.id)}
+              className={cn(
+                "fluent-indicator flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors duration-150",
+                activeId === builtin.id
+                  ? "fluent-indicator-active bg-primary-hover-deep text-foreground font-medium"
+                  : "text-muted-foreground hover:bg-primary-hover hover:text-foreground",
+              )}
+            >
+              <Heart className="size-4 fill-[#ef4444] text-[#ef4444]" />
+              <span>{t("sidebar.builtinFavorites")}</span>
+            </button>
+          </div>
+        )}
+      </div>
 
-        <Separator className="my-1" />
+      <Separator className="my-1" />
 
-        {/* 收藏夹标题 + 新建按钮 */}
+      {/* 中间可滚动：两个手风琴，各自折叠、各自内部拖拽排序 */}
+      <div className="flex-1 overflow-y-auto p-1">
         <div className="mb-1 flex items-center justify-between px-3">
-          <span className="text-xs font-medium uppercase tracking-wide text-foreground/40">
+          <button
+            type="button"
+            onClick={toggleNormal}
+            className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-foreground/40 hover:text-foreground"
+          >
+            {normalExpanded ? (
+              <ChevronDown className="size-3" />
+            ) : (
+              <ChevronRight className="size-3" />
+            )}
+            <Star className="size-3" />
             {t("sidebar.collections")}
-          </span>
+          </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -176,27 +241,67 @@ const Sidebar: FC<SidebarProps> = memo(({ activeId, onActiveIdChange }) => {
           </DropdownMenu>
         </div>
 
-        {/* 收藏夹列表：内置夹固定顶部，用户夹长按可拖拽重排 */}
-        <Suspense
-          fallback={
-            <div className="flex h-24 items-center justify-center">
-              <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            </div>
-          }
-        >
-          <SortableCollectionList
-            collections={collections}
-            activeId={activeId}
-            onActiveIdChange={onActiveIdChange}
-            onEditSmart={openEditSmart}
-            onRename={openRenameDialog}
-            onDelete={setDeleteTarget}
-          />
-        </Suspense>
+        {normalExpanded && (
+          <Suspense
+            fallback={
+              <div className="flex h-24 items-center justify-center">
+                <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              </div>
+            }
+          >
+            <SortableCollectionList
+              collections={normalCollections}
+              activeId={activeId}
+              onActiveIdChange={onActiveIdChange}
+              onEditSmart={openEditSmart}
+              onRename={openRenameDialog}
+              onDelete={setDeleteTarget}
+            />
+          </Suspense>
+        )}
 
         <Separator className="my-1" />
 
-        {/* 回收站（固定入口，activeId = TRASH_VIEW_ID） */}
+        <div className="mb-1 flex items-center px-3">
+          <button
+            type="button"
+            onClick={toggleWatched}
+            className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-foreground/40 hover:text-foreground"
+          >
+            {watchedExpanded ? (
+              <ChevronDown className="size-3" />
+            ) : (
+              <ChevronRight className="size-3" />
+            )}
+            <FolderSync className="size-3" />
+            {t("watched.section")}
+          </button>
+        </div>
+
+        {watchedExpanded && (
+          <Suspense
+            fallback={
+              <div className="flex h-24 items-center justify-center">
+                <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              </div>
+            }
+          >
+            <SortableCollectionList
+              collections={watchedCollections}
+              activeId={activeId}
+              onActiveIdChange={onActiveIdChange}
+              onEditSmart={openEditSmart}
+              onRename={openRenameDialog}
+              onDelete={setDeleteTarget}
+            />
+          </Suspense>
+        )}
+      </div>
+
+      <Separator className="my-1" />
+
+      {/* 回收站置底，不随中间列表滚动 */}
+      <div className="shrink-0 p-1">
         <div className="h-8">
           <button
             type="button"

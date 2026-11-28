@@ -9,6 +9,7 @@ pub mod m008_create_tag_system;
 pub mod m009_add_smart_collection;
 pub mod m010_add_soft_delete;
 pub mod m011_add_scene_snapshots;
+pub mod m012_add_watched_folders;
 
 use sea_orm_migration::prelude::*;
 
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m009_add_smart_collection::Migration),
             Box::new(m010_add_soft_delete::Migration),
             Box::new(m011_add_scene_snapshots::Migration),
+            Box::new(m012_add_watched_folders::Migration),
         ]
     }
 }

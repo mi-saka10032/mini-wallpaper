@@ -62,6 +62,13 @@ export const COMMANDS = {
   // fullscreen
   INIT_FULLSCREEN_DETECTION: "init_fullscreen_detection",
   CLOSE_TOAST_WINDOW: "close_toast_window",
+  // watched folder
+  LIST_WATCHED_FOLDERS: "list_watched_folders",
+  ADD_WATCHED_FOLDER: "add_watched_folder",
+  REMOVE_WATCHED_FOLDER: "remove_watched_folder",
+  SYNC_WATCHED_FOLDER: "sync_watched_folder",
+  SET_ACTIVE_VIEW: "set_active_view",
+  DELETE_WATCHED_WALLPAPERS: "delete_watched_wallpapers",
 } as const;
 
 // ==================== 实体模型 ====================
@@ -82,6 +89,59 @@ export interface Wallpaper {
   updated_at: string;
   /** 回收站标记：null = 正常；否则为移入回收站的时刻（YYYY-MM-DD HH:mm:ss） */
   deleted_at: string | null;
+  /** 来源标志：0 = 本地导入；1 = 外部目录监听（源文件不在 AppData） */
+  is_external: number;
+  /** 所属监听目录 id；本地导入壁纸为 null */
+  watched_folder_id: number | null;
+  /** 监听目录内相对文件名（身份键） */
+  source_key: string | null;
+  /** 源文件字节数 */
+  source_size: number | null;
+  /** 源文件修改时间（unix 秒） */
+  source_mtime: number | null;
+}
+
+/** 监听目录条目（目录失效后仍保留，弹窗提示用户重选） */
+export interface WatchedFolderView {
+  id: number;
+  path: string;
+  name: string;
+  collection_id: number | null;
+  valid: number;
+  last_scan_at: string | null;
+}
+
+/** 一次同步的差异摘要 */
+export interface WatchedSyncReport {
+  added: number;
+  updated: number;
+  removed: number;
+  /** 本次新增视频，前端进夹/刷新时据此补抽帧 */
+  new_video_ids: number[];
+}
+
+export interface AddWatchedFolderResult {
+  folder_id: number;
+  collection_id: number;
+  /** 目录名，前端据此弹「手动更名」提示 */
+  collection_name: string;
+  report: WatchedSyncReport;
+}
+
+export interface AddWatchedFolderReq {
+  path: string;
+}
+export interface WatchedFolderIdReq {
+  id: number;
+}
+export interface SyncWatchedFolderReq {
+  collectionId: number;
+}
+export interface SetActiveViewReq {
+  activeId: number;
+}
+export interface DeleteWatchedWallpapersReq {
+  ids: number[];
 }
 
 /** 标签模型 */
@@ -109,8 +169,8 @@ export interface Collection {
   updated_at: string;
   /** 是否系统内置（1 = 内置「我喜欢」，不可删除/重命名；0 = 用户自建） */
   is_builtin: number;
-  /** 收藏夹类型：manual（手动）/ smart（智能收藏夹） */
-  kind: "manual" | "smart";
+  /** 收藏夹类型：manual（手动）/ smart（智能）/ watched（目录监听，由监听服务独占管理） */
+  kind: "manual" | "smart" | "watched";
   /** 智能收藏夹规则 JSON（手动收藏夹为 null） */
   rule_json: string | null;
 }
@@ -577,5 +637,29 @@ export interface CommandMap {
   [COMMANDS.APPLY_SCENE]: {
     params: { req: SceneIdReq };
     result: ApplySceneResult;
+  };
+  [COMMANDS.LIST_WATCHED_FOLDERS]: {
+    params: Record<string, never>;
+    result: WatchedFolderView[];
+  };
+  [COMMANDS.ADD_WATCHED_FOLDER]: {
+    params: { req: AddWatchedFolderReq };
+    result: AddWatchedFolderResult;
+  };
+  [COMMANDS.REMOVE_WATCHED_FOLDER]: {
+    params: { req: WatchedFolderIdReq };
+    result: void;
+  };
+  [COMMANDS.SYNC_WATCHED_FOLDER]: {
+    params: { req: SyncWatchedFolderReq };
+    result: WatchedSyncReport;
+  };
+  [COMMANDS.SET_ACTIVE_VIEW]: {
+    params: { req: SetActiveViewReq };
+    result: void;
+  };
+  [COMMANDS.DELETE_WATCHED_WALLPAPERS]: {
+    params: { req: DeleteWatchedWallpapersReq };
+    result: number;
   };
 }

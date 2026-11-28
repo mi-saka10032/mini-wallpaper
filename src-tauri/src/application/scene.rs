@@ -135,10 +135,10 @@ pub async fn delete_scene(svc: &AppServices<'_>, id: i32) -> Result<()> {
     Ok(())
 }
 
-/// 校验快照里引用的壁纸仍可显示（未删除 / 未进回收站）。
+/// 校验快照里引用的壁纸仍可显示（未删除 / 未进回收站 / 属于本地导入库）。
 async fn wallpaper_settable(db: &DatabaseConnection, id: i32) -> Result<bool> {
     Ok(wallpaper::Entity::find_by_id(id)
-        .filter(wallpaper_service::not_deleted())
+        .filter(wallpaper_service::local_only())
         .one(db)
         .await?
         .is_some())

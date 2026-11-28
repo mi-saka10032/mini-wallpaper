@@ -153,10 +153,14 @@ pub async fn rename(db: &DatabaseConnection, id: i32, name: String) -> Result<co
 ///
 /// 内置收藏夹（is_builtin = 1）不可删除，会返回错误。
 pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
-    // 守卫：内置收藏夹不可删除（前置校验，避免开启事务后再回滚的浪费）
+    // 守卫：内置收藏夹与监听收藏夹都不可手动删除。
+    // 监听夹只能由「移除监听」级联清理，否则会留下指向不存在目录的空夹。
     if let Some(existing) = collection::Entity::find_by_id(id).one(db).await? {
         if existing.is_builtin == 1 {
             return Err(anyhow::anyhow!(ERR_BUILTIN_IMMUTABLE));
+        }
+        if existing.kind == "watched" {
+            return Err(anyhow::anyhow!("监听收藏夹只能通过移除监听删除"));
         }
     }
 
@@ -191,19 +195,39 @@ pub async fn delete(db: &DatabaseConnection, id: i32) -> Result<()> {
 /// 用户夹按传入顺序分配 1..n。请求必须恰好包含全部用户夹 id——既防止
 /// 漏传导致部分夹 id 停留在旧 order 产生重复，也防止传入内置夹 id 越权。
 /// 与 reorder_wallpapers 一致做不动点 diff：order 未变的夹不写库。
+/// 监听夹排序空间的起点：manual+smart 占 1..999，watched 占 1000..，
+/// 两组各自连续、互不重叠，前端按 kind 分组渲染后天然不能跨组拖拽。
+pub const WATCHED_SORT_BASE: i32 = 1000;
+
 pub async fn reorder_collections(db: &DatabaseConnection, collection_ids: Vec<i32>) -> Result<()> {
     let all = collection::Entity::find().all(db).await?;
     let (builtin, custom): (Vec<_>, Vec<_>) = all.into_iter().partition(|m| m.is_builtin == 1);
 
-    let custom_ids: std::collections::HashSet<i32> = custom.iter().map(|m| m.id).collect();
+    let normal_ids: std::collections::HashSet<i32> = custom
+        .iter()
+        .filter(|m| m.kind != "watched")
+        .map(|m| m.id)
+        .collect();
+    let watched_ids: std::collections::HashSet<i32> = custom
+        .iter()
+        .filter(|m| m.kind == "watched")
+        .map(|m| m.id)
+        .collect();
     let incoming: std::collections::HashSet<i32> = collection_ids.iter().copied().collect();
 
-    // 完整性校验：传入集合必须恰好等于全部用户夹集合，且不重复。
-    // HashSet 的 != 会先去重，单靠它无法发现重复 id——重复会让下游
-    // enumerate() 对同一 id 写入两个 order，造成 sort_order 冲突。
-    if incoming != custom_ids || collection_ids.len() != custom_ids.len() {
-        anyhow::bail!("Collection order must contain exactly all user collections, no duplicates");
+    // 完整性校验：传入集合必须恰好等于某一组的全部 id，且不重复。
+    // 两组各成独立排序空间，跨组混合直接拒绝（手风琴之间不可拖拽）。
+    let is_watched_group = incoming == watched_ids && collection_ids.len() == watched_ids.len();
+    let is_normal_group = incoming == normal_ids && collection_ids.len() == normal_ids.len();
+    if !is_watched_group && !is_normal_group {
+        anyhow::bail!("Collection order must contain exactly one full group, no duplicates");
     }
+    // 未参与本次排序的另一组保持原 sort_order 不动。
+    let base = if is_watched_group {
+        WATCHED_SORT_BASE
+    } else {
+        1
+    };
 
     let txn = db.begin().await?;
 
@@ -220,7 +244,7 @@ pub async fn reorder_collections(db: &DatabaseConnection, collection_ids: Vec<i3
     let current: std::collections::HashMap<i32, i32> =
         custom.iter().map(|m| (m.id, m.sort_order)).collect();
     for (index, cid) in collection_ids.iter().enumerate() {
-        let new_order = index as i32 + 1;
+        let new_order = base + index as i32;
         if current.get(cid) == Some(&new_order) {
             continue;
         }
@@ -244,14 +268,17 @@ pub async fn get_wallpapers(
     collection_id: i32,
 ) -> Result<Vec<wallpaper::Model>> {
     // 智能收藏夹：委托规则引擎实时求值（不物化成员）
-    if let Some(model) = collection::Entity::find_by_id(collection_id)
+    let is_watched = if let Some(model) = collection::Entity::find_by_id(collection_id)
         .one(db)
         .await?
     {
         if model.kind == "smart" {
             return crate::services::smart_collection_service::matched_wallpapers(db, &model).await;
         }
-    }
+        model.kind == "watched"
+    } else {
+        false
+    };
 
     // 通过关联表查询
     let cw_list = collection_wallpaper::Entity::find()
@@ -266,10 +293,15 @@ pub async fn get_wallpapers(
 
     let wallpaper_ids: Vec<i32> = cw_list.iter().map(|cw| cw.wallpaper_id).collect();
 
-    let wallpapers = wallpaper_service::active()
-        .filter(wallpaper::Column::Id.is_in(wallpaper_ids.iter().copied()))
-        .all(db)
-        .await?;
+    // 监听夹成员是 is_external=1，必须跳过 local_only()；普通夹仍走 active()。
+    let wallpapers = if is_watched {
+        wallpaper_service::undeleted()
+    } else {
+        wallpaper_service::active()
+    }
+    .filter(wallpaper::Column::Id.is_in(wallpaper_ids.iter().copied()))
+    .all(db)
+    .await?;
 
     // 按关联表的 sort_order 排序
     let mut sorted = Vec::new();
@@ -503,6 +535,11 @@ pub async fn has_enough_wallpapers(db: &DatabaseConnection, collection_id: i32) 
 ///
 /// 用 `wallpaper_id IN (SELECT id FROM wallpapers WHERE deleted_at IS NULL)`
 /// 表达，避免为 6 个游标辅助函数逐一改写 join。
+///
+/// **这里刻意不加 `is_external = 0`**：关联表按收藏夹分组隔离，普通夹的成员
+/// 全是本地导入（add_wallpapers 走 active() 校验，塞不进 external），
+/// 监听夹的成员全是 external。再加来源过滤会让监听夹成员数恒为 0。
+/// 全局「本地壁纸库」的隔离由 `wallpaper_service::local_only()` 负责。
 fn active_member_filter() -> Condition {
     Condition::all().add(
         collection_wallpaper::Column::WallpaperId.in_subquery(
@@ -741,7 +778,7 @@ mod tests {
     };
     use sea_orm_migration::MigratorTrait;
 
-    use super::{add_wallpapers, reorder_collections};
+    use super::{add_wallpapers, get_wallpapers, reorder_collections};
     use crate::entities::{collection, collection_wallpaper, wallpaper};
     use crate::migration::Migrator;
     use crate::services::wallpaper_service;
@@ -903,5 +940,99 @@ mod tests {
             .is_err());
         // 漏传：集合不等，拒绝
         assert!(reorder_collections(&db, vec![a.id]).await.is_err());
+    }
+
+    /// 两组手风琴各自独立排序：监听组落在独立区间，普通组顺序不受影响；
+    /// 跨组混合的 id 列表直接拒绝（不允许跨手风琴拖拽）。
+    #[tokio::test]
+    async fn watched_group_reorders_independently() {
+        use crate::entities::collection as c_entity;
+
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let normal_a = insert_collection(&db, "manual").await;
+        let normal_b = insert_collection(&db, "smart").await;
+        let watched_a = insert_collection(&db, "watched").await;
+        let watched_b = insert_collection(&db, "watched").await;
+
+        reorder_collections(&db, vec![normal_a.id, normal_b.id])
+            .await
+            .unwrap();
+        let na = c_entity::Entity::find_by_id(normal_a.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(na.sort_order, 1);
+
+        reorder_collections(&db, vec![watched_b.id, watched_a.id])
+            .await
+            .unwrap();
+
+        let na_after = c_entity::Entity::find_by_id(normal_a.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(na_after.sort_order, 1, "监听组排序不得改动普通组");
+
+        let wb = c_entity::Entity::find_by_id(watched_b.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let wa = c_entity::Entity::find_by_id(watched_a.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(wb.sort_order, super::WATCHED_SORT_BASE);
+        assert_eq!(wa.sort_order, super::WATCHED_SORT_BASE + 1);
+
+        assert!(reorder_collections(&db, vec![normal_a.id, watched_a.id])
+            .await
+            .is_err());
+    }
+
+    /// 关联表按夹隔离：监听夹成员是 external，不该被 local_only() 滤掉；
+    /// 同时本地夹仍不能看到 external 行。
+    #[tokio::test]
+    async fn watched_collection_members_are_not_local_filtered() {
+        let root = TempDir::new();
+        let db = test_db(&root).await;
+        let watched = insert_collection(&db, "watched").await;
+        let normal = insert_collection(&db, "manual").await;
+
+        let external = wallpaper::ActiveModel {
+            name: Set("external".to_string()),
+            r#type: Set("image".to_string()),
+            file_path: Set("/external/pic.png".to_string()),
+            is_external: Set(1),
+            watched_folder_id: Set(Some(7)),
+            source_key: Set(Some("pic.png".to_string())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        for (cid, order) in [(watched.id, 0), (normal.id, 1)] {
+            collection_wallpaper::ActiveModel {
+                collection_id: Set(cid),
+                wallpaper_id: Set(external.id),
+                sort_order: Set(order),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+
+        let watched_members = get_wallpapers(&db, watched.id).await.unwrap();
+        assert_eq!(watched_members.len(), 1);
+        assert_eq!(watched_members[0].id, external.id);
+
+        let normal_members = get_wallpapers(&db, normal.id).await.unwrap();
+        assert!(normal_members.is_empty());
     }
 }

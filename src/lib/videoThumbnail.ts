@@ -6,8 +6,14 @@ const MAX_WIDTH = 480;
 /** 视频加载超时时间（ms） */
 const TIMEOUT = 15_000;
 
+/** 固定取样点（秒）：seek 到 1s 附近，避开 0s 开场黑屏 */
+const SEEK_SECONDS = 1;
+
 /**
  * 通过 canvas 抽取视频首帧，等比缩放（最大宽度 480px），输出 WebP 格式的 Uint8Array。
+ *
+ * 保持原始抽帧链路不变，仅把 `loadedmetadata` 后的定位从 0s 改为 1s 附近，
+ * 并等 `seeked` 之后再截取 canvas，避免开场黑屏被当成封面。
  *
  * @param filePath 本地视频文件绝对路径（Tauri asset 协议转换）
  * @returns WebP 格式的字节数组；加载/解码失败时返回 null
@@ -25,7 +31,7 @@ export async function extractVideoThumbnail(filePath: string): Promise<Uint8Arra
 
     const cleanup = () => {
       video.removeEventListener("loadedmetadata", onLoadedMetadata);
-      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("error", onError);
       clearTimeout(timeoutId);
       try {
@@ -52,13 +58,15 @@ export async function extractVideoThumbnail(filePath: string): Promise<Uint8Arra
 
     const onLoadedMetadata = () => {
       try {
-        video.currentTime = 0;
+        const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+        // 短片取中间，其余固定 1s；只 seek 一次
+        video.currentTime = duration > 0 ? Math.min(SEEK_SECONDS, duration / 2) : SEEK_SECONDS;
       } catch {
         settle(null);
       }
     };
 
-    const onCanPlay = () => {
+    const onSeeked = () => {
       try {
         const ow = video.videoWidth;
         const oh = video.videoHeight;
@@ -125,7 +133,7 @@ export async function extractVideoThumbnail(filePath: string): Promise<Uint8Arra
     };
 
     video.addEventListener("loadedmetadata", onLoadedMetadata);
-    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("seeked", onSeeked);
     video.addEventListener("error", onError);
 
     video.src = videoUrl;

@@ -8,5 +8,6 @@ pub mod shortcut_dto;
 pub mod tag_dto;
 pub mod validated;
 pub mod wallpaper_dto;
+pub mod watched_folder_dto;
 
 pub use validated::Validated;

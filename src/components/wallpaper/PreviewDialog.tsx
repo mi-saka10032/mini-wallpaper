@@ -76,6 +76,8 @@ const PreviewDialog: FC = memo(() => {
   const [tagDialogOpen, setTagDialogOpen] = useState(false);
   /** 按需拉取的单条 play_count；null 表示还没拿到或拉取失败，回退到缓存值 */
   const [freshPlayCount, setFreshPlayCount] = useState<number | null>(null);
+  /** 监听壁纸的源文件已被外部删除时，主图/视频加载失败，提示刷新 */
+  const [sourceInvalid, setSourceInvalid] = useState(false);
 
   const pendingNextRef = useRef<number | null>(null);
   const closedRef = useRef(false);
@@ -222,6 +224,7 @@ const PreviewDialog: FC = memo(() => {
     if (wallpaperId === undefined) return;
     let cancelled = false;
     setFreshPlayCount(null);
+    setSourceInvalid(false);
     void getById(wallpaperId)
       .then((wp) => {
         if (!cancelled) setFreshPlayCount(wp?.play_count ?? null);
@@ -394,6 +397,7 @@ const PreviewDialog: FC = memo(() => {
             controls
             autoPlay
             muted
+            onError={() => setSourceInvalid(true)}
             className="max-h-[68vh] max-w-[80vw] rounded-md"
           />
         ) : (
@@ -402,11 +406,18 @@ const PreviewDialog: FC = memo(() => {
             src={src}
             alt={wallpaper.name}
             draggable={false}
+            onError={() => setSourceInvalid(true)}
             className={cn(
               "rounded-md object-contain",
               actualZoom ? "max-w-none" : "max-h-[68vh] max-w-[80vw]",
             )}
           />
+        )}
+        {/* 监听夹内源文件被外部删掉时，缩略图/DB 信息仍在，点开画廊才报错 */}
+        {sourceInvalid && (
+          <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/70 text-sm text-white/80">
+            {t("watched.invalidPreview")}
+          </div>
         )}
       </div>
 
@@ -430,12 +441,19 @@ const PreviewDialog: FC = memo(() => {
                 wp.id === wallpaper.id ? "ring-2 ring-primary" : "opacity-60 hover:opacity-100",
               )}
             >
-              <img
-                src={convertFileSrc(wp.thumb_path ?? wp.file_path)}
-                alt=""
-                draggable={false}
-                className="size-full object-cover"
-              />
+              {/* 无缩略图的视频不能让 <img> 去加载视频文件，会显示碎图 */}
+              {!wp.thumb_path && wp.type === "video" ? (
+                <div className="flex size-full items-center justify-center bg-white/5 text-[10px] text-white/50">
+                  VIDEO
+                </div>
+              ) : (
+                <img
+                  src={convertFileSrc(wp.thumb_path ?? wp.file_path)}
+                  alt=""
+                  draggable={false}
+                  className="size-full object-cover"
+                />
+              )}
             </button>
           ))}
         </div>

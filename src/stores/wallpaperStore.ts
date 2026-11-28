@@ -13,7 +13,15 @@ import {
   saveVideoThumbnail,
 } from "@/api/wallpaper";
 import { batchExtractVideoThumbnails } from "@/lib/videoThumbnail";
-import { publishCommandSignals } from "@/stores/pubsubStore";
+import { publishCommandSignals, publish, Signal } from "@/stores/pubsubStore";
+import { useCollectionStore } from "@/stores/collectionStore";
+import {
+  deleteWatchedWallpapers,
+  setActiveView,
+  syncWatchedFolder,
+  WATCHED_PATH_INVALID,
+} from "@/api/watchedFolder";
+import { toast } from "@/components/ui/toast";
 
 // 从 config 中 re-export Wallpaper 类型，方便外部使用
 export type { Wallpaper } from "@/api/config";
@@ -86,37 +94,46 @@ export interface ImportResult {
   cancelled: boolean;
 }
 
+/** 防止同一次会话里对同一个视频并发抽帧（判定是否要抽由调用方按 thumb_path 负责） */
+const videoThumbInFlight = new Set<number>();
+
 /**
- * 对导入结果中的视频壁纸，分批（10 个一批）通过 canvas 抽取首帧缩略图，
- * 生成后调用后端持久化并精确刷新 store 中对应壁纸。
+ * 对传入的视频壁纸分批抽帧并持久化。
+ *
+ * `refreshByIds` 可选：导入链路传它做按 id 局部刷新；refresh 链路不传，
+ * 因为 refresh 规则要求抽帧完成后**再整体 fetch 一遍**取带封面的列表。
+ * 抽帧失败的视频不标记，下次 refresh 检测到 thumb_path 仍为空会自然重试。
  */
 async function generateVideoThumbnails(
-  imported: Wallpaper[],
-  refreshByIds: (ids: number[]) => Promise<void>,
+  candidates: Wallpaper[],
+  refreshByIds?: (ids: number[]) => Promise<void>,
 ) {
-  const videoItems = imported
-    .filter((w) => w.type === "video")
+  const videoItems = candidates
+    .filter((w) => w.type === "video" && !videoThumbInFlight.has(w.id))
     .map((w) => ({ wallpaperId: w.id, filePath: w.file_path }));
 
   if (videoItems.length === 0) return;
+  videoItems.forEach((v) => videoThumbInFlight.add(v.wallpaperId));
 
-  await batchExtractVideoThumbnails(videoItems, async (batchResults) => {
-    // 逐个保存成功的缩略图
-    const updatedIds: number[] = [];
-    for (const { wallpaperId, data } of batchResults) {
-      if (!data) continue;
-      try {
-        await saveVideoThumbnail(wallpaperId, data);
-        updatedIds.push(wallpaperId);
-      } catch (e) {
-        console.error(`[VideoThumbnail] save failed for #${wallpaperId}`, e);
+  try {
+    await batchExtractVideoThumbnails(videoItems, async (batchResults) => {
+      const updatedIds: number[] = [];
+      for (const { wallpaperId, data } of batchResults) {
+        if (!data) continue;
+        try {
+          await saveVideoThumbnail(wallpaperId, data);
+          updatedIds.push(wallpaperId);
+        } catch (e) {
+          console.error(`[VideoThumbnail] save failed for #${wallpaperId}`, e);
+        }
       }
-    }
-    // 每批完成后精确刷新已更新的壁纸，避免全量拉取
-    if (updatedIds.length > 0) {
-      await refreshByIds(updatedIds);
-    }
-  });
+      if (refreshByIds && updatedIds.length > 0) {
+        await refreshByIds(updatedIds);
+      }
+    });
+  } finally {
+    videoItems.forEach((v) => videoThumbInFlight.delete(v.wallpaperId));
+  }
 }
 
 /**
@@ -136,12 +153,51 @@ const EMPTY_IMPORT_RESULT: ImportResult = {
   cancelled: false,
 };
 
-/** 按 activeId 取对应数据源。负值视图（显示器设置 / 回收站）不由本 store 负责 */
+/** 拉取当前视图的壁纸列表；前后两次 fetch 都走它，保证口径一致 */
+async function fetchViewList(activeId: number): Promise<Wallpaper[]> {
+  // 负值视图（显示器设置 / 回收站）不由本 store 负责，调用方已提前返回
+  return activeId === 0 ? fetchAllWallpapers() : getCollectionWallpapers(activeId);
+}
+
+/**
+ * 视图数据拉取。
+ *
+ * 双 fetch 只适用于**监听夹**的两种 refresh：进夹切换、夹内「同步」按钮
+ * （两者都走 refreshView → 本函数）。原因是后台监听写入的视频文件不带缩略图，
+ * 只有进夹时才会判断一次并调用抽帧能力，必须抽完再 fetch 才能拿到带封面的列表。
+ *
+ * 本地库 / 普通夹 / 智能夹 / 「我喜欢」都只 fetch 一遍：
+ * 本地库的导入链路本身就是「导入 → 抽帧 → refresh」，失败是例外，
+ * 不需要为它每次刷新都加一次全量拉取。
+ *
+ * 监听夹双 fetch 规则：
+ * ①先 fetch → ②筛「视频且 thumb_path 为空」→ ③有则 await 抽帧 → ④再 fetch。
+ * 没有空封面时只 fetch 一遍。快速切夹由 viewRequestSeq 守卫，
+ * 过期的两次 fetch 结果一起被丢弃。
+ */
 async function fetchViewData(activeId: number): Promise<Wallpaper[] | null> {
   if (activeId < 0) return null;
-  if (activeId === 0) return fetchAllWallpapers();
-  // 普通夹 / 智能夹 / 「我喜欢」统一走此命令，后端按 kind 分流
-  return getCollectionWallpapers(activeId);
+
+  const isWatched =
+    activeId > 0 &&
+    useCollectionStore.getState().collections.find((c) => c.id === activeId)?.kind === "watched";
+  if (isWatched) await syncWatchedFolder(activeId);
+
+  // ① 第一次 fetch（所有视图都要）
+  const first = await fetchViewList(activeId);
+
+  // 非监听夹：导入链路已负责抽帧，这里只拉一次
+  if (!isWatched) return first;
+
+  // ② 只看缩略图为空的视频；已有封面（含抽帧成功后）不会触发第二次 fetch
+  const missing = first.filter((w) => w.type === "video" && !w.thumb_path);
+  if (missing.length === 0) return first;
+
+  // ③ await 抽帧，不做按 id 局部刷新
+  await generateVideoThumbnails(missing);
+
+  // ④ 第二次 fetch，拿到带完整缩略图的列表
+  return fetchViewList(activeId);
 }
 
 export const useWallpaperStore = create<WallpaperState>((set, get) => ({
@@ -172,10 +228,16 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
     set((state) =>
       state.activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { wallpapers: list },
     );
+    // 启动 / 数据失效时同样只补漏「空封面」的视频，判定口径与 refresh 一致；
+    // 局部刷新即可，这里不是 refresh 链路，不做第二次全量 fetch。
+    const missing = list.filter((w) => w.type === "video" && !w.thumb_path);
+    void generateVideoThumbnails(missing, get().refreshByIds).catch(() => {});
   },
 
   setActiveId: async (id: number) => {
     if (get().activeId === id) return;
+    // 通知后端暂停该夹的后台 diff（fire-and-forget，失败不影响 UI）
+    setActiveView(id);
     set({ activeId: id, viewSwitching: true });
     await get().refreshView();
   },
@@ -208,6 +270,16 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
       if (seq !== viewRequestSeq) return;
       if (list === null) return;
       set(activeId === 0 ? { wallpapers: list, viewWallpapers: list } : { viewWallpapers: list });
+    } catch (err) {
+      const message = typeof err === "string" ? err : ((err as Error)?.message ?? String(err));
+      if (message.includes(WATCHED_PATH_INVALID)) {
+        // 进入夹/刷新时才发现路径失效：toast + 强制回本地壁纸栏 + 刷新夹列表。
+        toast.error(i18n.t("watched.pathInvalid"));
+        void useWallpaperStore.getState().setActiveId(0);
+        publish([Signal.VIEW, Signal.COLLECTIONS]);
+        return;
+      }
+      throw err;
     } finally {
       if (seq === viewRequestSeq) set({ viewSwitching: false });
     }
@@ -411,6 +483,17 @@ export const useWallpaperStore = create<WallpaperState>((set, get) => ({
   },
 
   deleteWallpapers: async (ids: number[]) => {
+    // 两类壁纸删除路径完全隔离：本地导入走软删除进项目回收站，
+    // 监听壁纸走「源文件移入系统回收站 + 硬删 DB」，绝不经过 trash_batch。
+    const activeId = get().activeId;
+    const isWatched =
+      activeId > 0 &&
+      useCollectionStore.getState().collections.find((c) => c.id === activeId)?.kind === "watched";
+    if (isWatched) {
+      const count = await deleteWatchedWallpapers(ids);
+      console.log(`[Watched] ${count} source files recycled`);
+      return;
+    }
     const count = await deleteWallpaperBatch(ids);
     console.log(`[Trash] ${count} wallpapers moved to trash`);
   },

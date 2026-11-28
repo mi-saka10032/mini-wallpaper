@@ -6,3 +6,4 @@ pub mod scene_snapshot;
 pub mod tag;
 pub mod wallpaper;
 pub mod wallpaper_tag;
+pub mod watched_folder;

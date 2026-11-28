@@ -1,11 +1,12 @@
-import { lazy, Suspense, useCallback } from "react";
-import { Monitor, Plus, Settings } from "lucide-react";
+import { lazy, Suspense, useCallback, useState } from "react";
+import { FolderSync, Monitor, Plus, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useImportFeedback } from "@/hooks/useImportFeedback";
 import { useWallpaperStore } from "@/stores/wallpaperStore";
+import type { AddWatchedFolderResult } from "@/api/config";
 import WindowControls from "./WindowControls";
 import ThemeToggle from "./ThemeToggle";
 import LanguageToggle from "./LanguageToggle";
@@ -13,6 +14,8 @@ import AccentColorToggle from "./AccentColorToggle";
 import UpdateToast from "./UpdateToast";
 
 const GlobalSettingsDialog = lazy(() => import("@/components/settings/GlobalSettingsPanel"));
+const WatchedFoldersDialog = lazy(() => import("@/components/wallpaper/WatchedFoldersDialog"));
+const WatchedNameDialog = lazy(() => import("@/components/wallpaper/WatchedNameDialog"));
 
 interface ToolbarProps {
   onActiveIdChange: (id: number) => void;
@@ -23,6 +26,11 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
   const importWallpapers = useWallpaperStore((s) => s.importWallpapers);
   const { notify, notifyError } = useImportFeedback();
 
+  // 监听目录弹窗与名称确认弹窗互相独立：新增成功后先关前者，再开后者。
+  const [watchedOpen, setWatchedOpen] = useState(false);
+  const [nameOpen, setNameOpen] = useState(false);
+  const [created, setCreated] = useState<{ id: number; name: string } | null>(null);
+
   // 文件选择器导入。与拖拽两条通道共用同一套提示：
   // 成功弹数量（批量时这是唯一能知道导入了几个的地方），取消则静默。
   const handleImport = useCallback(async () => {
@@ -32,6 +40,11 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
       notifyError(e);
     }
   }, [importWallpapers, notify, notifyError]);
+
+  const handleWatchedAdded = useCallback((result: AddWatchedFolderResult) => {
+    setCreated({ id: result.collection_id, name: result.collection_name });
+    setNameOpen(true);
+  }, []);
 
   return (
     <div
@@ -49,6 +62,27 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
           <Plus className="size-4" />
           <span className="text-sm">{t("toolbar.import")}</span>
         </Button>
+        {/* 目录监听：与导入一样带文字标签 */}
+        <Dialog open={watchedOpen} onOpenChange={setWatchedOpen}>
+          <DialogTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-primary-foreground/70 hover:text-primary-foreground hover:bg-transparent"
+            >
+              <FolderSync className="size-4" />
+              <span className="text-sm">{t("watched.title")}</span>
+            </Button>
+          </DialogTrigger>
+          {watchedOpen && (
+            <Suspense fallback={null}>
+              <WatchedFoldersDialog
+                onAdded={handleWatchedAdded}
+                onClose={() => setWatchedOpen(false)}
+              />
+            </Suspense>
+          )}
+        </Dialog>
         <Button
           variant="ghost"
           size="sm"
@@ -91,6 +125,17 @@ const Toolbar: React.FC<ToolbarProps> = ({ onActiveIdChange }) => {
         </Dialog>
         <WindowControls />
       </div>
+
+      {created && (
+        <Suspense fallback={null}>
+          <WatchedNameDialog
+            open={nameOpen}
+            onOpenChange={setNameOpen}
+            collectionId={created.id}
+            defaultName={created.name}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

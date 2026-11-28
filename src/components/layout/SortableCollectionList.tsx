@@ -10,7 +10,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { memo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Move, Heart, Pencil, Sparkles, Star, Trash2 } from "lucide-react";
+import { Move, Heart, Pencil, Sparkles, Star, Trash2, FolderSync } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   ContextMenu,
@@ -92,8 +92,9 @@ const SortableCollectionList: React.FC<SortableCollectionListProps> = memo(
     const renderItem = (collection: Collection) => {
       const isBuiltin = collection.is_builtin === 1;
       const isSmart = collection.kind === "smart";
+      const isWatched = collection.kind === "watched";
       const displayName = isBuiltin ? t("sidebar.builtinFavorites") : collection.name;
-      const Icon = isBuiltin ? Heart : isSmart ? Sparkles : Star;
+      const Icon = isBuiltin ? Heart : isSmart ? Sparkles : isWatched ? FolderSync : Star;
 
       const trigger = (
         <Tooltip>
@@ -140,13 +141,16 @@ const SortableCollectionList: React.FC<SortableCollectionListProps> = memo(
               <Pencil className="mr-2 size-3.5" />
               {t("sidebar.rename")}
             </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() => onDelete(collection)}
-              className="text-destructive focus:text-destructive"
-            >
-              <Trash2 className="mr-2 size-3.5" />
-              {t("sidebar.delete")}
-            </ContextMenuItem>
+            {/* 监听夹只能由「移除监听」级联删除，不暴露手动删除入口 */}
+            {!isWatched && (
+              <ContextMenuItem
+                onClick={() => onDelete(collection)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 size-3.5" />
+                {t("sidebar.delete")}
+              </ContextMenuItem>
+            )}
           </ContextMenuContent>
         </ContextMenu>
       );

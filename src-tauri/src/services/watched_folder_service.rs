@@ -19,8 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use sea_orm::{
-    sea_query::Expr, ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    sea_query::Expr, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -412,9 +412,11 @@ struct FileEntry {
 }
 
 /// 非递归列举目录下合规文件，身份键为 lowercase 相对文件名。
-fn scan_directory(dir: &str) -> Result<Vec<FileEntry>> {
+/// 纯同步 syscall + 元数据读取，调用方必须在 `spawn_blocking` 中执行。
+fn scan_directory(dir: &Path) -> Result<Vec<FileEntry>> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).with_context(|| format!("读取监听目录失败: {dir}"))?
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("读取监听目录失败: {}", dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -448,6 +450,58 @@ fn scan_directory(dir: &str) -> Result<Vec<FileEntry>> {
     Ok(out)
 }
 
+/// 一次扫描的差集结果。`plan_sync` 是纯函数，便于单测覆盖「新增 / 变更 / 删除」
+/// 三种判定，而不必构造 AppContext。
+#[derive(Default)]
+struct SyncPlan {
+    new_files: Vec<FileEntry>,
+    changed: Vec<(wallpaper::Model, FileEntry)>,
+    removed: Vec<wallpaper::Model>,
+}
+
+/// 存量按 source_key 建 HashMap；扫描侧每命中一条就 remove，
+/// 遍历完仍留在 map 里的就是磁盘上已消失的行。整体 O(N+M)，
+/// 替代原先「对每条扫描结果线性 find 存量」的 O(N×M)。
+///
+/// source_key 是 lowercase 文件名，size/mtime 变化仍命中同一条并归到 changed；
+/// 只有文件名变化才会表现成「旧 key 判删 + 新 key 判增」。
+fn plan_sync(entries: Vec<FileEntry>, existing: Vec<wallpaper::Model>) -> SyncPlan {
+    let mut by_key: HashMap<String, wallpaper::Model> = HashMap::new();
+    let mut plan = SyncPlan::default();
+
+    for model in existing {
+        match model.source_key.as_deref() {
+            Some(key) if !key.is_empty() => {
+                by_key.insert(key.to_lowercase(), model);
+            }
+            // 无身份键的脏行不对应任何扫描结果，直接按删除处理
+            _ => plan.removed.push(model),
+        }
+    }
+
+    let mut seen: HashSet<String> = HashSet::new();
+    for entry in entries {
+        // 同名不同扩展名按 lowercase 文件名去重，保留扫描顺序中的第一个
+        if !seen.insert(entry.key.clone()) {
+            continue;
+        }
+        match by_key.remove(&entry.key) {
+            None => plan.new_files.push(entry),
+            Some(model) => {
+                let changed = model.source_size != Some(entry.size)
+                    || model.source_mtime != Some(entry.mtime)
+                    || model.file_path != entry.path;
+                if changed {
+                    plan.changed.push((model, entry));
+                }
+            }
+        }
+    }
+
+    plan.removed.extend(by_key.into_values());
+    plan
+}
+
 /// 幂等扫描。严格同步口径只针对 `watched_folder_id = ?` 的 active 行；
 /// 本地导入壁纸与项目回收站完全不参与。
 pub async fn sync_folder(ctx: &AppContext, folder_id: i32, force: bool) -> Result<SyncReport> {
@@ -479,85 +533,100 @@ pub async fn sync_folder(ctx: &AppContext, folder_id: i32, force: bool) -> Resul
         }
     }
 
-    let entries = scan_directory(&folder.path)?;
-    let wanted: HashMap<&str, &FileEntry> = entries.iter().map(|e| (e.key.as_str(), e)).collect();
+    // 目录扫描是纯同步 syscall（每文件 is_file + metadata），占住 tokio worker
+    // 会拖慢其它 command；挪到 blocking 线程池。
+    let scan_path = PathBuf::from(&folder.path);
+    let entries = tauri::async_runtime::spawn_blocking(move || scan_directory(&scan_path))
+        .await
+        .context("目录扫描任务被取消")??;
 
-    let existing = wallpaper::Entity::find()
+    let rows = wallpaper::Entity::find()
         .filter(wallpaper::Column::WatchedFolderId.eq(folder_id))
         .all(db)
         .await?;
+    let plan = plan_sync(entries, rows);
 
-    let mut report = SyncReport::default();
-    let mut seen: HashSet<String> = HashSet::new();
+    let cid = folder
+        .collection_id
+        .ok_or_else(|| anyhow!("监听目录 {folder_id} 未绑定收藏夹"))?;
+    let mut report = SyncReport {
+        added: plan.new_files.len(),
+        updated: plan.changed.len(),
+        removed: plan.removed.len(),
+        new_video_ids: Vec::new(),
+    };
+    // 只记录「新文件」生成的缩略图：回滚后这些 id 不存在，删掉才是安全的。
+    // 变更文件复用 {id}.webp，回滚后旧记录仍指向它，绝不能清理。
+    let mut rollback_thumbs: Vec<PathBuf> = Vec::new();
+    let mut removed_thumbs: Vec<String> = Vec::new();
 
-    // 1) 消失的文件：硬删（含缩略图、monitor 引用、关联行）
-    for model in &existing {
-        let key = model.source_key.clone().unwrap_or_default().to_lowercase();
-        if wanted.contains_key(key.as_str()) {
-            continue;
+    // 整轮写操作合并为单个事务：任一处失败全部回滚，不留半截同步状态。
+    let txn = db.begin().await?;
+
+    // 1) 新文件
+    for entry in &plan.new_files {
+        let model = insert_watched_wallpaper(&txn, folder_id, entry).await?;
+        append_to_collection(&txn, cid, model.id).await?;
+        if entry.file_type == "video" {
+            // 后台扫描不抽帧；进夹/刷新时前端按 new_video_ids 补。
+            report.new_video_ids.push(model.id);
+        } else {
+            let thumb = generate_thumbnail_file(ctx, model.id, entry).await?;
+            set_thumbnail_path(&txn, model.id, &thumb).await?;
+            rollback_thumbs.push(thumb);
         }
-        // 批量失效时逐条 reconcile 会反复抢 manager 锁，先只清库，末尾统一一次。
-        hard_delete_watched_wallpaper(ctx, model, false).await?;
-        report.removed += 1;
+    }
+
+    // 2) 内容变更（source_key 不变，size / mtime / path 变化）
+    for (model, entry) in &plan.changed {
+        let mut active: wallpaper::ActiveModel = model.clone().into();
+        active.file_path = Set(entry.path.clone());
+        active.file_size = Set(Some(entry.size));
+        active.source_size = Set(Some(entry.size));
+        active.source_mtime = Set(Some(entry.mtime));
+        active.update(&txn).await?;
+        if entry.file_type != "video" {
+            let thumb = generate_thumbnail_file(ctx, model.id, entry).await?;
+            set_thumbnail_path(&txn, model.id, &thumb).await?;
+            // 复用旧 id 的路径，回滚后旧记录仍指向它，不加入清理列表
+        }
+    }
+
+    // 3) 磁盘上已不存在；硬删（monitor 引用 / 关联行 / 标签 / 行）
+    for model in &plan.removed {
+        if let Some(thumb) = model.thumb_path.as_ref() {
+            removed_thumbs.push(thumb.clone());
+        }
+        delete_watched_row(&txn, model).await?;
+    }
+
+    let mut active: watched_folder::ActiveModel = folder.into();
+    active.last_scan_at = Set(Some(now_str()));
+    active.update(&txn).await?;
+
+    if let Err(e) = txn.commit().await {
+        // 只清理新文件那批（回滚后无记录引用）；变更文件复用旧路径，不能删。
+        for thumb in rollback_thumbs {
+            let _ = std::fs::remove_file(thumb);
+        }
+        return Err(e.into());
+    }
+
+    // 事务外副作用：文件删除 + 一次 reconcile（避免逐条抢 manager 锁）
+    for thumb in removed_thumbs {
+        if let Err(e) = std::fs::remove_file(&thumb) {
+            log::warn!("[Watched] 清理缩略图失败 {thumb}: {e}");
+        }
     }
     if report.removed > 0 {
         reconcile_after_change(ctx).await;
     }
 
-    // 2) 新增 / 变更
-    let cid = folder
-        .collection_id
-        .ok_or_else(|| anyhow!("监听目录 {folder_id} 未绑定收藏夹"))?;
-    for entry in &entries {
-        if !seen.insert(entry.key.clone()) {
-            continue; // 同名不同扩展名已按 lowercase 文件名去重
-        }
-        let prior = existing
-            .iter()
-            .find(|w| w.source_key.as_deref().unwrap_or("").to_lowercase() == entry.key);
-
-        match prior {
-            Some(model) => {
-                let changed = model.source_size != Some(entry.size)
-                    || model.source_mtime != Some(entry.mtime)
-                    || model.file_path != entry.path;
-                if !changed {
-                    continue;
-                }
-                let mut active: wallpaper::ActiveModel = model.clone().into();
-                active.file_path = Set(entry.path.clone());
-                active.file_size = Set(Some(entry.size));
-                active.source_size = Set(Some(entry.size));
-                active.source_mtime = Set(Some(entry.mtime));
-                active.update(db).await?;
-                if entry.file_type != "video" {
-                    refresh_thumbnail(ctx, model.id, entry).await?;
-                }
-                report.updated += 1;
-            }
-            None => {
-                let model = insert_watched_wallpaper(ctx, folder_id, entry).await?;
-                append_to_collection(db, cid, model.id).await?;
-                if entry.file_type == "video" {
-                    // 后台扫描不抽帧；进夹/刷新时前端按 new_video_ids 补。
-                    report.new_video_ids.push(model.id);
-                } else {
-                    refresh_thumbnail(ctx, model.id, entry).await?;
-                }
-                report.added += 1;
-            }
-        }
-    }
-
-    let mut active: watched_folder::ActiveModel = folder.into();
-    active.last_scan_at = Set(Some(now_str()));
-    active.update(db).await?;
-
     Ok(report)
 }
 
-async fn insert_watched_wallpaper(
-    ctx: &AppContext,
+async fn insert_watched_wallpaper<C: ConnectionTrait>(
+    txn: &C,
     folder_id: i32,
     entry: &FileEntry,
 ) -> Result<wallpaper::Model> {
@@ -579,35 +648,61 @@ async fn insert_watched_wallpaper(
         source_mtime: Set(Some(entry.mtime)),
         ..Default::default()
     }
-    .insert(&ctx.db)
+    .insert(txn)
     .await?)
 }
 
 /// 图片/GIF 缩略图按 `wallpaper_id` 命名，避免不同目录同名文件互相覆盖。
-async fn refresh_thumbnail(ctx: &AppContext, wallpaper_id: i32, entry: &FileEntry) -> Result<()> {
+///
+/// `image::open → thumbnail → WebP save` 是同步 CPU 密集操作，必须放进
+/// blocking 线程池，否则一次拷入大量图片会独占 tokio worker 数秒。
+async fn generate_thumbnail_file(
+    ctx: &AppContext,
+    wallpaper_id: i32,
+    entry: &FileEntry,
+) -> Result<PathBuf> {
     let dir = ctx.app_handle.path().app_data_dir()?.join("thumbnails");
-    wallpaper_service::ensure_dir(&dir)?;
-    let path = wallpaper_service::thumbnail_path_for_id(&dir, wallpaper_id);
-    wallpaper_service::generate_static_thumbnail(Path::new(&entry.path), &path)?;
+    let thumb_path = wallpaper_service::thumbnail_path_for_id(&dir, wallpaper_id);
+    let source = PathBuf::from(&entry.path);
+    let target = thumb_path.clone();
 
+    tauri::async_runtime::spawn_blocking(move || {
+        wallpaper_service::ensure_dir(
+            target
+                .parent()
+                .ok_or_else(|| anyhow!("缩略图路径没有父目录: {target:?}"))?,
+        )?;
+        wallpaper_service::generate_static_thumbnail(&source, &target)
+    })
+    .await
+    .context("缩略图生成任务被取消")??;
+
+    Ok(thumb_path)
+}
+
+async fn set_thumbnail_path<C: ConnectionTrait>(
+    txn: &C,
+    wallpaper_id: i32,
+    path: &Path,
+) -> Result<()> {
     let active: wallpaper::ActiveModel = wallpaper::ActiveModel {
         id: Set(wallpaper_id),
         thumb_path: Set(Some(path.to_string_lossy().to_string())),
         ..Default::default()
     };
-    active.update(&ctx.db).await?;
+    active.update(txn).await?;
     Ok(())
 }
 
-async fn append_to_collection(
-    db: &DatabaseConnection,
+async fn append_to_collection<C: ConnectionTrait>(
+    txn: &C,
     collection_id: i32,
     wallpaper_id: i32,
 ) -> Result<()> {
     let max = collection_wallpaper::Entity::find()
         .filter(collection_wallpaper::Column::CollectionId.eq(collection_id))
         .order_by_desc(collection_wallpaper::Column::SortOrder)
-        .one(db)
+        .one(txn)
         .await?
         .map(|m| m.sort_order)
         .unwrap_or(-1);
@@ -618,37 +713,42 @@ async fn append_to_collection(
         sort_order: Set(max + 1),
         ..Default::default()
     }
-    .insert(db)
+    .insert(txn)
     .await?;
     Ok(())
 }
 
-/// 删除单条监听壁纸（严格同步 / P6 删除链路共用）：源文件由调用方处理，
-/// 这里只清 DB 与缩略图，并清 monitor 引用。绝不调用 delete_batch。
-pub async fn hard_delete_watched_wallpaper(
-    ctx: &AppContext,
-    model: &wallpaper::Model,
-    do_reconcile: bool,
-) -> Result<()> {
-    let txn = ctx.db.begin().await?;
-
+/// 删除单行的 DB 副作用；由调用方决定事务边界（sync_folder 用整轮大事务，
+/// P6 单条删除用独立小事务）。源文件由调用方处理，绝不调用 delete_batch。
+async fn delete_watched_row<C: ConnectionTrait>(txn: &C, model: &wallpaper::Model) -> Result<()> {
     monitor_config::Entity::update_many()
         .col_expr(
             monitor_config::Column::WallpaperId,
             Expr::value(sea_orm::Value::Int(None)),
         )
         .filter(monitor_config::Column::WallpaperId.eq(model.id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
     collection_wallpaper::Entity::delete_many()
         .filter(collection_wallpaper::Column::WallpaperId.eq(model.id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
     wallpaper_tag::Entity::delete_many()
         .filter(wallpaper_tag::Column::WallpaperId.eq(model.id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
-    wallpaper::Entity::delete_by_id(model.id).exec(&txn).await?;
+    wallpaper::Entity::delete_by_id(model.id).exec(txn).await?;
+    Ok(())
+}
+
+/// P6 单条删除入口：独立事务 + 缩略图清理 + 一次联动。
+pub async fn hard_delete_watched_wallpaper(
+    ctx: &AppContext,
+    model: &wallpaper::Model,
+    do_reconcile: bool,
+) -> Result<()> {
+    let txn = ctx.db.begin().await?;
+    delete_watched_row(&txn, model).await?;
     txn.commit().await?;
 
     if let Some(thumb) = model.thumb_path.as_ref() {
@@ -804,6 +904,76 @@ mod tests {
         }
     }
 
+    fn fake_model(key: Option<&str>, size: i64, mtime: i64) -> wallpaper::Model {
+        let suffix = key.unwrap_or("nokey");
+        wallpaper::Model {
+            id: 0,
+            name: suffix.to_string(),
+            r#type: "image".to_string(),
+            file_path: format!("/w/{suffix}"),
+            thumb_path: None,
+            width: None,
+            height: None,
+            duration: None,
+            file_size: Some(size),
+            play_count: 0,
+            created_at: String::new(),
+            updated_at: String::new(),
+            deleted_at: None,
+            is_external: 1,
+            watched_folder_id: Some(1),
+            source_key: key.map(str::to_string),
+            source_size: Some(size),
+            source_mtime: Some(mtime),
+        }
+    }
+
+    fn fake_entry(name: &str, size: i64, mtime: i64) -> FileEntry {
+        let key = name.to_lowercase();
+        FileEntry {
+            key: key.clone(),
+            path: format!("/w/{key}"),
+            file_type: "image",
+            size,
+            mtime,
+        }
+    }
+
+    /// 差集判定：未变跳过、size/mtime 变化归更新、key 消失归删除、
+    /// 无 key 脏行归删除、大小写重复的 key 只处理一次。
+    #[test]
+    fn plan_sync_classifies_added_changed_removed_and_dedups() {
+        let existing = vec![
+            fake_model(Some("keep.jpg"), 100, 10),
+            fake_model(Some("changed.jpg"), 100, 10),
+            fake_model(Some("gone.jpg"), 100, 10),
+            fake_model(Some("dupe.png"), 100, 10),
+            fake_model(None, 100, 10),
+        ];
+        let entries = vec![
+            fake_entry("keep.jpg", 100, 10),    // 未变
+            fake_entry("changed.jpg", 200, 11), // 内容变更
+            fake_entry("new.jpg", 300, 12),     // 新文件
+            fake_entry("DUPE.PNG", 100, 10),    // 命中存量，大小写差异
+            fake_entry("dupe.png", 100, 10),    // 同 key，被 seen 跳过
+        ];
+
+        let plan = plan_sync(entries, existing);
+
+        assert_eq!(plan.new_files.len(), 1);
+        assert_eq!(plan.new_files[0].key, "new.jpg");
+        assert_eq!(plan.changed.len(), 1);
+        assert_eq!(plan.changed[0].0.source_key.as_deref(), Some("changed.jpg"));
+        assert_eq!(plan.removed.len(), 2);
+        let mut removed_keys: Vec<_> = plan
+            .removed
+            .iter()
+            .map(|m| m.source_key.clone().unwrap_or_default())
+            .collect();
+        removed_keys.sort();
+        assert_eq!(removed_keys, vec!["", "gone.jpg"]);
+    }
+
     /// 非递归 + 扩展名白名单 + 身份键 lowercase 相对文件名。
     #[test]
     fn scan_directory_is_non_recursive_and_filtered() {
@@ -814,7 +984,7 @@ mod tests {
         std::fs::create_dir(dir.0.join("sub")).unwrap();
         std::fs::write(dir.0.join("sub").join("inner.jpg"), b"x").unwrap();
 
-        let entries = scan_directory(dir.0.to_str().unwrap()).unwrap();
+        let entries = scan_directory(&dir.0).unwrap();
         assert_eq!(entries.len(), 2, "子目录与不支持格式都必须跳过");
 
         let by_key: HashMap<&str, &FileEntry> =
